@@ -18,6 +18,40 @@ synthetic_data:
   num_users: 300
   random_seed: 42
 
+  incomplete_profile_fraction: 0.05
+  preferred_category_alignment_prob: 0.8
+
+  order_status_weights:
+    DELIVERED: 0.65
+    COMPLETED: 0.15
+    CANCELLED: 0.10
+    PENDING: 0.10
+  order_counted_statuses: ["DELIVERED", "COMPLETED"]
+  order_count_lambda: 2.5
+  order_max_count: 8
+  order_items_min: 1
+  order_items_max: 5
+  order_quantity_max: 3
+  order_date_lookback_days: 180
+
+  cart_nonempty_prob: 0.7
+  cart_items_max: 6
+  cart_quantity_max: 3
+
+  review_prob: 0.35
+
+  search_count_lambda: 2.5
+  search_max_count: 10
+  search_product_term_prob: 0.7
+
+  chatbot_context_prob: 0.4
+  chatbot_mentions_max: 4
+
+  brand_affinity_prob: 0.35
+  brand_affinity_bonus: 2.0
+
+  affinity_noise_scale: 0.4
+
 # Phase 3: Sentence Transformer product encoding.
 embedding:
   sentence_transformer_model: "all-MiniLM-L6-v2"

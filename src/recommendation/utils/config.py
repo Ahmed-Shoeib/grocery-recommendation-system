@@ -31,6 +31,49 @@ class SyntheticDataConfig(BaseModel):
     num_users: int = 300
     random_seed: int = 42
 
+    # Fraction of users generated with preferred_category/age_group left
+    # unset, simulating users created before the backend migration lands.
+    incomplete_profile_fraction: float = 0.05
+    # Probability a user's preferred_category is drawn from their latent
+    # persona's dominant categories rather than uniformly at random.
+    preferred_category_alignment_prob: float = 0.8
+
+    # Orders (previous purchases signal).
+    order_status_weights: dict[str, float] = Field(
+        default_factory=lambda: {"DELIVERED": 0.65, "COMPLETED": 0.15, "CANCELLED": 0.10, "PENDING": 0.10}
+    )
+    order_counted_statuses: list[str] = Field(default_factory=lambda: ["DELIVERED", "COMPLETED"])
+    order_count_lambda: float = 2.5
+    order_max_count: int = 8
+    order_items_min: int = 1
+    order_items_max: int = 5
+    order_quantity_max: int = 3
+    order_date_lookback_days: int = 180
+
+    # Cart (add-to-cart habit signal).
+    cart_nonempty_prob: float = 0.7
+    cart_items_max: int = 6
+    cart_quantity_max: int = 3
+
+    # Reviews (auxiliary signal).
+    review_prob: float = 0.35
+
+    # Search (synthetic-only signal).
+    search_count_lambda: float = 2.5
+    search_max_count: int = 10
+    search_product_term_prob: float = 0.7
+
+    # Chatbot context (synthetic-only signal).
+    chatbot_context_prob: float = 0.4
+    chatbot_mentions_max: int = 4
+
+    # Brand affinity (orthogonal to persona).
+    brand_affinity_prob: float = 0.35
+    brand_affinity_bonus: float = 2.0
+
+    # Shared affinity-scoring noise (keeps interactions correlated but not deterministic).
+    affinity_noise_scale: float = 0.4
+
 
 class EmbeddingConfig(BaseModel):
     sentence_transformer_model: str = "all-MiniLM-L6-v2"
