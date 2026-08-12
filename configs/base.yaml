@@ -75,8 +75,16 @@ two_tower:
   projection_dims: [256, 128]
   output_dim: 128
   learning_rate: 0.001
-  batch_size: 256
+  batch_size: 64
   epochs: 20
+  dropout_rate: 0.1
+  temperature: 0.05
+  category_embedding_dim: 16
+  brand_embedding_dim: 16
+  age_group_embedding_dim: 8
+  min_distinct_products_for_holdout: 3
+  eval_k_values: [5, 10, 20]
+  early_stopping_patience: 3
   random_seed: 42
 
 # Phase 5: ANN retrieval. `backend` selects the VectorIndex implementation.

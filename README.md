@@ -8,9 +8,11 @@ full ERD reconciliation, V1/V2 scope boundary, and design decisions.
 
 ## Status
 
-Built in 10 sequential phases (see below). **Phase 1 complete** —
-project scaffolding, configuration, logging, and canonical schemas only.
-No adapters, no synthetic data, no models yet.
+Built in 10 sequential phases (see below). **Phases 1-4 complete**:
+project scaffolding, canonical data adapters + synthetic dataset, the
+Sentence Transformer + feature-engineering pipeline, and a trained
+Two-Tower retrieval model (128-D, L2-normalized, leave-one-out evaluated).
+No ANN index, ranker, API, or dashboard yet.
 
 ## Architecture
 

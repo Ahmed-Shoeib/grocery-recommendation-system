@@ -108,8 +108,24 @@ class TwoTowerConfig(BaseModel):
     projection_dims: list[int] = Field(default_factory=lambda: [256, 128])
     output_dim: int = 128
     learning_rate: float = 0.001
-    batch_size: int = 256
+    # 50-product catalog: a large batch already covers most/all of it as
+    # in-batch negatives, so this is deliberately smaller than a typical
+    # large-catalog two-tower setup (still config-overridable).
+    batch_size: int = 64
     epochs: int = 20
+    dropout_rate: float = 0.1
+    # In-batch softmax temperature (logits = cosine_sim / temperature).
+    temperature: float = 0.05
+    category_embedding_dim: int = 16
+    brand_embedding_dim: int = 16
+    age_group_embedding_dim: int = 8
+    # A user needs at least this many DISTINCT purchased products to be
+    # eligible for the val/test leave-one-out holdout (1 test + 1 val +
+    # >=1 remaining in train); users below this threshold contribute all
+    # their purchases to train only and aren't evaluated.
+    min_distinct_products_for_holdout: int = 3
+    eval_k_values: list[int] = Field(default_factory=lambda: [5, 10, 20])
+    early_stopping_patience: int = 3
     random_seed: int = 42
 
 

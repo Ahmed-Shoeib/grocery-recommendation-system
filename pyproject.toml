@@ -22,11 +22,16 @@ dependencies = [
 
 [project.optional-dependencies]
 # Sentence Transformer encoding + Two-Tower model (Phases 3-4).
+# tensorflow-recommenders is deliberately NOT included: it still requires
+# tf.keras to be Keras 2 (`_check_keras_version` raises otherwise), fixable
+# only via the global TF_USE_LEGACY_KERAS=1 env var set before TensorFlow's
+# first import anywhere in the process - fragile across scripts/tests/API
+# import order for a dependency whose only job (in-batch softmax retrieval
+# loss) is ~15 lines of plain Keras 3. See docs/data-mapping.md Phase 4 notes.
 ml = [
     "torch>=2.2",
     "sentence-transformers>=3.0",
     "tensorflow>=2.16,<2.22",
-    "tensorflow-recommenders>=0.7.3",
 ]
 # Approximate nearest-neighbor retrieval (Phase 5). FAISS is the default,
 # Windows-native backend; ScaNN is Linux-only and is added as an optional
