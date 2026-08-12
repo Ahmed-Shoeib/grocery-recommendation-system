@@ -1,0 +1,58 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "grocery-recommendation-system"
+version = "0.1.0"
+description = "Production-oriented personalized grocery recommendation service (synthetic V1)."
+requires-python = ">=3.11,<3.14"
+readme = "README.md"
+
+# Core dependencies needed from Phase 1 onward (config, schemas, data handling).
+# Kept deliberately lightweight so `pip install -e .` stays fast; heavier ML/
+# serving stacks are opt-in extras below and are only required starting the
+# phase that actually uses them (see docs/data-mapping.md for the phase map).
+dependencies = [
+    "pydantic>=2.6",
+    "PyYAML>=6.0",
+    "pandas>=2.2",
+    "numpy>=1.26",
+]
+
+[project.optional-dependencies]
+# Sentence Transformer encoding + Two-Tower model (Phases 3-4).
+ml = [
+    "torch>=2.2",
+    "sentence-transformers>=3.0",
+    "tensorflow>=2.16,<2.22",
+    "tensorflow-recommenders>=0.7.3",
+]
+# Approximate nearest-neighbor retrieval (Phase 5). FAISS is the default,
+# Windows-native backend; ScaNN is Linux-only and is added as an optional
+# Docker-path backend in Phase 10 (see docs/data-mapping.md, section 10).
+retrieval = [
+    "faiss-cpu>=1.9",
+]
+# API + internal dashboard (Phases 8-9).
+serving = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+    "streamlit>=1.35",
+    "requests>=2.31",
+]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+    "httpx>=0.27",
+]
+full = [
+    "grocery-recommendation-system[ml,retrieval,serving,dev]",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
