@@ -115,12 +115,20 @@ eligibility:
   require_active: true
   require_in_stock: true
 
-# Phase 6: neural ranker.
+# Phase 6: neural ranker. Consumes candidates retrieved by VectorIndex
+# (Phase 5) plus richer per-candidate features than the Two-Tower model
+# sees (cross features, popularity, retrieval score/rank - see
+# src/recommendation/ranking/features.py).
 ranking:
   hidden_units: [128, 64]
   learning_rate: 0.001
   epochs: 10
   batch_size: 256
+  dropout_rate: 0.1
+  negatives_per_positive: 4
+  early_stopping_patience: 3
+  eval_k_values: [5, 10, 20]
+  random_seed: 42
 
 # Phase 8: recommendation API.
 api:

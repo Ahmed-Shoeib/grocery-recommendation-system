@@ -157,9 +157,12 @@ not by building unused event infrastructure now.
 
 ## 8. Offline vs. online evaluation (V1 vs. V2)
 
-**Implemented in V1** (Phases 5-6, `recommendation.evaluation`):
-Recall@K, HitRate@K, Precision@K, NDCG@K, MRR, catalog coverage, retrieval
-latency, end-to-end recommendation latency.
+**Implemented in V1**: Recall@K/HitRate@K (Phase 4, `evaluation
+.retrieval_metrics`), retrieval latency (Phase 5, `evaluation.latency`),
+Precision@K/NDCG@K/reciprocal rank (MRR) (Phase 6, added to the same
+`retrieval_metrics` module and used by `ranking.evaluation` to compare
+the neural ranker against the raw-retrieval-score baseline). Catalog
+coverage and end-to-end (API-level) latency are deferred to Phase 8.
 
 **Deferred to V2** (requires the event-tracking pipeline in §7): CTR,
 impression volume, recommendation-click conversion, add-to-cart
@@ -208,6 +211,43 @@ Selected via `retrieval.backend` in `configs/base.yaml` (`faiss` - native
 Windows dev default) or `configs/docker.yaml` (`scann` - what the Docker
 image loads via `RECS_CONFIG_PATH`).
 
+## 11. Neural ranking (Phase 6)
+
+`ranking.model.build_ranker_model` is a plain feedforward MLP over a
+concatenated dense feature vector (`ranking.features
+.RANKING_FEATURE_NAMES`), deliberately simpler-structured than the
+Two-Tower's dual-embedding-tower architecture - no learned category/
+brand embedding lookups; retrieval learns a shared embedding space for
+ANN search, ranking uses explicit, interpretable cross features for
+precision on a small candidate set. Features: user history aggregates,
+item metadata/popularity (including `stockQuantity`/`isActive` -
+available as features, never used to filter here, see §5), explicit
+user-item cross features (category/brand affinity match, semantic
+cosine similarity), and the retrieval stage's own score/rank for each
+candidate (`ranking.examples`).
+
+Training is pointwise binary classification: a candidate is labeled 1 if
+the user purchased it (train-split), 0 if sampled from what
+`VectorIndex.search` actually retrieves minus known positives and
+held-out val/test ids (retrieved-negatives, not raw-catalog-uniform
+negatives, to match serving-time candidate distribution). Splits reuse
+Two-Tower's own `UserSplit`s (same seed/threshold) so held-out val/test
+targets are identical between the two models - required for the
+ranker-vs-raw-retrieval-score baseline comparison (`ranking.evaluation`)
+to be apples-to-apples. Leave-one-out leakage discipline extends §12's
+guard: a positive candidate's own retrieval score/rank is computed from
+a user embedding with that candidate excluded from history, same as
+Two-Tower training.
+
+Evaluated with Precision@K/NDCG@K/Recall@K/HitRate@K/MRR
+(`evaluation.retrieval_metrics`) against both the ranker's own scores
+and the unchanged retrieval-score ordering, over the identical retrieved
+candidate pool for both - isolating what re-ranking alone contributes.
+At the ~50-item V1 catalog the candidate pool equals the full catalog
+(see §10), so this validates the ranking pipeline's correctness and
+leakage safety, not ranking-under-genuine-ANN-truncation at production
+scale.
+
 ## 12. V1 leakage limitation - no timestamps
 
 Because V1 has no timestamps on search/chatbot interactions (§7), feature
@@ -252,7 +292,8 @@ genuinely temporal held-out split instead of this content-based heuristic.
 | §4 Search/Chatbot adapters | Phase 2 |
 | §5 Business rules/eligibility policy (applied last) | Phase 7 |
 | §6 Popularity | Phase 2 (data) / Phase 7 (fallback ranking) |
-| §8 Offline evaluation | Phases 5-6 |
+| §8 Offline evaluation | Phase 4 (Recall/HitRate) / Phase 5 (latency) / Phase 6 (Precision/NDCG/MRR) |
 | §9 Surface context hook | Phase 8 |
 | §10 VectorIndex backends | Phase 5 (ScaNN primary/Docker + FAISS Windows dev fallback) |
-| §12 Leakage-limitation mitigation | Phase 3 (guard) / Phase 4 (consumer) |
+| §11 Neural ranking (VectorIndex candidates, richer cross features, baseline comparison) | Phase 6 |
+| §12 Leakage-limitation mitigation | Phase 3 (guard) / Phase 4 (consumer) / Phase 6 (extended to ranking negatives) |

@@ -166,6 +166,14 @@ class RankingConfig(BaseModel):
     learning_rate: float = 0.001
     epochs: int = 10
     batch_size: int = 256
+    dropout_rate: float = 0.1
+    # Implicit-feedback negative sampling: how many non-purchased candidates
+    # (drawn from what VectorIndex actually retrieves, not the raw catalog -
+    # matches serving-time candidate distribution) to label per positive.
+    negatives_per_positive: int = 4
+    early_stopping_patience: int = 3
+    eval_k_values: list[int] = Field(default_factory=lambda: [5, 10, 20])
+    random_seed: int = 42
 
 
 class ApiConfig(BaseModel):
