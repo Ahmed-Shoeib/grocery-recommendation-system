@@ -28,3 +28,6 @@ class InMemoryCartAdapter(CartAdapter):
 
     def get_cart_items(self, user_id: int) -> list[CartAffinityRecord]:
         return list(self._items_by_user.get(user_id, []))
+
+    def list_all_cart_items(self) -> list[CartAffinityRecord]:
+        return [record for records in self._items_by_user.values() for record in records]

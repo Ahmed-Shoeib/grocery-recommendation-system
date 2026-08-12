@@ -49,3 +49,6 @@ class InMemoryPurchaseAdapter(PurchaseAdapter):
 
     def get_purchases(self, user_id: int) -> list[PurchaseRecord]:
         return list(self._purchases_by_user.get(user_id, []))
+
+    def list_all_purchases(self) -> list[PurchaseRecord]:
+        return [record for records in self._purchases_by_user.values() for record in records]

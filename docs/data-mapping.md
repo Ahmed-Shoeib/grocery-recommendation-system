@@ -12,7 +12,7 @@ after the Phase 1 clarification round).
 |---|---|---|
 | User | Id, FirstName, LastName, Email, PhoneNumber, HashedPassword, RefreshToken, Role, CreatedAt, UpdatedAt | Identity + (confirmed, pending) `preferredCategory`, `ageGroup` - see §2. |
 | Category | Id, ParentId (self-FK), Name, CreatedAt | Category + parent-category features. |
-| Product | Id, CategoryId, Slug, Name, Description, Brand, Price, SalePrice, DiscountPercentage, StockQuantity, Ingredients, isActive, ProductImage, AltText | Core item metadata; text fields feed the Sentence Transformer; isActive/StockQuantity feed eligibility filtering. |
+| Product | Id, CategoryId, Slug, Name, Description, Brand, Price, SalePrice, DiscountPercentage, StockQuantity, Ingredients, isActive, ProductImage, AltText | Core item metadata; text fields feed the Sentence Transformer; isActive/StockQuantity feed the final business-rules/eligibility stage (§5). |
 | ProductTags / Tag | join table + Name | Tag text feeds the Sentence Transformer input. |
 | Cart / Cart_Item | Cart(Id, CartItemId FK, UserId); CartItem(Id, CartId, ProductId, Quantity) | Add-to-cart habit signal (D). |
 | Order / Order_Item | Order(Id, UserId, VoucherId, AddressId, IdempotenceKey, TotalAmount, Status, PaymentMethod, CreationDate, DeliveryDate); OrderItem(Id, ProductId, OrderId, Quantity, UnitPrice) | Previous purchases signal (A) - the strongest V1 signal. |
@@ -88,19 +88,37 @@ Transformer used for product text (Phase 3+).
 
 No permanent backend table is assumed or invented for either signal.
 
-## 5. Eligibility filtering
+## 5. Eligibility / business rules - applied LAST, after ranking
+
+**Revised 2026-08-12** (supersedes the original "filter before ranking"
+design): for V1, eligibility/business-rules filtering happens at the very
+end of the pipeline, not as a pre-ranking filter:
+
+```
+Two-Tower -> VectorIndex Retrieval -> Neural Ranker -> Re-ranking
+          -> Business Rules / Eligibility -> Final Top-N
+```
 
 V1 uses exactly the fields the ERD actually has: `Product.isActive` and
-`Product.stockQuantity`. No `isDeleted` or similar field is invented.
+`Product.stockQuantity`. No `isDeleted` or similar field is invented. Both
+are carried through as plain structured `ProductFeatures` fields (Phase 3)
+so they're available at this final stage without a separate lookup - no
+candidate is filtered out before retrieval or ranking in V1.
 
-Eligibility is implemented (Phase 6) as a general, pluggable policy
-interface (not hard-coded boolean logic inline in retrieval), so future
-rules - a real `isDeleted`/soft-delete flag, regional restrictions, other
+Rationale for the reordering: at the current catalog scale (~50 products),
+the "avoid wasting ranking compute on ineligible items" argument for an
+early filter is negligible, while placing the check last keeps retrieval
+and ranking entirely free of serving-time state (stock, active flag) and
+gives one single, simple place business rules can evolve independently of
+the ML stages. This is implemented (Phase 7) as a general, pluggable
+policy interface (not hard-coded boolean logic inline), so future rules -
+a real `isDeleted`/soft-delete flag, regional restrictions, other
 purchase-eligibility rules - can be added as additional policy checks
-without touching the retrieval/ranking pipeline. Eligibility filtering
-runs on the retrieved candidate pool, never triggers ScaNN/FAISS index
+without touching retrieval or ranking. It never triggers ScaNN/FAISS index
 rebuilds, and stock changes never trigger model retraining - inventory is
-serving-time state, not model knowledge.
+serving-time state, not model knowledge. If catalog scale later makes
+early filtering worthwhile, revisit this ordering explicitly rather than
+silently reintroducing a pre-filter.
 
 ## 6. Popularity terminology
 
@@ -178,15 +196,51 @@ API change or separate per-surface models.
   `VectorIndex` backend in Phase 10, used only inside the Dockerized/Linux
   serving path. Selected via `configs/base.yaml: retrieval.backend`.
 
-## 11. Phase map (which phase implements what in this document)
+## 12. V1 leakage limitation - no timestamps
+
+Because V1 has no timestamps on search/chatbot interactions (§7), feature
+engineering (Phase 3) cannot tell whether a search or chatbot conversation
+happened *before* or *after* a given purchase. This matters specifically
+when Phase 4 builds a (user, target_product) training example: the
+user-side features must not encode "the user already told us about this
+exact product," or the model would trivially memorize instead of
+generalizing.
+
+Mitigations, implemented in `recommendation.features.user_features`:
+
+- **Purchases/cart**: excluding a product drops the entire record (its
+  content *is* the product reference) - see `exclude_product_ids` on
+  `build_user_features`.
+- **Search**: a search matched to the excluded product (`matched_product_id`)
+  has that match scrubbed; an *unmatched* search whose raw `search_term`
+  text names the excluded product (substring match against the product's
+  name) is also scrubbed from the semantic-embedding signal, even without
+  a resolved product id.
+- **Chatbot**: if a chatbot record mentions the excluded product by id
+  *or* by name in its free-text summary, its entire content contribution
+  (all mentioned-product embeddings and the summary embedding) is dropped
+  - not just the flagged reference - since a single conversation's "safe"
+  and "risky" parts can't be reliably separated without a timestamp.
+
+This is a **heuristic, not a guarantee**: it catches exact-name mentions,
+not paraphrases, synonyms, or a search/chatbot event that references the
+target only indirectly. Event *counts* (`search_count`,
+`has_chatbot_context`) are intentionally left unaffected by exclusion -
+only the product-content signal is scrubbed - so the leakage guard doesn't
+silently distort the history-strength signal Phase 7's cold-start tiering
+depends on. Fully resolving this requires real timestamps (V2) to build a
+genuinely temporal held-out split instead of this content-based heuristic.
+
+## 13. Phase map (which phase implements what in this document)
 
 | Section here | Implementing phase |
 |---|---|
 | §2 UserProfile fields | Phase 2 |
 | §3 Cold-start tiers | Phase 7 |
 | §4 Search/Chatbot adapters | Phase 2 |
-| §5 Eligibility policy | Phase 6 |
+| §5 Business rules/eligibility policy (applied last) | Phase 7 |
 | §6 Popularity | Phase 2 (data) / Phase 7 (fallback ranking) |
 | §8 Offline evaluation | Phases 5-6 |
 | §9 Surface context hook | Phase 8 |
 | §10 VectorIndex backends | Phase 5 (FAISS) / Phase 10 (ScaNN) |
+| §12 Leakage-limitation mitigation | Phase 3 (guard) / Phase 4 (consumer) |

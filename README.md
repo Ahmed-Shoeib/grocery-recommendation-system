@@ -37,16 +37,24 @@ Backend ERD (Order/OrderItem, Cart/CartItem, User, Review) + Synthetic (Search, 
                                              |
                                    Oversized candidate pool
                                              |
-                                  Eligibility filter (isActive, stock)
-                                             |
                                     Neural Ranker (MLP)
                                              |
                                    Re-ranking + cold-start blend
+                                             |
+                          Business Rules / Eligibility (isActive, stock)
                                              |
                                         Final Top-N
                                     +--------+--------+
                               Recommendation API   Streamlit Dashboard
 ```
+
+Business rules / eligibility run **last** in V1, after ranking and
+re-ranking, not as a pre-filter — the tiny V1 catalog makes ranking waste
+a non-issue, and putting it last keeps the retrieval/ranking stages
+oblivious to serving-time state (stock, active flag) entirely, per
+`docs/data-mapping.md` section 5. `isActive`/`stockQuantity` are carried
+through as structured product features so they're available at that final
+stage without a separate lookup.
 
 Four V1 personalization signals: previous purchases, add-to-cart habit,
 searched items, and chatbot context — combined with `preferredCategory`
@@ -117,8 +125,8 @@ thresholds and blend weights, model version, random seed) live in
 3. Feature engineering & semantic product embeddings.
 4. Neural Two-Tower retrieval model.
 5. FAISS ANN retrieval.
-6. Candidate eligibility & neural ranking.
-7. Re-ranking & three-level cold-start strategy.
+6. Neural ranking.
+7. Re-ranking, business rules/eligibility (applied last) & three-level cold-start strategy.
 8. Recommendation API.
 9. Recommendation dashboard.
 10. Production hardening (Docker, incl. optional ScaNN backend) & documentation.

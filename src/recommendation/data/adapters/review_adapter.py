@@ -25,3 +25,6 @@ class InMemoryReviewAdapter(ReviewAdapter):
 
     def get_reviews(self, user_id: int) -> list[ReviewRecord]:
         return list(self._reviews_by_user.get(user_id, []))
+
+    def list_all_reviews(self) -> list[ReviewRecord]:
+        return [record for records in self._reviews_by_user.values() for record in records]

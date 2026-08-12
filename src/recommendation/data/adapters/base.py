@@ -10,6 +10,7 @@ real-backend swap is a constructor change, not a model change.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 
 from recommendation.data.schemas.engagement import (
     CartAffinityRecord,
@@ -52,6 +53,14 @@ class PurchaseAdapter(ABC):
     @abstractmethod
     def get_purchases(self, user_id: int) -> list[PurchaseRecord]: ...
 
+    @abstractmethod
+    def list_all_purchases(self) -> list[PurchaseRecord]:
+        """Catalog-wide purchase records, for aggregate features like
+        product popularity. A real backend implementation would run one
+        aggregate query here rather than fanning out per user.
+        """
+        ...
+
 
 class CartAdapter(ABC):
     """Backed by ERD entities: Cart, CartItem, Product (add-to-cart habit signal)."""
@@ -59,12 +68,22 @@ class CartAdapter(ABC):
     @abstractmethod
     def get_cart_items(self, user_id: int) -> list[CartAffinityRecord]: ...
 
+    @abstractmethod
+    def list_all_cart_items(self) -> list[CartAffinityRecord]:
+        """Catalog-wide cart records, for aggregate features."""
+        ...
+
 
 class ReviewAdapter(ABC):
     """Backed by ERD entity: Review (auxiliary ranking signal)."""
 
     @abstractmethod
     def get_reviews(self, user_id: int) -> list[ReviewRecord]: ...
+
+    @abstractmethod
+    def list_all_reviews(self) -> list[ReviewRecord]:
+        """Catalog-wide review records, for aggregate rating features."""
+        ...
 
 
 class SearchAdapter(ABC):
@@ -85,3 +104,20 @@ class ChatbotContextAdapter(ABC):
 
     @abstractmethod
     def get_chatbot_context(self, user_id: int) -> ChatbotContextRecord | None: ...
+
+
+@dataclass
+class AdapterBundle:
+    """The seven interfaces wired together. Feature engineering, models,
+    the API, and the dashboard depend on this type - never on which
+    concrete adapters (synthetic in-memory today, a real backend later)
+    populated it.
+    """
+
+    products: ProductCatalogAdapter
+    users: UserAdapter
+    purchases: PurchaseAdapter
+    cart: CartAdapter
+    reviews: ReviewAdapter
+    search: SearchAdapter
+    chatbot: ChatbotContextAdapter

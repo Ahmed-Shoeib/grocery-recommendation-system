@@ -10,17 +10,7 @@ today. Swapping to a real backend later means writing one new
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-
-from recommendation.data.adapters.base import (
-    CartAdapter,
-    ChatbotContextAdapter,
-    ProductCatalogAdapter,
-    PurchaseAdapter,
-    ReviewAdapter,
-    SearchAdapter,
-    UserAdapter,
-)
+from recommendation.data.adapters.base import AdapterBundle
 from recommendation.data.adapters.cart_adapter import InMemoryCartAdapter
 from recommendation.data.adapters.chatbot_adapter import SyntheticChatbotAdapter
 from recommendation.data.adapters.product_adapter import InMemoryProductCatalogAdapter
@@ -30,17 +20,6 @@ from recommendation.data.adapters.search_adapter import SyntheticSearchAdapter
 from recommendation.data.adapters.user_adapter import InMemoryUserAdapter
 from recommendation.data.synthetic.dataset import SyntheticDataset
 from recommendation.utils.config import SyntheticDataConfig
-
-
-@dataclass
-class AdapterBundle:
-    products: ProductCatalogAdapter
-    users: UserAdapter
-    purchases: PurchaseAdapter
-    cart: CartAdapter
-    reviews: ReviewAdapter
-    search: SearchAdapter
-    chatbot: ChatbotContextAdapter
 
 
 def build_synthetic_adapters(dataset: SyntheticDataset, config: SyntheticDataConfig) -> AdapterBundle:

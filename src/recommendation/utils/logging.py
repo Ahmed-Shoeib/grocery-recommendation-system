@@ -11,6 +11,12 @@ import sys
 
 _CONFIGURED = False
 
+# Third-party libraries that log routine HTTP/IO chatter at INFO (notably
+# huggingface_hub's connectivity check on every SentenceTransformer load in
+# Phase 3+) - quieted so application logs stay legible. Not silenced
+# entirely: WARNING and above still surface.
+_NOISY_THIRD_PARTY_LOGGERS = ["httpx", "httpcore", "urllib3", "filelock"]
+
 
 def setup_logging(level: str = "INFO") -> None:
     global _CONFIGURED
@@ -21,6 +27,8 @@ def setup_logging(level: str = "INFO") -> None:
         format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
         stream=sys.stdout,
     )
+    for name in _NOISY_THIRD_PARTY_LOGGERS:
+        logging.getLogger(name).setLevel(logging.WARNING)
     _CONFIGURED = True
 
 

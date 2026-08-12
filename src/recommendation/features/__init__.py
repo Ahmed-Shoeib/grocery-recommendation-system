@@ -1,5 +1,8 @@
 """Feature engineering: EngagementProfile -> user/product feature vectors.
 
-Implemented starting Phase 3. Consumes only the canonical schemas in
-`recommendation.data.schemas`, never adapters or raw data sources directly.
+`product_features.py` and `user_features.py` consume only the canonical
+schemas (`recommendation.data.schemas`); `pipeline.py` is the one place
+that also depends on `recommendation.data.adapters.base.AdapterBundle` (an
+interface type, not a concrete synthetic/backend implementation) to wire
+everything together end to end.
 """

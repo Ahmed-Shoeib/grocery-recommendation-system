@@ -56,7 +56,19 @@ synthetic_data:
 embedding:
   sentence_transformer_model: "all-MiniLM-L6-v2"
   embedding_dim: 384
-  cache_path: "data/processed/product_embeddings.parquet"
+  cache_path: "data/processed/product_embeddings.npz"
+  device: "cpu"
+  encode_batch_size: 32
+
+# Phase 3: user/product feature engineering weights.
+features:
+  purchase_weight: 0.45
+  cart_weight: 0.25
+  search_weight: 0.15
+  chatbot_weight: 0.15
+  preferred_category_weight: 0.5
+  max_top_categories: 5
+  max_top_brands: 5
 
 # Phase 4: Two-Tower retrieval model.
 two_tower:
@@ -89,7 +101,9 @@ cold_start:
   # Fallback order for NO_HISTORY users.
   no_history_fallback_order: ["preferred_category", "category_popularity", "global_popularity"]
 
-# Phase 6: eligibility filtering policy. Only fields that actually exist on
+# Phase 7: business-rules/eligibility policy, applied LAST (after ranking
+# and re-ranking - see docs/data-mapping.md section 5), not as a
+# pre-retrieval/pre-ranking filter. Only fields that actually exist on
 # Product in the ERD (isActive, stockQuantity) are used in V1.
 eligibility:
   require_active: true

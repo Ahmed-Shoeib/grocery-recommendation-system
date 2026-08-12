@@ -78,7 +78,30 @@ class SyntheticDataConfig(BaseModel):
 class EmbeddingConfig(BaseModel):
     sentence_transformer_model: str = "all-MiniLM-L6-v2"
     embedding_dim: int = 384
-    cache_path: str = "data/processed/product_embeddings.parquet"
+    # .npz (+ a .meta.json sidecar) rather than parquet: numpy is already a
+    # core dependency and IndexFlatIP/the Two-Tower pipeline want a plain
+    # ndarray, so a parquet round-trip (and the pyarrow dependency it would
+    # add) buys nothing here. See docs/data-mapping.md Phase 3 notes.
+    cache_path: str = "data/processed/product_embeddings.npz"
+    device: str = "cpu"
+    encode_batch_size: int = 32
+
+
+class FeatureConfig(BaseModel):
+    """Weights for blending the four V1 engagement signals (+ the confirmed
+    preferredCategory attribute) into user category/brand affinity
+    distributions and the user semantic embedding. Kept configurable per
+    docs/data-mapping.md - never hard-coded in the feature-building code.
+    """
+
+    purchase_weight: float = 0.45
+    cart_weight: float = 0.25
+    search_weight: float = 0.15
+    chatbot_weight: float = 0.15
+    preferred_category_weight: float = 0.5
+
+    max_top_categories: int = 5
+    max_top_brands: int = 5
 
 
 class TwoTowerConfig(BaseModel):
@@ -139,6 +162,7 @@ class AppConfig(BaseModel):
     paths: PathsConfig = Field(default_factory=PathsConfig)
     synthetic_data: SyntheticDataConfig = Field(default_factory=SyntheticDataConfig)
     embedding: EmbeddingConfig = Field(default_factory=EmbeddingConfig)
+    features: FeatureConfig = Field(default_factory=FeatureConfig)
     two_tower: TwoTowerConfig = Field(default_factory=TwoTowerConfig)
     retrieval: RetrievalConfig = Field(default_factory=RetrievalConfig)
     cold_start: ColdStartConfig = Field(default_factory=ColdStartConfig)
@@ -164,3 +188,12 @@ def load_config(path: str | Path | None = None) -> AppConfig:
 def get_config() -> AppConfig:
     """Process-wide cached config, read from the default/env-resolved path."""
     return load_config()
+
+
+def resolve_path(relative_path: str | Path) -> Path:
+    """Resolve a config-declared path (e.g. `config.embedding.cache_path`)
+    against the repo root, so callers work the same regardless of the
+    process's current working directory.
+    """
+    path = Path(relative_path)
+    return path if path.is_absolute() else REPO_ROOT / path
