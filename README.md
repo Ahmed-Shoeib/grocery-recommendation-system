@@ -35,7 +35,7 @@ Backend ERD (Order/OrderItem, Cart/CartItem, User, Review) + Synthetic (Search, 
                               +--------------+--------------+
                                      cosine compatibility
                                              |
-                                 VectorIndex (FAISS default / ScaNN in Docker)
+                          VectorIndex (ScaNN primary/Docker, FAISS Windows dev fallback)
                                              |
                                    Oversized candidate pool
                                              |
@@ -80,7 +80,7 @@ src/recommendation/
   embeddings/                Sentence Transformer product encoding + cache
   retrieval/
     two_tower/               User Tower / Item Tower model
-    index/                    VectorIndex (FAISS default, ScaNN optional)
+    index/                    VectorIndex (ScaNN primary/production - Docker, FAISS Windows dev fallback)
   ranking/                    Neural ranker
   reranking/                  Diversity, dedup, cold-start blending, final validation
   evaluation/                 Offline metrics + latency measurement
@@ -126,12 +126,12 @@ thresholds and blend weights, model version, random seed) live in
 2. Canonical data layer & synthetic grocery dataset.
 3. Feature engineering & semantic product embeddings.
 4. Neural Two-Tower retrieval model.
-5. FAISS ANN retrieval.
+5. ANN retrieval: ScaNN (primary/production backend, Linux/Docker) + FAISS (native-Windows dev fallback).
 6. Neural ranking.
 7. Re-ranking, business rules/eligibility (applied last) & three-level cold-start strategy.
 8. Recommendation API.
 9. Recommendation dashboard.
-10. Production hardening (Docker, incl. optional ScaNN backend) & documentation.
+10. Production hardening (full containerization of API/dashboard/serving) & documentation.
 
 Each phase is a separate commit, reviewed and approved before the next
 begins. See `docs/data-mapping.md` §11 for the full phase-to-decision map.

@@ -130,6 +130,12 @@ class TwoTowerConfig(BaseModel):
 
 
 class RetrievalConfig(BaseModel):
+    """`"scann"` is the primary/production ANN backend (Linux/Docker-only,
+    see configs/docker.yaml); `"faiss"` is the native-Windows dev
+    fallback used by the default config.base.yaml - see
+    docs/data-mapping.md section 10.
+    """
+
     backend: Literal["faiss", "scann"] = "faiss"
     candidate_pool_multiplier: int = 5
     min_candidate_pool: int = 50

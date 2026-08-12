@@ -181,20 +181,32 @@ API change or separate per-surface models.
 
 ## 10. ANN retrieval backend
 
-`VectorIndex` interface (Phase 5), two backends:
+**Revised 2026-08-12** (supersedes the original "FAISS default, ScaNN
+optional in Phase 10" design): ScaNN is the **primary, production-
+intended** `VectorIndex` backend, implemented in Phase 5, not deferred.
+Two backends, both exact (brute-force) normalized-inner-product search
+over the L2-normalized 128-D Two-Tower embeddings - i.e. exactly cosine
+similarity - sufficient for the ~50-item synthetic catalog, with
+approximate variants (FAISS IVF/HNSW, ScaNN tree+AH) available without an
+interface change when the catalog grows:
 
-- **FAISS** (`faiss-cpu`) - default. Has genuine Windows wheels
-  (verified: PyPI ships `cp313-win_amd64` builds), so local dev, tests,
-  training, the API, and the dashboard all run natively on this Windows
-  machine throughout the project. `IndexFlatIP` over L2-normalized 128-D
-  Two-Tower embeddings is exact normalized-inner-product search, i.e.
-  exactly cosine similarity - sufficient and exact for the ~50-item
-  synthetic catalog, with IVF/HNSW variants available without an
-  interface change when the catalog grows.
-- **ScaNN** - confirmed Linux-only, no Windows wheel exists or is planned
-  upstream (verified against PyPI/GitHub). Implemented as a second
-  `VectorIndex` backend in Phase 10, used only inside the Dockerized/Linux
-  serving path. Selected via `configs/base.yaml: retrieval.backend`.
+- **ScaNN** - the intended production backend. Confirmed Linux-only, no
+  Windows wheel exists or is planned upstream (verified against
+  PyPI/GitHub; `scann==1.4.2` ships `cp313-manylinux_2_27_x86_64`
+  wheels). Runs inside a minimal Docker/Linux image (repo-root
+  `Dockerfile`, Phase 5) that installs only what `VectorIndex` needs -
+  not the full Phase 10 production image (no API/dashboard, no
+  multi-stage hardening; that remains Phase 10's scope). Uses
+  `score_brute_force(quantize=False)` - exact, unquantized dot-product
+  search - the ScaNN equivalent of FAISS's `IndexFlatIP`.
+- **FAISS** (`faiss-cpu`) - the native-Windows **development fallback**.
+  Has genuine Windows wheels (verified: PyPI ships `cp313-win_amd64`
+  builds), so local dev/tests/training run natively on this Windows
+  machine without Docker. `IndexFlatIP` over the same embeddings.
+
+Selected via `retrieval.backend` in `configs/base.yaml` (`faiss` - native
+Windows dev default) or `configs/docker.yaml` (`scann` - what the Docker
+image loads via `RECS_CONFIG_PATH`).
 
 ## 12. V1 leakage limitation - no timestamps
 
@@ -242,5 +254,5 @@ genuinely temporal held-out split instead of this content-based heuristic.
 | §6 Popularity | Phase 2 (data) / Phase 7 (fallback ranking) |
 | §8 Offline evaluation | Phases 5-6 |
 | §9 Surface context hook | Phase 8 |
-| §10 VectorIndex backends | Phase 5 (FAISS) / Phase 10 (ScaNN) |
+| §10 VectorIndex backends | Phase 5 (ScaNN primary/Docker + FAISS Windows dev fallback) |
 | §12 Leakage-limitation mitigation | Phase 3 (guard) / Phase 4 (consumer) |

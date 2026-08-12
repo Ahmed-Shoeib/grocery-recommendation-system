@@ -33,11 +33,19 @@ ml = [
     "sentence-transformers>=3.0",
     "tensorflow>=2.16,<2.22",
 ]
-# Approximate nearest-neighbor retrieval (Phase 5). FAISS is the default,
-# Windows-native backend; ScaNN is Linux-only and is added as an optional
-# Docker-path backend in Phase 10 (see docs/data-mapping.md, section 10).
+# Approximate nearest-neighbor retrieval (Phase 5). FAISS is the
+# native-Windows development fallback - genuine Windows wheels, so local
+# dev/tests run without Docker (see docs/data-mapping.md, section 10).
 retrieval = [
     "faiss-cpu>=1.9",
+]
+# ScaNN (Phase 5) - the primary, production-intended ANN backend. Linux-only
+# (no Windows wheel exists or is planned upstream); the `sys_platform`
+# marker makes `pip install -e ".[retrieval-scann]"` a harmless no-op on
+# Windows rather than a hard failure. Installed inside the Docker image
+# built from the repo-root Dockerfile, never in the native Windows venv.
+retrieval-scann = [
+    "scann>=1.4; sys_platform == 'linux'",
 ]
 # API + internal dashboard (Phases 8-9).
 serving = [

@@ -1,7 +1,13 @@
-# Base configuration for the grocery recommendation system.
-# Every hyperparameter / path / threshold that later phases would otherwise
-# hard-code lives here so behavior can change without touching code.
-# Loaded by src/recommendation/utils/config.py into a typed AppConfig.
+# Docker/Linux configuration: identical to configs/base.yaml except
+# retrieval.backend, which selects ScaNN - the primary, production-
+# intended ANN backend (Phase 5). ScaNN has no Windows wheel, so this
+# file is what the Docker image (repo-root Dockerfile) loads via
+# RECS_CONFIG_PATH; native Windows dev keeps using base.yaml (FAISS).
+#
+# Kept as a full standalone copy of base.yaml, not a partial override -
+# src/recommendation/utils/config.py loads each config file as a complete
+# AppConfig, it does not merge configs. If base.yaml's tunables change,
+# mirror the change here.
 
 random_seed: 42
 log_level: "INFO"
@@ -87,35 +93,24 @@ two_tower:
   early_stopping_patience: 3
   random_seed: 42
 
-# Phase 5: ANN retrieval. `backend` selects the VectorIndex implementation.
-# scann = primary, production-intended backend; Linux/Docker-only (no
-#   Windows wheel), see configs/docker.yaml and docs/data-mapping.md
-#   section 10.
-# faiss = native-Windows development fallback, used by this file so local
-#   dev/tests run without Docker.
+# Phase 5: ANN retrieval. ScaNN is the primary/production backend, run
+# here inside Linux/Docker (see docs/data-mapping.md section 10).
 retrieval:
-  backend: "faiss"
+  backend: "scann"
   candidate_pool_multiplier: 5   # ScaNN/FAISS retrieves limit * multiplier candidates, capped by catalog size
   min_candidate_pool: 50
 
 # Phase 7: three-level personalization / cold-start strategy.
-# History strength = count of events across the four V1 engagement signals
-# (purchases, cart adds, searches, chatbot context presence).
 cold_start:
   strong_history_min_signals: 5
   sparse_history_min_signals: 1
-  # Blend weights for SPARSE_HISTORY users; must sum to 1.0.
   sparse_blend:
     personalized: 0.6
     preferred_category: 0.2
     popularity: 0.2
-  # Fallback order for NO_HISTORY users.
   no_history_fallback_order: ["preferred_category", "category_popularity", "global_popularity"]
 
-# Phase 7: business-rules/eligibility policy, applied LAST (after ranking
-# and re-ranking - see docs/data-mapping.md section 5), not as a
-# pre-retrieval/pre-ranking filter. Only fields that actually exist on
-# Product in the ERD (isActive, stockQuantity) are used in V1.
+# Phase 7: business-rules/eligibility policy, applied LAST.
 eligibility:
   require_active: true
   require_in_stock: true
