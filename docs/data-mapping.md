@@ -100,6 +100,18 @@ from 4.59 (ranker-only order) to 6.20 (post-re-ranking) - a ~35% increase
 0.3523 on validation), i.e. a small, deliberate relevance cost for a
 real diversity gain, not a catastrophic one.
 
+**Phase 8 addition - unknown user vs. NO_HISTORY user**: the API draws a
+deliberate distinction the pipeline itself doesn't need to. A NO_HISTORY
+tier user (`serving.cold_start`) is a real, known user (a `UserProfile`
+exists) who simply has zero engagement signals - a normal `200` response
+using the fallback chain above. An **unknown user** (no `UserProfile` at
+all - `api.errors.UnknownUserError`, checked in
+`api.dependencies.RecommendationService.recommend` before the pipeline
+ever runs) is a different failure mode entirely and returns `404` with a
+structured error body. Conflating the two would hide a real "this user
+doesn't exist" condition (e.g. a stale/mistyped id) behind what looks
+like a normal cold-start recommendation.
+
 ## 4. Search and chatbot context - adapters, not backend tables
 
 Neither `SearchHistory` nor any chatbot entity exists in the ERD. V1 uses:
@@ -206,9 +218,12 @@ the neural ranker against the raw-retrieval-score baseline), and catalog
 coverage, intra-list category diversity, duplicate rate, requested-slot
 fill rate, cold-start tier distribution, and pipeline latency up through
 eligibility (Phase 7, `serving.evaluation.evaluate_pipeline` +
-`scripts/run_pipeline.py`). True end-to-end (HTTP API-level) latency,
-which additionally measures request/response overhead outside the
-pipeline itself, is deferred to Phase 8.
+`scripts/run_pipeline.py`). True end-to-end (HTTP API-level) latency -
+network + request/response serialization overhead on top of the
+pipeline latency Phase 7 measures - is implemented in Phase 8 by timing
+real HTTP requests against a running `scripts/run_api.py` instance; this
+is a synthetic/local measurement (single process, loopback network, one
+concurrent client), not production SLA evidence.
 
 **Deferred to V2** (requires the event-tracking pipeline in §7): CTR,
 impression volume, recommendation-click conversion, add-to-cart
@@ -227,6 +242,15 @@ the start (currently unused by any model) so that future surface-specific
 behavior - home, product detail "you may also like", cart, search/discovery
 - can be added by conditioning the existing pipeline, without a breaking
 API change or separate per-surface models.
+
+**Phase 8 status**: the API (`/v1/users/{user_id}/recommendations`)
+does not yet accept or forward a `context` value - it calls
+`RecommendationService.recommend(user_id, limit)`, which always passes
+`context=None` to `serving.pipeline.recommend`. The hook exists and the
+pipeline already accepts it; wiring an actual `context` query/body
+parameter through the versioned wire contract is deferred until a real
+surface-specific use case exists, consistent with "not by building
+unused event infrastructure now" below.
 
 ## 10. ANN retrieval backend
 
@@ -338,8 +362,8 @@ genuinely temporal held-out split instead of this content-based heuristic.
 | §4 Search/Chatbot adapters | Phase 2 |
 | §5 Business rules/eligibility policy (applied last) | Phase 7 |
 | §6 Popularity | Phase 2 (data) / Phase 7 (fallback ranking) |
-| §8 Offline evaluation | Phase 4 (Recall/HitRate) / Phase 5 (latency) / Phase 6 (Precision/NDCG/MRR) / Phase 7 (coverage/diversity/duplicate/fill-rate/cold-start/pipeline latency) |
-| §9 Surface context hook | Phase 8 |
+| §8 Offline evaluation | Phase 4 (Recall/HitRate) / Phase 5 (latency) / Phase 6 (Precision/NDCG/MRR) / Phase 7 (coverage/diversity/duplicate/fill-rate/cold-start/pipeline latency) / Phase 8 (HTTP end-to-end latency) |
+| §9 Surface context hook | Phase 7 (pipeline parameter) - not yet exposed via the Phase 8 API |
 | §10 VectorIndex backends | Phase 5 (ScaNN primary/Docker + FAISS Windows dev fallback) |
 | §11 Neural ranking (VectorIndex candidates, richer cross features, baseline comparison) | Phase 6 |
 | §12 Leakage-limitation mitigation | Phase 3 (guard) / Phase 4 (consumer) / Phase 6 (extended to ranking negatives) |

@@ -8,16 +8,18 @@ full ERD reconciliation, V1/V2 scope boundary, and design decisions.
 
 ## Status
 
-Built in 10 sequential phases (see below). **Phases 1-7 complete**:
+Built in 10 sequential phases (see below). **Phases 1-8 complete**:
 project scaffolding, canonical data adapters + synthetic dataset, the
 Sentence Transformer + feature-engineering pipeline, a trained Two-Tower
 retrieval model (128-D, L2-normalized, leave-one-out evaluated), a
 ScaNN/FAISS `VectorIndex` over its embeddings, a neural ranker that
 re-scores VectorIndex candidates with richer cross features (beats the
-raw-retrieval-score baseline on every ranking metric), and the full V1
-serving pipeline - three-level cold-start blending, dedup/diversity
-re-ranking, and business-rules/eligibility applied last. No API or
-dashboard yet.
+raw-retrieval-score baseline on every ranking metric), the full V1
+serving pipeline (three-level cold-start blending, dedup/diversity
+re-ranking, business-rules/eligibility applied last), and a versioned
+FastAPI recommendation API (`/v1`) that is a thin, dependency-injected
+wrapper over that same pipeline - no recommendation logic duplicated in
+the API layer. No dashboard yet.
 
 ## Architecture
 
@@ -90,7 +92,7 @@ src/recommendation/
   reranking/                  Duplicate removal + category/brand diversity re-ranking
   evaluation/                 Offline metrics + latency measurement
   serving/                    Cold-start tiering, fallback candidates, eligibility, and the full pipeline orchestrator (used by API and dashboard)
-  api/                        FastAPI app
+  api/                        FastAPI app (v1) - app/routes/schemas/dependencies, thin wrapper over serving.pipeline
   ui/                         Streamlit dashboard
   utils/                      Config loading, logging
 tests/
@@ -117,6 +119,20 @@ pip install -e ".[dev]"       # lightweight: config/schema/test deps only (Phase
 pytest
 ```
 
+## Running the API
+
+Requires the Phase 4 Two-Tower and Phase 6 ranker artifacts to already
+exist under `models/` (`scripts/train_two_tower.py` then
+`scripts/train_ranker.py`) - the API loads them once at startup, it
+never trains.
+
+```bash
+python scripts/run_api.py
+# GET  http://localhost:8000/v1/health
+# GET  http://localhost:8000/v1/ready
+# GET  http://localhost:8000/v1/users/{user_id}/recommendations?limit=10
+```
+
 ## Configuration
 
 All tunables (paths, hyperparameters, candidate-pool sizing, cold-start
@@ -134,7 +150,7 @@ thresholds and blend weights, model version, random seed) live in
 5. ANN retrieval: ScaNN (primary/production backend, Linux/Docker) + FAISS (native-Windows dev fallback).
 6. Neural ranking of VectorIndex candidates, richer than retrieval features, evaluated (NDCG/Precision/Recall/HitRate/MRR) against a raw-retrieval-score baseline.
 7. Full serving pipeline: three-level cold-start blending (strong/sparse/no-history), dedup + category/brand diversity re-ranking, business rules/eligibility (applied last).
-8. Recommendation API.
+8. Versioned (`/v1`) FastAPI recommendation API - dependency-injected, model artifacts loaded once at startup, thin wrapper over the Phase 7 pipeline (no duplicated logic).
 9. Recommendation dashboard.
 10. Production hardening (full containerization of API/dashboard/serving) & documentation.
 
