@@ -284,12 +284,27 @@ interface change when the catalog grows:
 - **ScaNN** - the intended production backend. Confirmed Linux-only, no
   Windows wheel exists or is planned upstream (verified against
   PyPI/GitHub; `scann==1.4.2` ships `cp313-manylinux_2_27_x86_64`
-  wheels). Runs inside a minimal Docker/Linux image (repo-root
-  `Dockerfile`, Phase 5) that installs only what `VectorIndex` needs -
-  not the full Phase 10 production image (no API/dashboard, no
-  multi-stage hardening; that remains Phase 10's scope). Uses
+  wheels). Runs inside the Docker/Linux image (repo-root `Dockerfile`;
+  a minimal ScaNN-only variant in Phase 5, superseded by the full
+  multi-stage production image in Phase 10 - see section 10.1). Uses
   `score_brute_force(quantize=False)` - exact, unquantized dot-product
   search - the ScaNN equivalent of FAISS's `IndexFlatIP`.
+
+  **ScaNN/TensorFlow ABI compatibility (Phase 10 finding)**: `scann`'s
+  compiled ops extension is NOT ABI-compatible with an arbitrary
+  TensorFlow version - it must match what scann was built against.
+  `scann==1.4.2`'s own PyPI metadata declares `tensorflow~=2.20.0`; the
+  project's general `ml` extra (`tensorflow>=2.16,<2.22`, used
+  everywhere ELSE, including native-Windows dev where scann is never
+  installed) lets pip resolve 2.21.0, which fails at `import scann` with
+  `undefined symbol: ...absl...internal_log_function...`. This only
+  surfaces when `ml` and `retrieval-scann` are installed in the SAME
+  environment - Phase 5's ScaNN-only image never installed `tensorflow`
+  at all (`retrieval.index.embeddings_io` deliberately avoids it), so
+  the conflict was latent until Phase 10 unified everything into one
+  image. Fixed by pinning `tensorflow~=2.20.0` explicitly in the
+  Dockerfile's `pip install` (narrower than pyproject.toml's `ml` extra,
+  which stays as-is for Windows).
 - **FAISS** (`faiss-cpu`) - the native-Windows **development fallback**.
   Has genuine Windows wheels (verified: PyPI ships `cp313-win_amd64`
   builds), so local dev/tests/training run natively on this Windows

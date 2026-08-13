@@ -158,3 +158,52 @@ def test_fill_rate_is_one_when_pool_has_enough_eligible_items(scenario):
     result = _run(scenario, profile, top_n=5)
     assert result.fill_rate == pytest.approx(1.0)
     assert len(result.product_ids) == 5
+
+
+def test_generate_recommendations_logs_observability_fields(scenario, caplog):
+    """Phase 10 observability: tier/fill_rate/pool_size/eligibility-
+    exclusion counts must be logged from the shared pipeline function
+    itself, so both the API and the dashboard get identical, non-
+    duplicated visibility without either caller adding its own logging.
+    """
+    import logging
+
+    profile = EngagementProfile(
+        user_id=9, profile=UserProfile(user_id=9),
+        purchases=[PurchaseRecord(user_id=9, product_id=pid, order_id=i, quantity=1, unit_price=1.0) for i, pid in enumerate([100, 101, 102])],
+    )
+    with caplog.at_level(logging.INFO, logger="recommendation.serving.pipeline"):
+        _run(scenario, profile, top_n=5)
+
+    messages = [r.message for r in caplog.records]
+    assert any("recommendation generated" in m and "user_id=9" in m and "tier=strong" in m for m in messages)
+
+
+def test_vector_index_candidate_missing_from_catalog_is_skipped_not_crashed(scenario):
+    """Phase 10 reliability: if the VectorIndex (built from Two-Tower
+    artifacts) contains an item id absent from the live product catalog
+    - artifact/catalog drift - a request must degrade gracefully (skip
+    that one candidate), not raise and fail the whole request.
+    """
+    drifted_id = 999
+    assert drifted_id not in scenario["product_features"]
+
+    drifted_ids = scenario["all_item_ids"] + [drifted_id]
+    rng = np.random.default_rng(1)
+    drifted_embeddings = rng.normal(size=(len(drifted_ids), _OUTPUT_DIM)).astype(np.float32)
+    drifted_embeddings /= np.linalg.norm(drifted_embeddings, axis=1, keepdims=True)
+
+    from recommendation.retrieval.index.faiss_index import FaissVectorIndex
+
+    drifted_index = FaissVectorIndex()
+    drifted_index.build(drifted_ids, drifted_embeddings)
+    scenario["vector_index"] = drifted_index
+    scenario["all_item_ids"] = drifted_ids
+
+    profile = EngagementProfile(
+        user_id=8, profile=UserProfile(user_id=8),
+        purchases=[PurchaseRecord(user_id=8, product_id=pid, order_id=i, quantity=1, unit_price=1.0) for i, pid in enumerate([100, 101, 102])],
+    )
+    result = _run(scenario, profile, top_n=20)
+    assert drifted_id not in result.product_ids
+    assert result.product_ids  # still produced real recommendations from the valid candidates

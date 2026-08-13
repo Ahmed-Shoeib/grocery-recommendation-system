@@ -45,6 +45,9 @@ from recommendation.serving.fallback import (
     waterfall_candidates,
 )
 from recommendation.utils.config import AppConfig
+from recommendation.utils.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -88,17 +91,33 @@ def _personalized_candidates(
     user_embedding = user_tower.predict(user_batch, verbose=0)
     [result] = vector_index.search(user_embedding, k=pool_size)
 
+    # A VectorIndex candidate missing from the current product_features
+    # would mean the index and the live catalog have drifted apart (e.g.
+    # a Two-Tower trained against a stale product snapshot) - skip it
+    # rather than crash the whole request; a corrupt/inconsistent
+    # artifact must degrade the result, not the availability, of
+    # recommendations for everyone.
+    valid = [(pid, score) for pid, score in zip(result.item_ids, result.scores) if pid in product_features]
+    if len(valid) < len(result.item_ids):
+        logger.warning(
+            "VectorIndex returned %d candidate(s) not present in the current product catalog - skipped",
+            len(result.item_ids) - len(valid),
+        )
+    if not valid:
+        return []
+
     feature_rows = np.stack(
         [
             build_ranking_feature_vector(
                 user_features, product_features[pid], product_embeddings.get(pid), score, rank, pool_size, tt_encoder.max_price
             )
-            for rank, (pid, score) in enumerate(zip(result.item_ids, result.scores))
+            for rank, (pid, score) in enumerate(valid)
         ]
     )
     ranker_scores = ranker_model.predict(feature_rows, verbose=0).reshape(-1)
     order = np.argsort(-ranker_scores)
-    return [RankedCandidate(result.item_ids[i], float(ranker_scores[i]), "personalized") for i in order]
+    valid_ids = [pid for pid, _ in valid]
+    return [RankedCandidate(valid_ids[i], float(ranker_scores[i]), "personalized") for i in order]
 
 
 def generate_recommendations(
@@ -155,7 +174,7 @@ def generate_recommendations(
 
     final = [c for c in reranked if c.product_id in eligible_set][:top_n]
 
-    return RecommendationResult(
+    result = RecommendationResult(
         user_id=user_features.user_id,
         tier=tier,
         product_ids=[c.product_id for c in final],
@@ -169,6 +188,24 @@ def generate_recommendations(
         pre_rerank_product_ids=pre_rerank_ids,
         pre_eligibility_product_ids=[c.product_id for c in reranked],
     )
+
+    # Logged HERE (not by each caller) so the API and the dashboard - and
+    # any future caller of this function - get identical, non-duplicated
+    # observability for free (Phase 10). Deliberately no CTR/conversion
+    # metrics: V1 has no event-tracking pipeline to compute those from.
+    logger.info(
+        "recommendation generated user_id=%s tier=%s requested=%d returned=%d fill_rate=%.2f "
+        "pool_size=%d excluded_by_eligibility=%d",
+        result.user_id, result.tier.value, result.requested_n, len(result.product_ids), result.fill_rate,
+        result.pool_size, result.num_excluded_by_eligibility,
+    )
+    if result.fill_rate < 1.0:
+        logger.warning(
+            "recommendation under-filled for user_id=%s: requested=%d returned=%d (fill_rate=%.2f) - "
+            "the eligible candidate pool did not have enough items to satisfy the request",
+            result.user_id, result.requested_n, len(result.product_ids), result.fill_rate,
+        )
+    return result
 
 
 def recommend(

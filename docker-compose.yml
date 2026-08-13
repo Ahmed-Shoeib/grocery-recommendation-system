@@ -1,0 +1,64 @@
+# Phase 10 orchestration. `models/` and `data/` are bind-mounted, never
+# baked into an image - train once (profile-gated, one-off), then bring
+# up api/dashboard against the resulting artifacts.
+#
+# Usage:
+#   docker compose --profile train run --rm train-two-tower
+#   docker compose --profile train run --rm train-ranker
+#   docker compose up api dashboard
+#
+# The dashboard does NOT call the api over HTTP (see
+# src/recommendation/ui/service_loader.py) - both simply share the same
+# mounted models/ volume and run independently; there is no `depends_on`
+# runtime dependency between them, only a suggested startup order.
+
+services:
+  train-two-tower:
+    build:
+      context: .
+      target: base
+    volumes:
+      - ./models:/app/models
+      - ./data:/app/data
+    command: ["python", "scripts/train_two_tower.py"]
+    profiles: ["train"]
+
+  train-ranker:
+    build:
+      context: .
+      target: base
+    volumes:
+      - ./models:/app/models
+      - ./data:/app/data
+    command: ["python", "scripts/train_ranker.py"]
+    profiles: ["train"]
+
+  api:
+    build:
+      context: .
+      target: api
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./models:/app/models:ro
+      # Read-write (not :ro): Phase 3's product-embedding cache
+      # (data/processed/product_embeddings.npz, content-hash validated)
+      # is written here on first startup and reused on restart, avoiding
+      # a full Sentence Transformer re-encode of the catalog every time.
+      - ./data:/app/data
+    restart: unless-stopped
+
+  dashboard:
+    build:
+      context: .
+      target: dashboard
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./models:/app/models:ro
+      # Read-write (not :ro): Phase 3's product-embedding cache
+      # (data/processed/product_embeddings.npz, content-hash validated)
+      # is written here on first startup and reused on restart, avoiding
+      # a full Sentence Transformer re-encode of the catalog every time.
+      - ./data:/app/data
+    restart: unless-stopped

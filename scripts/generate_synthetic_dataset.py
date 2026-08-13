@@ -59,12 +59,12 @@ def print_stats(dataset) -> None:
 
 
 def main() -> None:
-    setup_logging()
+    config = get_config()
+    setup_logging(config.log_level)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out", default=None, help="Output directory (default: config paths.data_synthetic)")
     args = parser.parse_args()
 
-    config = get_config()
     out_dir = args.out or config.paths.data_synthetic
 
     logger.info("Generating synthetic dataset (seed=%s)", config.synthetic_data.random_seed)

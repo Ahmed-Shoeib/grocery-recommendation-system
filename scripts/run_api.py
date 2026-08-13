@@ -19,10 +19,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 import uvicorn
 
 from recommendation.api.app import create_app
+from recommendation.utils.config import get_config
 from recommendation.utils.logging import setup_logging
 
-setup_logging()
+_config = get_config()
+setup_logging(_config.log_level)
 app = create_app()
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host=_config.api.host, port=_config.api.port)

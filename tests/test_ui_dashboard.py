@@ -196,6 +196,25 @@ def test_dashboard_top_n_slider_changes_recommendation_count(app):
     assert not app.exception
 
 
+def test_dashboard_handles_pipeline_failure_gracefully():
+    """Phase 10 reliability: a failure inside the pipeline itself (e.g.
+    VectorIndex search) - not just a service-load failure - must also be
+    caught and shown as a clean error, not crash the whole page.
+    """
+    at = AppTest.from_file(_DASHBOARD_PATH, default_timeout=60)
+    service = _build_service()
+
+    def _raise(*args, **kwargs):
+        raise RuntimeError("simulated VectorIndex failure")
+
+    service.vector_index.search = _raise
+    at.session_state["_service_override"] = service
+    at.run()
+    assert not at.exception
+    errors = [e.value for e in at.error]
+    assert any("Failed to generate recommendations" in e for e in errors)
+
+
 def test_dashboard_handles_service_load_failure_gracefully():
     at = AppTest.from_file(_DASHBOARD_PATH, default_timeout=60)
     # ui.service_loader.load_service raises whatever exception instance is

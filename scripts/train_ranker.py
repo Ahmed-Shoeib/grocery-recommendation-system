@@ -45,8 +45,8 @@ def _print_report(report: RankingEvalReport) -> None:
 
 
 def main() -> None:
-    setup_logging()
     config = get_config()
+    setup_logging(config.log_level)
 
     dataset = generate_synthetic_dataset(config)
     issues = validate_dataset(dataset)

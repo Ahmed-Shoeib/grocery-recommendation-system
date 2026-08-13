@@ -47,8 +47,8 @@ def path_size_bytes(path: Path) -> int:
 
 
 def main() -> None:
-    setup_logging()
     config = get_config()
+    setup_logging(config.log_level)
 
     two_tower_dir = resolve_path(config.paths.models_dir) / "two_tower"
     item_ids, embeddings = load_item_embeddings(two_tower_dir)

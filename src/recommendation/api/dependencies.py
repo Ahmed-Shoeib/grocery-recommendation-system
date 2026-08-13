@@ -48,6 +48,13 @@ from recommendation.retrieval.two_tower.serialization import load_two_tower_arti
 from recommendation.ranking.serialization import load_ranker_artifacts
 from recommendation.serving.pipeline import RecommendationResult
 from recommendation.serving.pipeline import recommend as run_pipeline
+from recommendation.serving.startup_validation import (
+    load_or_raise,
+    require_artifact_dir,
+    validate_ranker_artifacts,
+    validate_two_tower_artifacts,
+    validate_vector_index_compatibility,
+)
 from recommendation.utils.config import AppConfig, resolve_path
 from recommendation.utils.logging import get_logger
 
@@ -113,7 +120,30 @@ def build_recommendation_service(config: AppConfig) -> RecommendationService:
     """Real production wiring: generates the (synthetic V1) dataset,
     loads the ALREADY-TRAINED Phase 4/6 artifacts (never retrains), and
     builds the Phase 5 VectorIndex - mirrors `scripts/run_pipeline.py`.
+
+    Raises `serving.startup_validation.ArtifactValidationError` (a plain
+    `RuntimeError`) on any missing/corrupt/incompatible artifact - by
+    design, this must fail loudly here rather than let a mismatched
+    ranker/Two-Tower/index combination silently serve wrong
+    recommendations (Phase 10). Artifacts are checked and loaded FIRST,
+    before dataset generation or Sentence Transformer loading, so a
+    missing/incompatible artifact fails in milliseconds rather than
+    after several seconds of otherwise-wasted startup work.
     """
+    two_tower_dir = resolve_path(config.paths.models_dir) / "two_tower"
+    ranker_dir = resolve_path(config.paths.models_dir) / "ranker"
+    require_artifact_dir(two_tower_dir, "Two-Tower")
+    require_artifact_dir(ranker_dir, "Ranker")
+
+    two_tower_artifacts = load_or_raise("Two-Tower", two_tower_dir, load_two_tower_artifacts)
+    validate_two_tower_artifacts(two_tower_artifacts, config)
+    ranker_artifacts = load_or_raise("ranker", ranker_dir, load_ranker_artifacts)
+    validate_ranker_artifacts(ranker_artifacts)
+
+    vector_index = build_vector_index(config.retrieval)
+    vector_index.build(two_tower_artifacts.item_ids, two_tower_artifacts.item_embeddings)
+    validate_vector_index_compatibility(vector_index.size, len(two_tower_artifacts.item_ids))
+
     dataset = generate_synthetic_dataset(config)
     issues = validate_dataset(dataset)
     if issues:
@@ -124,13 +154,6 @@ def build_recommendation_service(config: AppConfig) -> RecommendationService:
         config.embedding.sentence_transformer_model, device=config.embedding.device, batch_size=config.embedding.encode_batch_size
     )
     feature_result = run_feature_pipeline(bundle, config, encoder=st_encoder)
-
-    two_tower_artifacts = load_two_tower_artifacts(resolve_path(config.paths.models_dir) / "two_tower")
-    ranker_artifacts = load_ranker_artifacts(resolve_path(config.paths.models_dir) / "ranker")
-
-    vector_index = build_vector_index(config.retrieval)
-    vector_index.build(two_tower_artifacts.item_ids, two_tower_artifacts.item_embeddings)
-
     text_embeddings = build_user_text_embeddings(list(feature_result.engagement_profiles.values()), st_encoder)
     product_lookup = {p.id: p for p in bundle.products.list_products()}
 

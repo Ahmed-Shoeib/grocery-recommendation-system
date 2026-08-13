@@ -102,8 +102,9 @@ async def get_recommendations(
         generated_at=datetime.now(timezone.utc),
         latency_ms=latency_ms,
     )
-    logger.info(
-        "recommendations served user_id=%s tier=%s requested=%d returned=%d latency_ms=%.2f",
-        user_id, result.tier.value, effective_limit, len(items), latency_ms,
-    )
+    # tier/fill_rate/pool_size/eligibility are already logged once inside
+    # serving.pipeline.generate_recommendations (shared with the
+    # dashboard) - this line only adds the HTTP-request-specific fact
+    # (observed latency at the API boundary) rather than repeating them.
+    logger.info("request completed user_id=%s latency_ms=%.2f", user_id, latency_ms)
     return RecommendationResponse(meta=meta, items=items)

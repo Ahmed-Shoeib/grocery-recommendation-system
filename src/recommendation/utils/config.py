@@ -3,6 +3,15 @@
 All tunables (paths, hyperparameters, thresholds, blend weights) live in
 configs/*.yaml rather than being hard-coded, so later phases only ever edit
 config, never scatter magic numbers through model/feature code.
+
+Phase 10: a small, explicitly-documented set of environment variables can
+override individual settings on top of whichever YAML file loads - for
+container/deployment knobs that are awkward to bake into a config file
+(where artifacts are mounted, which retrieval backend to force, log
+verbosity) without introducing a generic "any field via env var" system.
+See `_ENV_OVERRIDES` below for the full list. `RECS_CONFIG_PATH` (whole-
+file selection) predates these and is handled separately in
+`load_config`.
 """
 
 from __future__ import annotations
@@ -10,7 +19,7 @@ from __future__ import annotations
 import os
 from functools import lru_cache
 from pathlib import Path
-from typing import Literal
+from typing import Callable, Literal
 
 import yaml
 from pydantic import BaseModel, Field
@@ -196,6 +205,8 @@ class ApiConfig(BaseModel):
     model_version: str = "v1"
     default_recommendation_count: int = 10
     max_recommendation_count: int = 50
+    host: str = "0.0.0.0"
+    port: int = 8000
 
 
 class DashboardConfig(BaseModel):
@@ -219,15 +230,50 @@ class AppConfig(BaseModel):
     dashboard: DashboardConfig = Field(default_factory=DashboardConfig)
 
 
+# env var -> (dotted path into the raw config dict, caster). Deliberately
+# a short, explicit list of operationally-relevant knobs, not a generic
+# mechanism for overriding arbitrary fields - see module docstring.
+_ENV_OVERRIDES: dict[str, tuple[tuple[str, ...], Callable[[str], object]]] = {
+    "RECS_MODELS_DIR": (("paths", "models_dir"), str),
+    "RECS_LOG_LEVEL": (("log_level",), str),
+    "RECS_RETRIEVAL_BACKEND": (("retrieval", "backend"), str),
+    "RECS_API_HOST": (("api", "host"), str),
+    "RECS_API_PORT": (("api", "port"), int),
+    "RECS_API_DEFAULT_TOP_N": (("api", "default_recommendation_count"), int),
+    "RECS_API_MAX_TOP_N": (("api", "max_recommendation_count"), int),
+}
+
+
+def _set_nested(d: dict, path: tuple[str, ...], value: object) -> None:
+    for key in path[:-1]:
+        d = d.setdefault(key, {})
+    d[path[-1]] = value
+
+
+def _apply_env_overrides(raw: dict) -> dict:
+    for env_var, (path, caster) in _ENV_OVERRIDES.items():
+        value = os.environ.get(env_var)
+        if value is None:
+            continue
+        try:
+            casted = caster(value)
+        except ValueError as exc:
+            raise ValueError(f"Invalid value for {env_var}={value!r}: {exc}") from exc
+        _set_nested(raw, path, casted)
+    return raw
+
+
 def load_config(path: str | Path | None = None) -> AppConfig:
     """Load and validate the YAML config into an AppConfig.
 
     Resolution order: explicit `path` argument, then RECS_CONFIG_PATH env
-    var, then configs/base.yaml.
+    var, then configs/base.yaml - then the `_ENV_OVERRIDES` env vars are
+    applied on top of whichever file loaded (highest precedence).
     """
     resolved = Path(path) if path is not None else Path(os.environ.get("RECS_CONFIG_PATH", DEFAULT_CONFIG_PATH))
     with resolved.open("r", encoding="utf-8") as f:
         raw = yaml.safe_load(f) or {}
+    raw = _apply_env_overrides(raw)
     return AppConfig(**raw)
 
 

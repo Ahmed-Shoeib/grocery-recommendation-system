@@ -8,6 +8,10 @@
 # src/recommendation/utils/config.py loads each config file as a complete
 # AppConfig, it does not merge configs. If base.yaml's tunables change,
 # mirror the change here.
+#
+# Individual settings can be overridden on top via env vars without
+# editing this file (Phase 10) - see utils/config.py: _ENV_OVERRIDES, or
+# the equivalent comment block at the top of base.yaml.
 
 random_seed: 42
 log_level: "INFO"
@@ -137,11 +141,15 @@ ranking:
   eval_k_values: [5, 10, 20]
   random_seed: 42
 
-# Phase 8: recommendation API.
+# Phase 8: recommendation API. host/port overridable via RECS_API_HOST /
+# RECS_API_PORT (see utils/config.py: _ENV_OVERRIDES, Phase 10) - useful
+# in containers without editing this file.
 api:
   model_version: "v1"
   default_recommendation_count: 10
   max_recommendation_count: 50
+  host: "0.0.0.0"
+  port: 8000
 
 # Phase 9: internal dashboard. Currently unused: the dashboard reuses
 # RecommendationService in-process (src/recommendation/ui/service_loader.py)

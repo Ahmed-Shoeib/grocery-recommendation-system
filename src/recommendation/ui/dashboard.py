@@ -37,7 +37,10 @@ from recommendation.ui.data_access import (
 )
 from recommendation.ui.metrics import compute_offline_metrics
 from recommendation.ui.service_loader import load_service
+from recommendation.utils.config import get_config
+from recommendation.utils.logging import setup_logging
 
+setup_logging(get_config().log_level)
 st.set_page_config(page_title="Grocery Recommendation Dashboard", layout="wide")
 
 TIER_LABELS = {"strong": "STRONG", "sparse": "SPARSE", "no_history": "NO_HISTORY"}
@@ -233,10 +236,15 @@ def main() -> None:
     _render_engagement_signals(detail, service.product_lookup)
     _render_recommendation_context(detail)
 
-    with st.spinner("Running Two-Tower → VectorIndex → Ranker → Re-ranking → Eligibility..."):
-        start = time.perf_counter()
-        result = run_recommendations(service, detail, top_n)
-        latency_ms = (time.perf_counter() - start) * 1000
+    try:
+        with st.spinner("Running Two-Tower → VectorIndex → Ranker → Re-ranking → Eligibility..."):
+            start = time.perf_counter()
+            result = run_recommendations(service, detail, top_n)
+            latency_ms = (time.perf_counter() - start) * 1000
+    except Exception as exc:  # noqa: BLE001 - a pipeline-stage failure must not crash the whole page
+        st.error(f"Failed to generate recommendations for user {selected_id}: {exc}")
+        st.info("This may indicate a VectorIndex, ranker, or feature-encoding issue - check the application logs.")
+        st.stop()
 
     _render_recommendations(result, service.product_lookup)
     _render_pipeline_debug(result, service.product_lookup, latency_ms)

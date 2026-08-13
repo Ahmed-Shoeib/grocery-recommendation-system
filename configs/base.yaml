@@ -2,6 +2,17 @@
 # Every hyperparameter / path / threshold that later phases would otherwise
 # hard-code lives here so behavior can change without touching code.
 # Loaded by src/recommendation/utils/config.py into a typed AppConfig.
+#
+# Which file loads: RECS_CONFIG_PATH env var (defaults to this file).
+# Individual settings can then be overridden on top, without editing any
+# YAML file - useful for containers/deployment (Phase 10):
+#   RECS_MODELS_DIR              -> paths.models_dir
+#   RECS_LOG_LEVEL                -> log_level
+#   RECS_RETRIEVAL_BACKEND        -> retrieval.backend ("faiss" | "scann")
+#   RECS_API_HOST / RECS_API_PORT -> api.host / api.port
+#   RECS_API_DEFAULT_TOP_N        -> api.default_recommendation_count
+#   RECS_API_MAX_TOP_N            -> api.max_recommendation_count
+# See utils/config.py: _ENV_OVERRIDES for the authoritative list.
 
 random_seed: 42
 log_level: "INFO"
@@ -142,11 +153,15 @@ ranking:
   eval_k_values: [5, 10, 20]
   random_seed: 42
 
-# Phase 8: recommendation API.
+# Phase 8: recommendation API. host/port overridable via RECS_API_HOST /
+# RECS_API_PORT (see utils/config.py: _ENV_OVERRIDES, Phase 10) - useful
+# in containers without editing this file.
 api:
   model_version: "v1"
   default_recommendation_count: 10
   max_recommendation_count: 50
+  host: "0.0.0.0"
+  port: 8000
 
 # Phase 9: internal dashboard. Currently unused: the dashboard reuses
 # RecommendationService in-process (src/recommendation/ui/service_loader.py)
