@@ -161,6 +161,22 @@ class EligibilityConfig(BaseModel):
     require_in_stock: bool = True
 
 
+class ReRankingConfig(BaseModel):
+    """Continuous (never a hard cutoff) relevance-vs-diversity trade-off:
+    `diversity_strength=0` reproduces the input ranking exactly (pure
+    relevance order); higher values increasingly penalize repeated
+    categories/brands. Because it's a score penalty rather than a quota,
+    a candidate is never dropped purely for diversity reasons - it can
+    only be reordered - so over-diversifying can push relevance down
+    gradually and tunably, never catastrophically. See
+    `recommendation.reranking.diversity`.
+    """
+
+    diversity_strength: float = 0.5
+    category_repetition_penalty: float = 0.15
+    brand_repetition_penalty: float = 0.08
+
+
 class RankingConfig(BaseModel):
     hidden_units: list[int] = Field(default_factory=lambda: [128, 64])
     learning_rate: float = 0.001
@@ -197,6 +213,7 @@ class AppConfig(BaseModel):
     retrieval: RetrievalConfig = Field(default_factory=RetrievalConfig)
     cold_start: ColdStartConfig = Field(default_factory=ColdStartConfig)
     eligibility: EligibilityConfig = Field(default_factory=EligibilityConfig)
+    reranking: ReRankingConfig = Field(default_factory=ReRankingConfig)
     ranking: RankingConfig = Field(default_factory=RankingConfig)
     api: ApiConfig = Field(default_factory=ApiConfig)
     dashboard: DashboardConfig = Field(default_factory=DashboardConfig)

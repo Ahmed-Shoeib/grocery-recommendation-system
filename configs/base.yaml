@@ -120,6 +120,13 @@ eligibility:
   require_active: true
   require_in_stock: true
 
+# Phase 7: re-ranking (dedup + diversity). Continuous score-penalty
+# trade-off, not a hard quota - see RerankingConfig docstring.
+reranking:
+  diversity_strength: 0.5
+  category_repetition_penalty: 0.15
+  brand_repetition_penalty: 0.08
+
 # Phase 6: neural ranker. Consumes candidates retrieved by VectorIndex
 # (Phase 5) plus richer per-candidate features than the Two-Tower model
 # sees (cross features, popularity, retrieval score/rank - see

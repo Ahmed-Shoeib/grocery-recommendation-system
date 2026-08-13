@@ -8,14 +8,16 @@ full ERD reconciliation, V1/V2 scope boundary, and design decisions.
 
 ## Status
 
-Built in 10 sequential phases (see below). **Phases 1-6 complete**:
+Built in 10 sequential phases (see below). **Phases 1-7 complete**:
 project scaffolding, canonical data adapters + synthetic dataset, the
 Sentence Transformer + feature-engineering pipeline, a trained Two-Tower
 retrieval model (128-D, L2-normalized, leave-one-out evaluated), a
-ScaNN/FAISS `VectorIndex` over its embeddings, and a neural ranker that
-re-scores VectorIndex candidates with richer cross features - beats the
-raw-retrieval-score baseline on every ranking metric (test NDCG@10 0.353
-vs. 0.267). No re-ranking/business rules, API, or dashboard yet.
+ScaNN/FAISS `VectorIndex` over its embeddings, a neural ranker that
+re-scores VectorIndex candidates with richer cross features (beats the
+raw-retrieval-score baseline on every ranking metric), and the full V1
+serving pipeline - three-level cold-start blending, dedup/diversity
+re-ranking, and business-rules/eligibility applied last. No API or
+dashboard yet.
 
 ## Architecture
 
@@ -85,9 +87,9 @@ src/recommendation/
     two_tower/               User Tower / Item Tower model
     index/                    VectorIndex (ScaNN primary/production - Docker, FAISS Windows dev fallback)
   ranking/                    Neural ranker over VectorIndex candidates (features, model, train, evaluation, serialization)
-  reranking/                  Diversity, dedup, cold-start blending, final validation
+  reranking/                  Duplicate removal + category/brand diversity re-ranking
   evaluation/                 Offline metrics + latency measurement
-  serving/                    Shared inference layer used by API and dashboard
+  serving/                    Cold-start tiering, fallback candidates, eligibility, and the full pipeline orchestrator (used by API and dashboard)
   api/                        FastAPI app
   ui/                         Streamlit dashboard
   utils/                      Config loading, logging
@@ -131,7 +133,7 @@ thresholds and blend weights, model version, random seed) live in
 4. Neural Two-Tower retrieval model.
 5. ANN retrieval: ScaNN (primary/production backend, Linux/Docker) + FAISS (native-Windows dev fallback).
 6. Neural ranking of VectorIndex candidates, richer than retrieval features, evaluated (NDCG/Precision/Recall/HitRate/MRR) against a raw-retrieval-score baseline.
-7. Re-ranking, business rules/eligibility (applied last) & three-level cold-start strategy.
+7. Full serving pipeline: three-level cold-start blending (strong/sparse/no-history), dedup + category/brand diversity re-ranking, business rules/eligibility (applied last).
 8. Recommendation API.
 9. Recommendation dashboard.
 10. Production hardening (full containerization of API/dashboard/serving) & documentation.

@@ -71,6 +71,35 @@ cold_start.*` (implemented in Phase 7):
 All thresholds and blend weights are config-driven, not hard-coded, and
 tiering is deterministic and testable.
 
+**Implemented (Phase 7)**: `serving.cold_start.determine_history_tier`
+(tiering), `serving.fallback` (candidate sources + merge strategies -
+`blend_candidate_lists` for the SPARSE weighted blend,
+`waterfall_candidates` for the NO_HISTORY ordered chain), orchestrated
+by `serving.pipeline.generate_recommendations`. `"category_popularity"`
+and `"preferred_category"` are DISTINCT fallback sources:
+`"preferred_category"` uses the confirmed `UserProfile.preferred_category`
+attribute directly; `"category_popularity"` uses the user's single
+highest-affinity category from `UserFeatures.category_affinity` (which
+factors in `preferred_category` plus whatever sparse purchase/cart/
+search/chatbot signal exists). For a true zero-signal user these
+necessarily coincide (affinity has nothing else to draw on); for a
+SPARSE_HISTORY user with some real signal they can genuinely differ -
+this is why both are listed as separate fallback tiers rather than one.
+
+Duplicate removal and category/brand diversity re-ranking
+(`reranking.diversity.rerank`) run uniformly across all three tiers'
+candidate lists, before eligibility filtering. Diversity is a continuous
+score penalty (`reranking.diversity_strength`), not a hard per-category/
+brand quota - a candidate can only be reordered by it, never dropped, so
+it cannot "over-diversify" a list into irrelevance; at
+`diversity_strength=0` it reproduces the input ranking exactly. Measured
+on the real V1 synthetic catalog (`scripts/run_pipeline.py`, default
+`diversity_strength=0.5`): mean distinct categories per 10-item list rose
+from 4.59 (ranker-only order) to 6.20 (post-re-ranking) - a ~35% increase
+- while NDCG@10 moved from 0.3498 to 0.3356 on the test split (0.3608 to
+0.3523 on validation), i.e. a small, deliberate relevance cost for a
+real diversity gain, not a catastrophic one.
+
 ## 4. Search and chatbot context - adapters, not backend tables
 
 Neither `SearchHistory` nor any chatbot entity exists in the ERD. V1 uses:
@@ -116,7 +145,19 @@ a real `isDeleted`/soft-delete flag, regional restrictions, other
 purchase-eligibility rules - can be added as additional policy checks
 without touching retrieval or ranking. It never triggers ScaNN/FAISS index
 rebuilds, and stock changes never trigger model retraining - inventory is
-serving-time state, not model knowledge. If catalog scale later makes
+serving-time state, not model knowledge.
+
+**Implemented (Phase 7)**: `serving.eligibility.build_eligibility_rules`
+(a list of named `EligibilityRule(name, predicate)` pairs, appending a
+rule requires no change elsewhere) + `apply_eligibility`. Filtering runs
+over the FULL re-ranked candidate pool (config-driven size, Phase 5's
+`candidate_pool_size`), not just the requested Top-N, specifically so
+that excluding ineligible items still leaves enough eligible candidates
+to fill the request - `serving.pipeline.RecommendationResult.fill_rate`
+reports how close the final list came to the requested count (1.0 in
+practice at the current V1 catalog scale, even with real inactive/
+out-of-stock items present and excluded - see the Phase 7 evaluation
+report). If catalog scale later makes
 early filtering worthwhile, revisit this ordering explicitly rather than
 silently reintroducing a pre-filter.
 
@@ -161,8 +202,13 @@ not by building unused event infrastructure now.
 .retrieval_metrics`), retrieval latency (Phase 5, `evaluation.latency`),
 Precision@K/NDCG@K/reciprocal rank (MRR) (Phase 6, added to the same
 `retrieval_metrics` module and used by `ranking.evaluation` to compare
-the neural ranker against the raw-retrieval-score baseline). Catalog
-coverage and end-to-end (API-level) latency are deferred to Phase 8.
+the neural ranker against the raw-retrieval-score baseline), and catalog
+coverage, intra-list category diversity, duplicate rate, requested-slot
+fill rate, cold-start tier distribution, and pipeline latency up through
+eligibility (Phase 7, `serving.evaluation.evaluate_pipeline` +
+`scripts/run_pipeline.py`). True end-to-end (HTTP API-level) latency,
+which additionally measures request/response overhead outside the
+pipeline itself, is deferred to Phase 8.
 
 **Deferred to V2** (requires the event-tracking pipeline in §7): CTR,
 impression volume, recommendation-click conversion, add-to-cart
@@ -292,7 +338,7 @@ genuinely temporal held-out split instead of this content-based heuristic.
 | §4 Search/Chatbot adapters | Phase 2 |
 | §5 Business rules/eligibility policy (applied last) | Phase 7 |
 | §6 Popularity | Phase 2 (data) / Phase 7 (fallback ranking) |
-| §8 Offline evaluation | Phase 4 (Recall/HitRate) / Phase 5 (latency) / Phase 6 (Precision/NDCG/MRR) |
+| §8 Offline evaluation | Phase 4 (Recall/HitRate) / Phase 5 (latency) / Phase 6 (Precision/NDCG/MRR) / Phase 7 (coverage/diversity/duplicate/fill-rate/cold-start/pipeline latency) |
 | §9 Surface context hook | Phase 8 |
 | §10 VectorIndex backends | Phase 5 (ScaNN primary/Docker + FAISS Windows dev fallback) |
 | §11 Neural ranking (VectorIndex candidates, richer cross features, baseline comparison) | Phase 6 |
