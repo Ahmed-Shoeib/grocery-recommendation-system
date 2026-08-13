@@ -13,11 +13,19 @@ adds is the API-specific "does this user exist at all" check
 (`UnknownUserError`), which is deliberately NOT part of the pipeline
 (the pipeline's own leave-one-out evaluation and the dashboard/other
 future callers may have different notions of "known user").
+
+Despite the module path, `RecommendationService`/`build_recommendation
+_service` are shared by the Phase 9 Streamlit dashboard too
+(`ui.service_loader`) - it reuses this exact class in-process (no HTTP
+hop to the API) rather than duplicating a second copy of "load the
+Two-Tower/ranker/VectorIndex once" wiring. Left here rather than moved
+to `serving` to avoid touching already-shipped Phase 8 call sites for a
+Phase 9 change.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 import tensorflow as tf
@@ -25,6 +33,7 @@ import tensorflow as tf
 from recommendation.api.errors import UnknownUserError
 from recommendation.data.adapters.base import AdapterBundle
 from recommendation.data.adapters.factory import build_synthetic_adapters
+from recommendation.data.schemas.engagement import EngagementProfile
 from recommendation.data.schemas.product import Product
 from recommendation.data.synthetic.dataset import generate_synthetic_dataset
 from recommendation.data.synthetic.validation import validate_dataset
@@ -60,6 +69,14 @@ class RecommendationService:
     config: AppConfig
     ranker_model_version: str = "unknown"
     two_tower_model_version: str = "unknown"
+    # Populated from the Phase 3 feature pipeline's own output - not
+    # needed for serving a single recommendation request (that only
+    # needs the ONE requested user's profile, looked up on demand via
+    # `bundle`), but the dashboard's user-selection list and its offline
+    # metrics section (`ui.metrics`) need every user's engagement data at
+    # once, and recomputing it per-user would be wasteful when it's
+    # already sitting in the feature pipeline result.
+    engagement_profiles: dict[int, EngagementProfile] = field(default_factory=dict)
 
     def is_known_user(self, user_id: int) -> bool:
         return self.bundle.users.get_user_profile(user_id) is not None
@@ -136,4 +153,5 @@ def build_recommendation_service(config: AppConfig) -> RecommendationService:
         config=config,
         ranker_model_version=str(ranker_artifacts.metadata.get("model_version", "unknown")),
         two_tower_model_version=str(two_tower_artifacts.metadata.get("model_version", "unknown")),
+        engagement_profiles=feature_result.engagement_profiles,
     )

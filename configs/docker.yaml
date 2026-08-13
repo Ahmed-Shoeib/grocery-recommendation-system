@@ -143,6 +143,10 @@ api:
   default_recommendation_count: 10
   max_recommendation_count: 50
 
-# Phase 9: internal dashboard.
+# Phase 9: internal dashboard. Currently unused: the dashboard reuses
+# RecommendationService in-process (src/recommendation/ui/service_loader.py)
+# rather than calling the API over HTTP, so a single `streamlit run` is
+# enough - no separately-running API server required. Kept here in case a
+# real microservice split (dashboard -> HTTP -> API) is revisited later.
 dashboard:
   api_base_url: "http://localhost:8000"

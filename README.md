@@ -8,7 +8,7 @@ full ERD reconciliation, V1/V2 scope boundary, and design decisions.
 
 ## Status
 
-Built in 10 sequential phases (see below). **Phases 1-8 complete**:
+Built in 10 sequential phases (see below). **Phases 1-9 complete**:
 project scaffolding, canonical data adapters + synthetic dataset, the
 Sentence Transformer + feature-engineering pipeline, a trained Two-Tower
 retrieval model (128-D, L2-normalized, leave-one-out evaluated), a
@@ -16,10 +16,14 @@ ScaNN/FAISS `VectorIndex` over its embeddings, a neural ranker that
 re-scores VectorIndex candidates with richer cross features (beats the
 raw-retrieval-score baseline on every ranking metric), the full V1
 serving pipeline (three-level cold-start blending, dedup/diversity
-re-ranking, business-rules/eligibility applied last), and a versioned
+re-ranking, business-rules/eligibility applied last), a versioned
 FastAPI recommendation API (`/v1`) that is a thin, dependency-injected
-wrapper over that same pipeline - no recommendation logic duplicated in
-the API layer. No dashboard yet.
+wrapper over that same pipeline, and an internal Streamlit dashboard for
+inspecting/debugging the engine (user signals, cold-start tier,
+candidate pool/eligibility diagnostics, offline metrics) - reusing the
+exact same in-process `RecommendationService` the API uses, no
+recommendation logic duplicated anywhere. Production hardening
+(containerizing API/dashboard together) is the only remaining phase.
 
 ## Architecture
 
@@ -93,7 +97,7 @@ src/recommendation/
   evaluation/                 Offline metrics + latency measurement
   serving/                    Cold-start tiering, fallback candidates, eligibility, and the full pipeline orchestrator (used by API and dashboard)
   api/                        FastAPI app (v1) - app/routes/schemas/dependencies, thin wrapper over serving.pipeline
-  ui/                         Streamlit dashboard
+  ui/                          Streamlit dashboard (dashboard.py rendering-only; data_access.py/metrics.py pure + unit-tested) - reuses api.dependencies.RecommendationService in-process
   utils/                      Config loading, logging
 tests/
 ```
@@ -133,6 +137,19 @@ python scripts/run_api.py
 # GET  http://localhost:8000/v1/users/{user_id}/recommendations?limit=10
 ```
 
+## Running the dashboard
+
+Same model-artifact prerequisite as the API. The dashboard does NOT call
+the API over HTTP - it loads the same `RecommendationService` in-process
+(one `streamlit run`, nothing else to start first).
+
+```bash
+python scripts/run_dashboard.py
+# or directly:
+streamlit run src/recommendation/ui/dashboard.py
+# then open the URL Streamlit prints (default http://localhost:8501)
+```
+
 ## Configuration
 
 All tunables (paths, hyperparameters, candidate-pool sizing, cold-start
@@ -151,7 +168,7 @@ thresholds and blend weights, model version, random seed) live in
 6. Neural ranking of VectorIndex candidates, richer than retrieval features, evaluated (NDCG/Precision/Recall/HitRate/MRR) against a raw-retrieval-score baseline.
 7. Full serving pipeline: three-level cold-start blending (strong/sparse/no-history), dedup + category/brand diversity re-ranking, business rules/eligibility (applied last).
 8. Versioned (`/v1`) FastAPI recommendation API - dependency-injected, model artifacts loaded once at startup, thin wrapper over the Phase 7 pipeline (no duplicated logic).
-9. Recommendation dashboard.
+9. Internal Streamlit dashboard for demonstrating/debugging the recommendation engine - user signals, cold-start tier, candidate-pool/eligibility diagnostics, offline metrics - reusing the API's RecommendationService in-process.
 10. Production hardening (full containerization of API/dashboard/serving) & documentation.
 
 Each phase is a separate commit, reviewed and approved before the next

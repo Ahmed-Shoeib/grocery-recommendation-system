@@ -223,7 +223,12 @@ network + request/response serialization overhead on top of the
 pipeline latency Phase 7 measures - is implemented in Phase 8 by timing
 real HTTP requests against a running `scripts/run_api.py` instance; this
 is a synthetic/local measurement (single process, loopback network, one
-concurrent client), not production SLA evidence.
+concurrent client), not production SLA evidence. Phase 9's dashboard
+Metrics/Debug section (`ui.metrics.compute_offline_metrics`) is a UI
+over this exact same Phase 7 evaluation call, computed on demand (not
+automatically, since a full leave-one-out pass is not free) and
+explicitly labeled in the UI as offline/synthetic - it does not add or
+substitute for any new metric.
 
 **Deferred to V2** (requires the event-tracking pipeline in §7): CTR,
 impression volume, recommendation-click conversion, add-to-cart
@@ -251,6 +256,19 @@ pipeline already accepts it; wiring an actual `context` query/body
 parameter through the versioned wire contract is deferred until a real
 surface-specific use case exists, consistent with "not by building
 unused event infrastructure now" below.
+
+**Phase 9 status**: the internal Streamlit dashboard
+(`recommendation.ui`) is a second consumer of the same pipeline, but -
+deliberately, for this V1 internal debug tool - it does NOT go through
+the Phase 8 HTTP API. `ui.service_loader.load_service` reuses
+`api.dependencies.RecommendationService`/`build_recommendation_service`
+directly, in-process, so a single `streamlit run` works with no API
+server to start first. This is still "one pipeline, reused, not
+duplicated" - the SAME `RecommendationService` class and the SAME
+`serving.pipeline.generate_recommendations` call the API makes, just
+without an HTTP hop. `configs/base.yaml: dashboard.api_base_url` is
+consequently unused for now, kept for a possible future microservice
+split rather than removed.
 
 ## 10. ANN retrieval backend
 
@@ -363,7 +381,7 @@ genuinely temporal held-out split instead of this content-based heuristic.
 | §5 Business rules/eligibility policy (applied last) | Phase 7 |
 | §6 Popularity | Phase 2 (data) / Phase 7 (fallback ranking) |
 | §8 Offline evaluation | Phase 4 (Recall/HitRate) / Phase 5 (latency) / Phase 6 (Precision/NDCG/MRR) / Phase 7 (coverage/diversity/duplicate/fill-rate/cold-start/pipeline latency) / Phase 8 (HTTP end-to-end latency) |
-| §9 Surface context hook | Phase 7 (pipeline parameter) - not yet exposed via the Phase 8 API |
+| §9 Surface context hook / dashboard architecture | Phase 7 (pipeline parameter, not yet exposed via API) / Phase 9 (dashboard reuses RecommendationService in-process, not via HTTP) |
 | §10 VectorIndex backends | Phase 5 (ScaNN primary/Docker + FAISS Windows dev fallback) |
 | §11 Neural ranking (VectorIndex candidates, richer cross features, baseline comparison) | Phase 6 |
 | §12 Leakage-limitation mitigation | Phase 3 (guard) / Phase 4 (consumer) / Phase 6 (extended to ranking negatives) |
