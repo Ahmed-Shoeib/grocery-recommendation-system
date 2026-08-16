@@ -30,12 +30,13 @@ class RecommendationMeta(BaseModel):
     requested_top_n: int
     returned_count: int
     fill_rate: float = Field(description="returned_count / requested_top_n - 1.0 means the request was fully filled")
-    pool_size: int = Field(description="Candidate pool size retrieval/ranking/re-ranking operated on before eligibility filtering")
-    num_excluded_by_eligibility: int
+    pool_size: int = Field(description="Candidate pool size retrieval/ranking/re-ranking operated on, capped by the currently-ELIGIBLE catalog size (post pre-retrieval eligibility)")
+    num_excluded_pre_retrieval: int = Field(description="Catalog products excluded by the hard PRE-retrieval eligibility gate (isActive/stockQuantity) before candidate generation ran")
+    num_excluded_by_eligibility: int = Field(description="Candidates excluded by the FINAL lightweight eligibility validation (defense-in-depth safety net); normally 0 since pre-retrieval filtering already excludes ineligible products")
     api_version: str
     model_version: str = Field(description="Ranker model version that produced these scores (see models/ranker/metadata.json)")
     generated_at: datetime
-    latency_ms: float = Field(description="Server-side pipeline latency only (Two-Tower -> VectorIndex -> Ranker -> Re-ranking -> Eligibility) - NOT full HTTP round-trip time")
+    latency_ms: float = Field(description="Server-side pipeline latency only (pre-retrieval eligibility -> Two-Tower -> VectorIndex -> Ranker -> Re-ranking -> final eligibility validation) - NOT full HTTP round-trip time")
 
 
 class RecommendationResponse(BaseModel):

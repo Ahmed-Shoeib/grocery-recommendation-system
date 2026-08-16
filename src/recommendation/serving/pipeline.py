@@ -1,7 +1,9 @@
-"""The full V1 serving pipeline (Phase 7):
+"""The full V1 serving pipeline (Phase 7, re-architected Phase 11):
 
-Two-Tower -> VectorIndex retrieval -> Neural Ranker -> Re-ranking
--> Business Rules / Eligibility -> Final Top-N
+Catalog -> HARD PRE-RETRIEVAL ELIGIBILITY -> Two-Tower / VectorIndex
+retrieval (eligible products only) -> Neural Ranker -> Re-ranking
+-> remaining business rules -> FINAL LIGHTWEIGHT ELIGIBILITY VALIDATION
+-> Final Top-N
 
 `generate_recommendations` is a pure function of an already-built
 `UserFeatures` (built with full visible history for real serving, or
@@ -10,12 +12,43 @@ with held-out val/test excluded for evaluation - see `serving
 lookups itself, so it works identically whether called from a live
 `recommend()` request or from an offline evaluation loop.
 
-Eligibility runs LAST, over the FULL re-ranked candidate pool (not just
-the top requested N) so that filtering out inactive/out-of-stock items
-still leaves as many eligible candidates as possible to fill the
-requested Top-N from - the reason retrieval/ranking/re-ranking always
-operate on `pool_size` candidates (config-driven, Phase 5's
-`candidate_pool_size`), not just N.
+**Pre-retrieval eligibility (Phase 11)**: `isActive`/`stockQuantity` are
+hard, global catalog-eligibility gates - a mentor-reviewed architecture
+change from the original "filter last" design (docs/data-mapping.md §5).
+Before any candidate generation - personalized (Two-Tower/VectorIndex) or
+fallback (category/global popularity, cold-start waterfall) - the current
+eligible product id set is computed once from `product_features` and
+threaded through every candidate source, via `serving.eligibility
+.apply_eligibility` (the SAME predicate rules used at the final stage)
+and `retrieval.index.eligibility_filter.EligibilityRestrictedIndex` for
+the VectorIndex path specifically. Inactive/out-of-stock products never
+enter the ranker or re-ranking. This never touches the Two-Tower, the
+ranker, or the VectorIndex's built structure - `stockQuantity`/`isActive`
+are serving-time catalog state, not model knowledge, so nothing here is
+retrained or rebuilt when they change; only `product_features` (a plain
+dict, re-derived from current catalog state - see `features
+.product_features.build_product_features`) needs to reflect the current
+values. See module-level rationale below for exactly what would need
+refreshing.
+
+**Final lightweight validation (Phase 11)**: even though candidate
+generation is already restricted to eligible products, `apply_eligibility`
+runs a SECOND time at the very end, over the full re-ranked pool, as a
+defense-in-depth safety net against a product becoming unavailable
+between pre-retrieval filtering and the final response (a real
+possibility in a live system where retrieval and final-response assembly
+can observe catalog state at different points in time) - see the
+`final_product_features` parameter below. In the common case, with
+pre-retrieval filtering already having excluded every ineligible
+product, this stage excludes nothing; it exists to make that an
+enforced invariant, not an assumption.
+
+Both eligibility stages still operate on the FULL candidate/re-ranked
+pool (not just the top requested N) - `pool_size` (config-driven,
+Phase 5's `candidate_pool_size`, now capped by the *eligible* catalog
+size rather than the full catalog size) - so that a late exclusion at
+the final stage still leaves as many eligible candidates as possible to
+fill the requested Top-N from.
 """
 
 from __future__ import annotations
@@ -33,6 +66,7 @@ from recommendation.ranking.features import build_ranking_feature_vector
 from recommendation.reranking.candidates import RankedCandidate
 from recommendation.reranking.diversity import rerank
 from recommendation.retrieval.index.base import VectorIndex
+from recommendation.retrieval.index.eligibility_filter import EligibilityRestrictedIndex
 from recommendation.retrieval.index.factory import candidate_pool_size
 from recommendation.retrieval.two_tower.feature_encoding import TwoTowerFeatureEncoder
 from recommendation.serving.cold_start import HistoryTier, determine_history_tier
@@ -59,7 +93,19 @@ class RecommendationResult:
     sources: list[str]
     requested_n: int
     pool_size: int
+    # How many catalog products the hard PRE-RETRIEVAL eligibility gate
+    # excluded before candidate generation ever ran (Phase 11) - i.e. how
+    # much of the catalog was inactive/out-of-stock at request time. Not
+    # to be confused with `num_excluded_by_eligibility` below, which is
+    # the separate, final safety-net re-check.
+    num_excluded_pre_retrieval: int
     num_before_eligibility: int
+    # Exclusions caught by the FINAL lightweight eligibility validation
+    # (Phase 11) - expected to be 0 in the common case, since candidate
+    # generation is already restricted to pre-retrieval-eligible products;
+    # a nonzero value means a product became ineligible between
+    # pre-retrieval filtering and this final check (see
+    # `final_product_features` on `generate_recommendations`).
     num_excluded_by_eligibility: int
     excluded_reasons: dict[int, list[str]] = field(default_factory=dict)
     # Full ranked pool BEFORE re-ranking/eligibility (ranker-only order for
@@ -67,9 +113,10 @@ class RecommendationResult:
     # evaluation isolate exactly what Phase 7's re-ranking + eligibility
     # stages changed, from an otherwise identical run.
     pre_rerank_product_ids: list[int] = field(default_factory=list)
-    # Full pool AFTER dedup/diversity but BEFORE eligibility filtering -
-    # what business rules actually acted on (used to demonstrate/inspect
-    # exactly which candidates isActive/stockQuantity excluded).
+    # Full pool AFTER dedup/diversity but BEFORE FINAL eligibility
+    # validation - what the final safety-net check actually acted on.
+    # Pre-retrieval filtering means this is normally already
+    # all-eligible; kept for observability/inspection parity with Phase 7.
     pre_eligibility_product_ids: list[int] = field(default_factory=list)
 
     @property
@@ -86,10 +133,17 @@ def _personalized_candidates(
     ranker_model: tf.keras.Model,
     vector_index: VectorIndex,
     pool_size: int,
+    eligible_ids: set[int],
 ) -> list[RankedCandidate]:
     user_batch = tt_encoder.encode_user_batch([user_features])
     user_embedding = user_tower.predict(user_batch, verbose=0)
-    [result] = vector_index.search(user_embedding, k=pool_size)
+    # Hard pre-retrieval eligibility gate (Phase 11): the Two-Tower/
+    # VectorIndex retrieval step itself never sees inactive/out-of-stock
+    # products - see `retrieval.index.eligibility_filter
+    # .EligibilityRestrictedIndex`. This restricts *results*, not the
+    # index structure, so no rebuild/retrain is triggered by eligibility
+    # changing.
+    [result] = EligibilityRestrictedIndex(vector_index).search(user_embedding, k=pool_size, allowed_ids=eligible_ids)
 
     # A VectorIndex candidate missing from the current product_features
     # would mean the index and the live catalog have drifted apart (e.g.
@@ -124,29 +178,71 @@ def generate_recommendations(
     user_features: UserFeatures,
     product_features: dict[int, ProductFeatures],
     product_embeddings: dict[int, np.ndarray],
-    all_item_ids: list[int],
+    all_item_ids: list[int],  # noqa: ARG001 - kept for call-site/interface stability; pool sizing is now driven by the eligible-id count (see body), not the full catalog
     tt_encoder: TwoTowerFeatureEncoder,
     user_tower: tf.keras.Model,
     ranker_model: tf.keras.Model,
     vector_index: VectorIndex,
     config: AppConfig,
     top_n: int,
+    final_product_features: dict[int, ProductFeatures] | None = None,
 ) -> RecommendationResult:
+    """`final_product_features` defaults to `product_features` (today's
+    only real caller, `recommend()`, has a single catalog-state snapshot
+    per request - see the module docstring). Passing a distinct dict lets
+    a caller with a fresher read of catalog state (e.g. a future live
+    re-fetch right before responding) make the final validation stage
+    genuinely re-check against current state rather than trusting
+    pre-retrieval filtering - exercised directly in tests.
+    """
+    if final_product_features is None:
+        final_product_features = product_features
+
     tier = determine_history_tier(user_features.total_engagement_events, config.cold_start)
-    pool_size = candidate_pool_size(config.retrieval, limit=top_n, catalog_size=len(all_item_ids))
+
+    # --- Hard pre-retrieval eligibility (Phase 11): compute the current
+    # eligible product id set ONCE, from catalog state, before any
+    # candidate generation - personalized or fallback - runs. Reuses the
+    # exact same rules as the final validation stage below (one policy,
+    # applied twice) so pre-retrieval and final eligibility can never
+    # silently drift apart. ---
+    eligibility_rules = build_eligibility_rules(config.eligibility)
+    pre_retrieval = apply_eligibility(list(product_features.keys()), product_features, eligibility_rules)
+    eligible_ids = set(pre_retrieval.eligible_ids)
+    eligible_product_features = {pid: product_features[pid] for pid in eligible_ids}
+
+    if not eligible_ids:
+        # No eligible product exists in the whole catalog - a valid,
+        # honest zero-fill result, not an error (requirement: fewer than
+        # N eligible products means returning fewer than N).
+        logger.warning("no eligible products in catalog for user_id=%s - returning zero recommendations", user_features.user_id)
+        return RecommendationResult(
+            user_id=user_features.user_id,
+            tier=tier,
+            product_ids=[],
+            scores=[],
+            sources=[],
+            requested_n=top_n,
+            pool_size=0,
+            num_excluded_pre_retrieval=len(product_features),
+            num_before_eligibility=0,
+            num_excluded_by_eligibility=0,
+        )
+
+    pool_size = candidate_pool_size(config.retrieval, limit=top_n, catalog_size=len(eligible_ids))
 
     personalized: list[RankedCandidate] = []
     if tier in (HistoryTier.STRONG, HistoryTier.SPARSE):
         personalized = _personalized_candidates(
-            user_features, product_features, product_embeddings, tt_encoder, user_tower, ranker_model, vector_index, pool_size
+            user_features, product_features, product_embeddings, tt_encoder, user_tower, ranker_model, vector_index, pool_size, eligible_ids
         )
 
     if tier is HistoryTier.STRONG:
         ranked = personalized[:pool_size]
     elif tier is HistoryTier.SPARSE:
         blend = config.cold_start.sparse_blend
-        preferred_ids = category_popularity_ranking(product_features, user_features.preferred_category)
-        global_ids = global_popularity_ranking(product_features)
+        preferred_ids = category_popularity_ranking(eligible_product_features, user_features.preferred_category)
+        global_ids = global_popularity_ranking(eligible_product_features)
         sources = [
             ("personalized", [c.product_id for c in personalized], blend.personalized),
             ("preferred_category", preferred_ids, blend.preferred_category),
@@ -154,9 +250,9 @@ def generate_recommendations(
         ]
         ranked = blend_candidate_lists(sources, pool_size)
     else:  # NO_HISTORY
-        preferred_ids = category_popularity_ranking(product_features, user_features.preferred_category)
-        category_pop_ids = category_popularity_ranking(product_features, top_affinity_category(user_features.category_affinity))
-        global_ids = global_popularity_ranking(product_features)
+        preferred_ids = category_popularity_ranking(eligible_product_features, user_features.preferred_category)
+        category_pop_ids = category_popularity_ranking(eligible_product_features, top_affinity_category(user_features.category_affinity))
+        global_ids = global_popularity_ranking(eligible_product_features)
         source_lookup = {
             "preferred_category": preferred_ids,
             "category_popularity": category_pop_ids,
@@ -168,9 +264,14 @@ def generate_recommendations(
     pre_rerank_ids = [c.product_id for c in ranked]
 
     reranked = rerank(ranked, product_features, config.reranking)
-    eligibility_rules = build_eligibility_rules(config.eligibility)
-    eligibility_result = apply_eligibility([c.product_id for c in reranked], product_features, eligibility_rules)
-    eligible_set = set(eligibility_result.eligible_ids)
+
+    # --- Final lightweight eligibility validation (Phase 11): re-checks
+    # the SAME rules against `final_product_features`, independently of
+    # whether pre-retrieval filtering already guaranteed eligibility -
+    # see the module docstring and `generate_recommendations`'s own
+    # docstring above. ---
+    final_eligibility = apply_eligibility([c.product_id for c in reranked], final_product_features, eligibility_rules)
+    eligible_set = set(final_eligibility.eligible_ids)
 
     final = [c for c in reranked if c.product_id in eligible_set][:top_n]
 
@@ -182,9 +283,10 @@ def generate_recommendations(
         sources=[c.source for c in final],
         requested_n=top_n,
         pool_size=pool_size,
+        num_excluded_pre_retrieval=len(product_features) - len(eligible_ids),
         num_before_eligibility=len(reranked),
-        num_excluded_by_eligibility=len(eligibility_result.excluded_ids),
-        excluded_reasons=eligibility_result.excluded_reasons,
+        num_excluded_by_eligibility=len(final_eligibility.excluded_ids),
+        excluded_reasons=final_eligibility.excluded_reasons,
         pre_rerank_product_ids=pre_rerank_ids,
         pre_eligibility_product_ids=[c.product_id for c in reranked],
     )
@@ -195,9 +297,9 @@ def generate_recommendations(
     # metrics: V1 has no event-tracking pipeline to compute those from.
     logger.info(
         "recommendation generated user_id=%s tier=%s requested=%d returned=%d fill_rate=%.2f "
-        "pool_size=%d excluded_by_eligibility=%d",
+        "pool_size=%d excluded_pre_retrieval=%d excluded_by_eligibility=%d",
         result.user_id, result.tier.value, result.requested_n, len(result.product_ids), result.fill_rate,
-        result.pool_size, result.num_excluded_by_eligibility,
+        result.pool_size, result.num_excluded_pre_retrieval, result.num_excluded_by_eligibility,
     )
     if result.fill_rate < 1.0:
         logger.warning(

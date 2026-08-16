@@ -22,12 +22,12 @@ Every finding is classified as one of:
 
 ## Ready now
 
-- **Core ML pipeline** (Two-Tower → VectorIndex → Neural Ranker →
-  Re-ranking → Business Rules/Eligibility → Final Top-N) is functionally
+- **Core ML pipeline** (hard pre-retrieval eligibility → Two-Tower →
+  VectorIndex → Neural Ranker → Re-ranking → remaining business rules →
+  final lightweight eligibility validation → Final Top-N) is functionally
   correct, leakage-safe (docs/data-mapping.md §12), and extensively
-  tested: 367 tests pass in the Docker/Linux image (0 skipped, 0
-  failed - the real ScaNN backend included), 352 pass natively on
-  Windows (1 skipped: the ScaNN module, expected - no Windows wheel).
+  tested - see the README's Testing section for exact current pass/skip
+  counts (updated for Phase 11's added eligibility/retrieval coverage).
 - **ScaNN as the production retrieval backend** is verified working end
   to end in Docker (real container, real mounted Phase 4/6 artifacts,
   `retrieval_backend=scann` confirmed in the service-startup log) and
@@ -59,17 +59,20 @@ Every finding is classified as one of:
   at startup), unknown users, insufficient recommendations (honest
   `fill_rate`), a VectorIndex/ranker/catalog-drift edge case (a
   candidate id absent from the live catalog is skipped and logged, not
-  a crash), unavailable products (never returned, by construction, not
-  by filtering after the fact), duplicate ids (deduped unconditionally
-  in re-ranking), and malformed API requests (structured 422s).
+  a crash), unavailable products (Phase 11: never enter retrieval/ranking
+  in the first place, via a hard pre-retrieval eligibility gate, PLUS a
+  final lightweight re-validation as a defense-in-depth safety net - not
+  a single filter-after-the-fact step), duplicate ids (deduped
+  unconditionally in re-ranking), and malformed API requests (structured
+  422s).
 - **Observability**: every recommendation call logs cold-start tier,
-  requested/returned counts, fill rate, candidate pool size, and
-  eligibility-exclusion count from one place (`serving.pipeline
-  .generate_recommendations`, shared by API and dashboard - not
-  duplicated per caller); the API additionally logs per-request
-  latency and structured request/error middleware logs. No CTR/
-  conversion metrics are invented - V1 has no event-tracking pipeline
-  to compute those from (see "Acceptable V1 limitation" below).
+  requested/returned counts, fill rate, candidate pool size, pre-
+  retrieval exclusion count, and final-validation exclusion count from
+  one place (`serving.pipeline.generate_recommendations`, shared by API
+  and dashboard - not duplicated per caller); the API additionally logs
+  per-request latency and structured request/error middleware logs. No
+  CTR/conversion metrics are invented - V1 has no event-tracking
+  pipeline to compute those from (see "Acceptable V1 limitation" below).
 
 ## Acceptable V1 limitation
 

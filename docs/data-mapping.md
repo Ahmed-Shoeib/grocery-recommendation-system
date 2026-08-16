@@ -12,7 +12,7 @@ after the Phase 1 clarification round).
 |---|---|---|
 | User | Id, FirstName, LastName, Email, PhoneNumber, HashedPassword, RefreshToken, Role, CreatedAt, UpdatedAt | Identity + (confirmed, pending) `preferredCategory`, `ageGroup` - see §2. |
 | Category | Id, ParentId (self-FK), Name, CreatedAt | Category + parent-category features. |
-| Product | Id, CategoryId, Slug, Name, Description, Brand, Price, SalePrice, DiscountPercentage, StockQuantity, Ingredients, isActive, ProductImage, AltText | Core item metadata; text fields feed the Sentence Transformer; isActive/StockQuantity feed the final business-rules/eligibility stage (§5). |
+| Product | Id, CategoryId, Slug, Name, Description, Brand, Price, SalePrice, DiscountPercentage, StockQuantity, Ingredients, isActive, ProductImage, AltText | Core item metadata; text fields feed the Sentence Transformer; isActive/StockQuantity feed the hard pre-retrieval eligibility gate AND the final lightweight eligibility validation (§5). |
 | ProductTags / Tag | join table + Name | Tag text feeds the Sentence Transformer input. |
 | Cart / Cart_Item | Cart(Id, CartItemId FK, UserId); CartItem(Id, CartId, ProductId, Quantity) | Add-to-cart habit signal (D). |
 | Order / Order_Item | Order(Id, UserId, VoucherId, AddressId, IdempotenceKey, TotalAmount, Status, PaymentMethod, CreationDate, DeliveryDate); OrderItem(Id, ProductId, OrderId, Quantity, UnitPrice) | Previous purchases signal (A) - the strongest V1 signal. |
@@ -129,49 +129,129 @@ Transformer used for product text (Phase 3+).
 
 No permanent backend table is assumed or invented for either signal.
 
-## 5. Eligibility / business rules - applied LAST, after ranking
+## 5. Eligibility / business rules - hard PRE-retrieval gate + final validation
 
-**Revised 2026-08-12** (supersedes the original "filter before ranking"
-design): for V1, eligibility/business-rules filtering happens at the very
-end of the pipeline, not as a pre-ranking filter:
+**Revised 2026-08-16** (mentor-reviewed architecture change, supersedes
+the 2026-08-12 "filter last" revision below): `isActive`/`stockQuantity`
+are HARD, global catalog-eligibility facts, not serving-time noise to
+defer - they now gate candidate generation itself, before retrieval:
 
 ```
-Two-Tower -> VectorIndex Retrieval -> Neural Ranker -> Re-ranking
-          -> Business Rules / Eligibility -> Final Top-N
+Catalog -> HARD PRE-RETRIEVAL ELIGIBILITY (isActive, stockQuantity)
+        -> Two-Tower / VectorIndex retrieval (eligible products only)
+        -> Neural Ranker -> Re-ranking -> remaining business rules
+        -> FINAL LIGHTWEIGHT isActive/stockQuantity VALIDATION
+        -> Final Top-N
 ```
 
-V1 uses exactly the fields the ERD actually has: `Product.isActive` and
-`Product.stockQuantity`. No `isDeleted` or similar field is invented. Both
-are carried through as plain structured `ProductFeatures` fields (Phase 3)
-so they're available at this final stage without a separate lookup - no
-candidate is filtered out before retrieval or ranking in V1.
+V1 still uses exactly the fields the ERD actually has: `Product.isActive`
+and `Product.stockQuantity`. No `isDeleted` or similar field is invented.
+Both are carried through as plain structured `ProductFeatures` fields
+(Phase 3), which is what makes this a config/query-time change, not a
+data-model change - no candidate source (personalized Two-Tower/
+VectorIndex retrieval OR the SPARSE/NO_HISTORY category-/global-
+popularity fallbacks) is allowed to surface an ineligible product any
+more, at any point.
 
-Rationale for the reordering: at the current catalog scale (~50 products),
-the "avoid wasting ranking compute on ineligible items" argument for an
-early filter is negligible, while placing the check last keeps retrieval
-and ranking entirely free of serving-time state (stock, active flag) and
-gives one single, simple place business rules can evolve independently of
-the ML stages. This is implemented (Phase 7) as a general, pluggable
-policy interface (not hard-coded boolean logic inline), so future rules -
-a real `isDeleted`/soft-delete flag, regional restrictions, other
-purchase-eligibility rules - can be added as additional policy checks
-without touching retrieval or ranking. It never triggers ScaNN/FAISS index
-rebuilds, and stock changes never trigger model retraining - inventory is
-serving-time state, not model knowledge.
+**Why the reordering (2026-08-16)**: the original 2026-08-12 rationale
+(below) was explicitly scoped to "at the current catalog scale, the
+wasted-ranking-compute argument for an early filter is negligible" -
+correct as far as it went, but it missed that letting the ranker/
+re-ranker operate on a pool that can include ineligible items lets those
+items occupy pool/ranking slots that could otherwise go to eligible
+products, an architectural correctness concern independent of catalog
+scale or ranking-compute cost. Moving `isActive`/`stockQuantity` to a
+hard pre-retrieval gate removes that risk entirely: the ranker and
+re-ranker only ever see products a customer could actually buy right
+now. This does NOT reintroduce coupling between serving-time state and
+the ML stages the 2026-08-12 revision was protecting: retrieval/ranking
+still never store or reason about stock/active state themselves - they
+simply receive a smaller, pre-restricted candidate universe from the
+caller. Concretely:
 
-**Implemented (Phase 7)**: `serving.eligibility.build_eligibility_rules`
-(a list of named `EligibilityRule(name, predicate)` pairs, appending a
-rule requires no change elsewhere) + `apply_eligibility`. Filtering runs
-over the FULL re-ranked candidate pool (config-driven size, Phase 5's
-`candidate_pool_size`), not just the requested Top-N, specifically so
-that excluding ineligible items still leaves enough eligible candidates
-to fill the request - `serving.pipeline.RecommendationResult.fill_rate`
-reports how close the final list came to the requested count (1.0 in
-practice at the current V1 catalog scale, even with real inactive/
-out-of-stock items present and excluded - see the Phase 7 evaluation
-report). If catalog scale later makes
-early filtering worthwhile, revisit this ordering explicitly rather than
-silently reintroducing a pre-filter.
+- The Two-Tower model, its 128-D item embeddings, the ranker, and each
+  backend's built ANN index structure are completely untouched by
+  eligibility changes - none of them are retrained or rebuilt when stock
+  or `isActive` changes. `retrieval.index.eligibility_filter
+  .EligibilityRestrictedIndex` wraps the (already-built, unmodified)
+  `VectorIndex` and restricts *query results* to a caller-supplied
+  eligible-id set - see §10 for why this is the right abstraction for
+  both ScaNN and FAISS specifically.
+- The ONLY thing that needs to reflect current inventory state is
+  `product_features` (a plain `dict[int, ProductFeatures]`, cheaply
+  re-derived from current catalog rows via `features.product_features
+  .build_product_features`) - not a model artifact, not an index file.
+  In a real backend deployment, this is exactly the kind of per-request
+  (or short-TTL-cached) catalog read a serving layer already needs to do
+  for other reasons; V1's synthetic service builds it once at process
+  startup (see `api.dependencies.build_recommendation_service`), a known
+  V1 characteristic of the synthetic demo, not a Phase 11 limitation.
+- Retrieval/ranking/re-ranking still keep operating on a `pool_size`
+  candidate pool derived from `retrieval.candidate_pool_size` -
+  unchanged Phase 5 sizing logic - except the pool is now capped by the
+  **eligible** catalog size rather than the full catalog size, since
+  requesting more eligible candidates than exist is meaningless.
+
+Other, user-specific/list-specific business rules (a future regional
+restriction, a purchase-eligibility rule tied to the requesting user,
+anything not a hard *global* catalog fact) stay at the final stage only
+- pre-retrieval is reserved specifically for `isActive`/`stockQuantity`-
+style hard, global eligibility, not a general early-filter mechanism.
+
+**A final, lightweight eligibility validation still runs**, immediately
+before the Top-N is returned, re-checking the identical rules
+(`serving.eligibility.build_eligibility_rules`/`apply_eligibility`, the
+SAME policy object used pre-retrieval) against the full re-ranked pool.
+This is deliberately a safety net, not the primary filtering mechanism:
+defense-in-depth against a product becoming unavailable between
+pre-retrieval filtering and the final response (a real possibility in a
+live system where retrieval and final-response assembly can observe
+catalog state at different points in time -
+`serving.pipeline.generate_recommendations`'s `final_product_features`
+parameter lets a caller pass a fresher read for exactly this check). In
+the common case, with pre-retrieval filtering already having excluded
+every ineligible product, this stage excludes nothing -
+`RecommendationResult.num_excluded_by_eligibility` is expected to be 0
+in steady state; `num_excluded_pre_retrieval` is the new field reporting
+how many catalog products the hard gate excluded before candidate
+generation ran.
+
+Filtering (both stages) still runs over the FULL candidate/re-ranked
+pool (config-driven size, Phase 5's `candidate_pool_size`), not just the
+requested Top-N, specifically so that a rare final-stage exclusion still
+leaves enough eligible candidates to fill the request -
+`serving.pipeline.RecommendationResult.fill_rate` reports how close the
+final list came to the requested count (1.0 in practice at the current
+V1 catalog scale). If fewer eligible products exist catalog-wide than
+requested, returning fewer than N is the correct, honest behavior, not a
+bug - `fill_rate` reports that accurately.
+
+**Implemented**: `serving.eligibility.build_eligibility_rules` (a list of
+named `EligibilityRule(name, predicate)` pairs, appending a rule requires
+no change elsewhere) + `apply_eligibility`, called twice from
+`serving.pipeline.generate_recommendations` - once pre-retrieval (over
+the full catalog, to derive the eligible-id set threaded through every
+candidate source), once at the end (final validation, over the re-ranked
+pool). One policy object, two call sites - they can never silently drift
+apart into different rules.
+
+<details>
+<summary>Original 2026-08-12 "filter last" rationale (superseded above)</summary>
+
+For V1's first pass, eligibility/business-rules filtering ran at the very
+end of the pipeline only, not as a pre-ranking filter. The rationale at
+the time: at the ~50-product catalog scale, the "avoid wasting ranking
+compute on ineligible items" argument for an early filter was negligible,
+while placing the check last kept retrieval and ranking entirely free of
+serving-time state (stock, active flag) and gave one single, simple place
+business rules could evolve independently of the ML stages. This is
+superseded by the 2026-08-16 revision above, which found an architectural
+correctness reason (not a performance one) to filter earlier: a candidate
+pool that can include ineligible items can let them occupy pool/ranking
+slots that should go to eligible products. Kept here for historical
+context, not as current behavior.
+
+</details>
 
 ## 6. Popularity terminology
 
@@ -314,6 +394,25 @@ Selected via `retrieval.backend` in `configs/base.yaml` (`faiss` - native
 Windows dev default) or `configs/docker.yaml` (`scann` - what the Docker
 image loads via `RECS_CONFIG_PATH`).
 
+**Pre-retrieval eligibility restriction (Phase 11)**: neither backend's
+`build`/index structure changes for this - `isActive`/`stockQuantity` are
+serving-time catalog state, not something either backend's index needs to
+know about internally. `retrieval.index.eligibility_filter
+.EligibilityRestrictedIndex` wraps an already-built `VectorIndex` (either
+backend) and restricts `search()` results to a caller-supplied eligible-
+id set at query time - it asks the wrapped index for everything it has
+(`index.size`, cheap at exact-brute-force V1 scale) and filters/truncates
+in Python. This was chosen over backend-specific filtering (e.g. FAISS's
+native `IDSelector`) specifically because ScaNN's brute-force pybind
+searcher used here has no equivalent per-query id-filtering hook - one
+backend-agnostic post-filter keeps both backends behaving identically
+(both exact, both filtered the same way) rather than diverging into two
+different filtering code paths with potentially different edge-case
+behavior. If either backend switches to an approximate/partitioned
+structure later (see above), this wrapper's "ask for everything" strategy
+would need to become an adaptive oversampling strategy - noted, not
+solved now, since it isn't a concern at V1's catalog scale.
+
 ## 11. Neural ranking (Phase 6)
 
 `ranking.model.build_ranker_model` is a plain feedforward MLP over a
@@ -324,7 +423,14 @@ brand embedding lookups; retrieval learns a shared embedding space for
 ANN search, ranking uses explicit, interpretable cross features for
 precision on a small candidate set. Features: user history aggregates,
 item metadata/popularity (including `stockQuantity`/`isActive` -
-available as features, never used to filter here, see §5), explicit
+available as features, never used to filter here, see §5 - since §5's
+2026-08-16 revision, every candidate reaching the ranker is already
+pre-retrieval-eligible, so `isActive` is a constant `True` and
+`stockQuantity` is always `> 0` for every row the ranker scores; this
+does not change the ranker itself, only the value distribution of two
+of its many input features - not a regression protection concern per
+Phase 11's scope, since the ranker's architecture/training is untouched),
+explicit
 user-item cross features (category/brand affinity match, semantic
 cosine similarity), and the retrieval stage's own score/rank for each
 candidate (`ranking.examples`).
@@ -393,7 +499,7 @@ genuinely temporal held-out split instead of this content-based heuristic.
 | §2 UserProfile fields | Phase 2 |
 | §3 Cold-start tiers | Phase 7 |
 | §4 Search/Chatbot adapters | Phase 2 |
-| §5 Business rules/eligibility policy (applied last) | Phase 7 |
+| §5 Eligibility/business rules policy (hard pre-retrieval gate + final lightweight validation) | Phase 7 (policy interface, originally applied last) / Phase 11 (moved to a hard pre-retrieval gate, mentor-reviewed) |
 | §6 Popularity | Phase 2 (data) / Phase 7 (fallback ranking) |
 | §8 Offline evaluation | Phase 4 (Recall/HitRate) / Phase 5 (latency) / Phase 6 (Precision/NDCG/MRR) / Phase 7 (coverage/diversity/duplicate/fill-rate/cold-start/pipeline latency) / Phase 8 (HTTP end-to-end latency) |
 | §9 Surface context hook / dashboard architecture | Phase 7 (pipeline parameter, not yet exposed via API) / Phase 9 (dashboard reuses RecommendationService in-process, not via HTTP) |

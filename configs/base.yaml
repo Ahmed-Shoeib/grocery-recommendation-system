@@ -123,10 +123,11 @@ cold_start:
   # Fallback order for NO_HISTORY users.
   no_history_fallback_order: ["preferred_category", "category_popularity", "global_popularity"]
 
-# Phase 7: business-rules/eligibility policy, applied LAST (after ranking
-# and re-ranking - see docs/data-mapping.md section 5), not as a
-# pre-retrieval/pre-ranking filter. Only fields that actually exist on
-# Product in the ERD (isActive, stockQuantity) are used in V1.
+# Phase 7/11: hard global catalog-eligibility policy, applied TWICE - as
+# a pre-retrieval gate (before any candidate generation) AND as a final
+# lightweight validation (see docs/data-mapping.md section 5). Only
+# fields that actually exist on Product in the ERD (isActive,
+# stockQuantity) are used in V1.
 eligibility:
   require_active: true
   require_in_stock: true

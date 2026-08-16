@@ -14,8 +14,14 @@ MLP (`ranking.model`) - the classic "learned embeddings for recall, hand
 
 `stock_quantity`/`is_active` are included as plain numeric/boolean
 features (kept AVAILABLE to the ranker), not used to filter or exclude
-candidates here - eligibility filtering happens at the end of the V1
-pipeline (Phase 7), per docs/data-mapping.md section 5.
+candidates here - eligibility filtering is the serving pipeline's job,
+not the ranker's (`serving.eligibility`, applied both as a hard
+pre-retrieval gate and a final lightweight validation since Phase 11,
+per docs/data-mapping.md section 5). Since every candidate the ranker
+scores is already pre-retrieval-eligible, `is_active` is effectively
+constant (`True`) and `stock_quantity` is always `> 0` for every row in
+V1 - the feature is still computed/passed through unchanged (no ranker
+redesign), it just carries less discriminative signal than before.
 """
 
 from __future__ import annotations

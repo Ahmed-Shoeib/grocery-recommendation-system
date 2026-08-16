@@ -131,13 +131,18 @@ def _render_recommendations(result, product_lookup) -> None:
 
 def _render_pipeline_debug(result, product_lookup, latency_ms: float) -> None:
     st.subheader("5. Pipeline / debug visibility")
-    st.caption("User signals → Two-Tower → VectorIndex retrieval → Neural Ranker → Re-ranking → Business Rules / Eligibility → Final recommendations")
+    st.caption(
+        "User signals → hard pre-retrieval eligibility (isActive/stock) → Two-Tower → VectorIndex retrieval "
+        "(eligible products only) → Neural Ranker → Re-ranking → remaining business rules → final lightweight "
+        "eligibility validation → Final recommendations"
+    )
 
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3, col4, col5 = st.columns(5)
     col1.metric("Candidate pool size", result.pool_size)
-    col2.metric("Excluded by eligibility", result.num_excluded_by_eligibility)
-    col3.metric("Fill rate", f"{result.fill_rate:.0%}")
-    col4.metric("This request's latency", f"{latency_ms:.0f} ms")
+    col2.metric("Excluded pre-retrieval", result.num_excluded_pre_retrieval)
+    col3.metric("Excluded by final validation", result.num_excluded_by_eligibility)
+    col4.metric("Fill rate", f"{result.fill_rate:.0%}")
+    col5.metric("This request's latency", f"{latency_ms:.0f} ms")
 
     col1, col2 = st.columns(2)
     with col1:
@@ -237,7 +242,7 @@ def main() -> None:
     _render_recommendation_context(detail)
 
     try:
-        with st.spinner("Running Two-Tower → VectorIndex → Ranker → Re-ranking → Eligibility..."):
+        with st.spinner("Running pre-retrieval eligibility → Two-Tower → VectorIndex → Ranker → Re-ranking → final eligibility validation..."):
             start = time.perf_counter()
             result = run_recommendations(service, detail, top_n)
             latency_ms = (time.perf_counter() - start) * 1000

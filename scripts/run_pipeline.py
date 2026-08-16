@@ -1,7 +1,9 @@
-"""Run and evaluate the full Phase 7 V1 serving pipeline end to end:
+"""Run and evaluate the full V1 serving pipeline end to end (Phase 7,
+re-architected Phase 11):
 
-Two-Tower -> VectorIndex retrieval -> Neural Ranker -> Re-ranking
--> Business Rules / Eligibility -> Final Top-N
+Hard pre-retrieval eligibility -> Two-Tower -> VectorIndex retrieval
+(eligible products only) -> Neural Ranker -> Re-ranking -> remaining
+business rules -> final lightweight eligibility validation -> Final Top-N
 
 Reuses the ALREADY-TRAINED Phase 4 Two-Tower and Phase 6 ranker artifacts
 (does not retrain either) - run scripts/train_two_tower.py and
@@ -59,7 +61,10 @@ def _print_report(label: str, report: PipelineEvalReport) -> None:
 def _print_example(label: str, product_lookup, result) -> None:
     print(f"\n--- {label} (tier={result.tier.value}) ---")
     print(f"  Requested {result.requested_n}, filled {len(result.product_ids)} (fill_rate={result.fill_rate:.2f})")
-    print(f"  Pool size: {result.pool_size}   Excluded by eligibility: {result.num_excluded_by_eligibility}")
+    print(
+        f"  Pool size: {result.pool_size}   Excluded pre-retrieval: {result.num_excluded_pre_retrieval}   "
+        f"Excluded by final validation: {result.num_excluded_by_eligibility}"
+    )
     for pid, score, source in zip(result.product_ids, result.scores, result.sources):
         product = product_lookup.get(pid)
         name = product.name if product else f"#{pid}"
@@ -159,31 +164,28 @@ def main() -> None:
     )
     _print_example("No-history user (constructed, preferredCategory set)", product_lookup, no_history_result)
 
-    # --- Eligibility demonstration: find a real user whose pre-eligibility
-    # pool includes an inactive/out-of-stock item, and show it excluded. ---
-    print("\n\n=== Eligibility (business rules) demonstration ===")
-    demo_result = None
-    demo_uid = None
-    for uid, profile in engagement_profiles.items():
-        user_features = build_user_features(profile, product_lookup, product_embeddings, config.features)
-        result = generate_recommendations(
-            user_features, product_features, product_embeddings, two_tower_artifacts.item_ids,
-            two_tower_artifacts.encoder, two_tower_artifacts.user_tower, ranker_artifacts.model, vector_index, config, top_n,
-        )
-        if result.num_excluded_by_eligibility > 0:
-            demo_result, demo_uid = result, uid
-            break
-
-    if demo_result is None:
-        print("  No user's candidate pool included an ineligible product in this dataset instantiation.")
+    # --- Eligibility demonstration (Phase 11): pre-retrieval eligibility is
+    # a hard, GLOBAL catalog gate, so the exclusion count is identical for
+    # every user - show it once, plus confirm the final validation stage
+    # (the safety net, not the primary mechanism) has nothing left to catch. ---
+    print("\n\n=== Eligibility demonstration (hard pre-retrieval gate + final validation) ===")
+    demo_uid, demo_profile = next(iter(engagement_profiles.items()))
+    demo_user_features = build_user_features(demo_profile, product_lookup, product_embeddings, config.features)
+    demo_result = generate_recommendations(
+        demo_user_features, product_features, product_embeddings, two_tower_artifacts.item_ids,
+        two_tower_artifacts.encoder, two_tower_artifacts.user_tower, ranker_artifacts.model, vector_index, config, top_n,
+    )
+    catalog_excluded_ids = [pid for pid, pf in product_features.items() if not (pf.is_active and pf.stock_quantity > 0)]
+    if not catalog_excluded_ids:
+        print("  No inactive/out-of-stock product exists in this dataset instantiation.")
     else:
-        excluded_ids = [pid for pid in demo_result.pre_eligibility_product_ids if pid in demo_result.excluded_reasons]
-        print(f"  User {demo_uid}: {demo_result.num_excluded_by_eligibility} candidate(s) excluded from a pool of {demo_result.num_before_eligibility}")
-        for pid in excluded_ids:
+        print(f"  {len(catalog_excluded_ids)} catalog product(s) excluded PRE-RETRIEVAL (never became candidates for ANY user):")
+        for pid in catalog_excluded_ids:
             pf = product_features[pid]
-            print(f"    excluded #{pid} {product_lookup[pid].name!r}: reasons={demo_result.excluded_reasons[pid]}  (is_active={pf.is_active}, stock={pf.stock_quantity})")
-        print(f"  Final list still filled {len(demo_result.product_ids)}/{demo_result.requested_n} slots (fill_rate={demo_result.fill_rate:.2f})")
-        _print_example(f"User {demo_uid} final recommendations", product_lookup, demo_result)
+            print(f"    excluded #{pid} {product_lookup[pid].name!r}: is_active={pf.is_active}, stock={pf.stock_quantity}")
+    print(f"  User {demo_uid}: num_excluded_pre_retrieval={demo_result.num_excluded_pre_retrieval}   num_excluded_by_final_validation={demo_result.num_excluded_by_eligibility}")
+    print(f"  Final list filled {len(demo_result.product_ids)}/{demo_result.requested_n} slots (fill_rate={demo_result.fill_rate:.2f})")
+    _print_example(f"User {demo_uid} final recommendations", product_lookup, demo_result)
 
     # --- End-to-end latency ---
     print("\n\n=== End-to-end recommendation latency (single user, up through eligibility) ===")

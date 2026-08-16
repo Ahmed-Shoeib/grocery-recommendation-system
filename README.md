@@ -25,18 +25,27 @@ L2-normalized, leave-one-out evaluated); a ScaNN/FAISS `VectorIndex`
 over its embeddings; a neural ranker that re-scores VectorIndex
 candidates with richer cross features (beats the raw-retrieval-score
 baseline on every ranking metric); the full V1 serving pipeline
-(three-level cold-start blending, dedup/diversity re-ranking, business-
-rules/eligibility applied last); a versioned FastAPI recommendation API
-(`/v1`); an internal Streamlit dashboard; and Phase 10 production
-hardening - containerization, startup artifact validation, environment-
-variable config overrides, structured observability, and a full
+(three-level cold-start blending, dedup/diversity re-ranking, hard
+pre-retrieval eligibility + a final lightweight eligibility validation -
+see Phase 11 below); a versioned FastAPI recommendation API (`/v1`); an
+internal Streamlit dashboard; and Phase 10 production hardening -
+containerization, startup artifact validation, environment-variable
+config overrides, structured observability, and a full
 integration/reliability pass, documented in `docs/production-readiness.md`.
 
-**What's next** (deliberately out of scope for Phase 10, per the
-project's own phase plan): a separate, controlled benchmarking/
-experimentation pass, and further optimization once a real dataset is
-available - see `docs/production-readiness.md`'s "Future optimization"
-section.
+**Phase 11** (mentor-reviewed architecture change, post-Phase-10):
+`isActive`/`stockQuantity` moved from a final-only filter to a hard
+PRE-retrieval eligibility gate - inactive/out-of-stock products never
+become Two-Tower/VectorIndex retrieval candidates in the first place,
+with the final eligibility check kept as a lightweight defense-in-depth
+safety net, not the primary mechanism. Zero Two-Tower/ranker retraining
+and zero VectorIndex rebuild required - see the architecture diagram and
+`docs/data-mapping.md` §5.
+
+**What's next** (deliberately out of scope for this project's own phase
+plan): a separate, controlled benchmarking/experimentation pass, and
+further optimization once a real dataset is available - see
+`docs/production-readiness.md`'s "Future optimization" section.
 
 ## Architecture
 
@@ -59,34 +68,51 @@ Backend ERD (Order/OrderItem, Cart/CartItem, User, Review) + Synthetic (Search, 
                               +--------------+--------------+
                                      cosine compatibility
                                              |
-                          VectorIndex (ScaNN primary/Docker, FAISS Windows dev fallback)
+                     Hard PRE-RETRIEVAL eligibility (isActive, stock - catalog state)
+                                             |
+              VectorIndex (ScaNN primary/Docker, FAISS Windows dev fallback)
+                       - restricted to eligible products only
                                              |
                                    Oversized candidate pool
+                                    (capped by eligible count)
                                              |
                                     Neural Ranker (MLP)
                                              |
                                    Re-ranking + cold-start blend
                                              |
-                          Business Rules / Eligibility (isActive, stock)
+                              Remaining business rules
+                                             |
+                   Final lightweight isActive/stock validation (safety net)
                                              |
                                         Final Top-N
                                     +--------+--------+
                               Recommendation API   Streamlit Dashboard
 ```
 
-**Business rules / eligibility run last**, after ranking and
-re-ranking, not as a pre-filter - the tiny V1 catalog makes the
-"wasted ranking compute" argument for an early filter negligible, and
-putting it last keeps retrieval/ranking entirely oblivious to serving-
-time state (stock, active flag). `isActive`/`stockQuantity` are carried
-through as structured product features so they're available at that
-final stage without a separate lookup. Because filtering runs last, the
-pipeline always ranks/re-ranks an **oversized candidate pool**
+**Hard pre-retrieval eligibility, applied first** (mentor-reviewed
+Phase 11 architecture change, superseding the original "filter last"
+design): `isActive`/`stockQuantity` are global catalog-eligibility facts,
+not model knowledge, so they gate candidate generation itself -
+inactive/out-of-stock products never enter Two-Tower/VectorIndex
+retrieval, the neural ranker, or re-ranking. This never touches the
+Two-Tower, the ranker, or the VectorIndex's built structure/embeddings -
+retrieval restriction happens at query time (see `retrieval.index
+.eligibility_filter.EligibilityRestrictedIndex`), so changing stock or
+`isActive` never triggers a retrain or an index rebuild, only a
+refresh of `product_features` (the plain per-product-state dict, cheap
+to recompute from current catalog state). A **final, lightweight
+validation** re-checks the same two rules again immediately before the
+response is built - defense in depth against a product becoming
+unavailable between pre-retrieval filtering and the final response, not
+the primary filtering mechanism. Other, user-specific/list-specific
+business rules stay at that final stage, not pre-retrieval - pre-
+retrieval is reserved for hard, global catalog eligibility only. The
+pipeline still ranks/re-ranks an **oversized candidate pool**
 (config-driven, `retrieval.candidate_pool_multiplier`/
-`min_candidate_pool`), not just the requested Top-N, so that excluding
-ineligible items still leaves enough eligible candidates to fill the
-request - `fill_rate` reports how close it came. See
-`docs/data-mapping.md` §5 for the full rationale.
+`min_candidate_pool`, now capped by the *eligible* catalog size), not
+just the requested Top-N, so a rare final-stage exclusion still leaves
+enough eligible candidates to fill the request - `fill_rate` reports how
+close it came. See `docs/data-mapping.md` §5 for the full rationale.
 
 **Four V1 personalization signals**: previous purchases, add-to-cart
 habit, searched items, and chatbot context - combined with
@@ -117,6 +143,17 @@ free; both backends are structured so switching to an approximate
 variant (FAISS IVF/HNSW, ScaNN tree+AH) later is a change inside one
 class, not an interface change. Full rationale: `docs/data-mapping.md` §10.
 
+**Pre-retrieval eligibility restriction is backend-agnostic**: neither
+backend's index structure is filtered/rebuilt when stock or `isActive`
+changes - `retrieval.index.eligibility_filter.EligibilityRestrictedIndex`
+wraps either backend and restricts `search()` results to a caller-
+supplied eligible-id set at query time. ScaNN's brute-force pybind
+searcher has no native per-query id-filtering hook, so rather than give
+FAISS and ScaNN two different filtering code paths (native `IDSelector`
+for one, something else for the other), both go through this one
+backend-agnostic wrapper - the simplest abstraction that treats them
+identically. See `docs/data-mapping.md` §5 for the full rationale.
+
 ## Repository layout
 
 ```
@@ -136,11 +173,11 @@ src/recommendation/
   embeddings/                 Sentence Transformer product encoding + cache
   retrieval/
     two_tower/                User Tower / Item Tower model
-    index/                     VectorIndex (ScaNN primary/production - Docker, FAISS Windows dev fallback)
+    index/                     VectorIndex (ScaNN primary/production - Docker, FAISS Windows dev fallback) + EligibilityRestrictedIndex (query-time pre-retrieval eligibility wrapper)
   ranking/                    Neural ranker over VectorIndex candidates (features, model, train, evaluation, serialization)
   reranking/                  Duplicate removal + category/brand diversity re-ranking
   evaluation/                  Offline metrics + latency measurement
-  serving/                    Cold-start tiering, fallback candidates, eligibility, startup artifact validation, the full pipeline orchestrator
+  serving/                    Cold-start tiering, fallback candidates, two-stage eligibility (hard pre-retrieval gate + final lightweight validation), startup artifact validation, the full pipeline orchestrator
   api/                         FastAPI app (v1) - app/routes/schemas/dependencies, thin wrapper over serving.pipeline
   ui/                           Streamlit dashboard (dashboard.py rendering-only; data_access.py/metrics.py pure + unit-tested) - reuses api.dependencies.RecommendationService in-process
   utils/                       Config loading (incl. env var overrides), logging
@@ -266,14 +303,11 @@ metric.
 ## Testing
 
 ```bash
-pytest                                    # native Windows - 352 passed, 1 skipped (ScaNN: no Windows wheel)
-docker run --rm grocery-recs-test         # Docker/Linux - 367 passed, 0 skipped (ScaNN runs for real)
+pytest                                    # native Windows - 368 passed, 3 skipped (ScaNN: no Windows wheel)
+docker run --rm grocery-recs-test         # Docker/Linux - 385 passed, 0 skipped (ScaNN runs for real)
 ```
 
-The difference is exactly the ScaNN-specific test module, skipped as a
-single collection unit on Windows (`pytest.importorskip`) and executed
-individually - including the FAISS-vs-ScaNN cross-backend agreement
-test - in Docker.
+The difference is exactly the ScaNN-specific tests - the `test_scann_index.py` module (skipped as a single collection unit via `pytest.importorskip`) plus two individually-skipped ScaNN tests in `test_eligibility_restricted_index.py` (Phase 11) - all executed for real, including the FAISS-vs-ScaNN cross-backend agreement tests, in Docker.
 
 ## Configuration
 
@@ -304,39 +338,68 @@ the only "data" the system touches).
 ## Metrics (offline, synthetic data - see caveat below)
 
 From the most recent full pipeline evaluation (`scripts/run_pipeline.py`,
-162 held-out leave-one-out eval users, real trained artifacts, reused
-across independent reruns in Phase 10 - identical to 4 decimal places,
-confirming determinism):
+162 held-out leave-one-out eval users, real trained artifacts, SAME
+Two-Tower/ranker artifacts before and after Phase 11 - neither was
+retrained for the architecture change):
 
 | | Test NDCG@10 | Test Recall@10 | Test MRR | Mean distinct categories | Catalog coverage | Fill rate |
 |---|---|---|---|---|---|---|
-| Ranker (pre re-rank/eligibility) | 0.3498 | 0.7037 | 0.2597 | 4.59 | 0.92 | 1.00 |
-| **Full V1 pipeline** (post re-rank + eligibility) | 0.3356 | 0.6605 | 0.2361 | **6.20** (+35%) | 0.88 | 1.00 |
+| **Before** (Phase 10, eligibility applied last) - ranker only | 0.3498 | 0.7037 | 0.2597 | 4.59 | 0.92 | 1.00 |
+| **Before** (Phase 10) - full pipeline | 0.3356 | 0.6605 | 0.2361 | 6.20 | 0.88 | 1.00 |
+| **After** (Phase 11, hard pre-retrieval gate) - ranker only | 0.3502 | 0.6975 | 0.2613 | 4.72 | 0.88 | 1.00 |
+| **After** (Phase 11) - full pipeline | 0.3333 | 0.6481 | 0.2365 | 6.19 | 0.88 | 1.00 |
+
+**Do not over-interpret these deltas** - the catalog has only ~50
+synthetic products (2 of them the deliberately inactive/out-of-stock
+ones exercised by the eligibility tests), so a handful of eval users'
+recommendations shifting by one rank position moves these metrics by
+hundredths. The one delta that IS a direct, expected consequence of the
+architecture change, not noise: **"ranker only" catalog coverage drops
+from 0.92 to 0.88**, becoming identical to the full-pipeline figure -
+before Phase 11, the "ranker only" (pre-re-rank/eligibility) slice could
+still include the 2 inactive/out-of-stock products (only excluded at the
+very end), so they could count toward coverage; after Phase 11 they're
+excluded before the ranker ever sees them, so "ranker only" and "full
+pipeline" coverage are now the same by construction - proof the hard
+pre-retrieval gate actually gates retrieval, not just the final list.
+Fill rate stays exactly 1.00 before and after (enough eligible products
+exist at this catalog scale to fill every request); diversity re-ranking
+still delivers the same +~35% mean-distinct-categories lift over the
+ranker-only baseline it did before (Phase 7's original finding,
+unaffected by Phase 11 - re-ranking itself wasn't touched).
 
 (Two-Tower-retrieval-only Recall@K/HitRate@K figures from Phase 4's own
 leave-one-out evaluation are in that phase's training report output,
 not reproduced here to avoid restating a number not re-verified in this
 session - re-run `scripts/train_two_tower.py` for a fresh one.)
 
-Diversity re-ranking trades a small amount of ranking-metric score for a
-real, measured +35% increase in mean distinct categories per
-recommendation list - by design (`reranking.diversity_strength`,
-continuous, never a hard cutoff).
-
 **Latency** (Windows/FAISS, single machine, no load - see
 `docs/production-readiness.md` for what this does and doesn't prove):
-FAISS retrieval ~0.9ms/query; end-to-end pipeline ~295-300ms
-mean (p95 ~330ms); API (real HTTP) ~290ms mean (p95 ~330ms) - the API
-layer itself adds negligible overhead over the pipeline's own latency,
-which is dominated by Keras `.predict()` call overhead at this tiny
-model/batch scale, not compute.
+
+| | Before (Phase 10) | After (Phase 11) |
+|---|---|---|
+| FAISS retrieval (single query) | ~0.9ms | ~0.77ms |
+| End-to-end pipeline (mean / p95) | ~295-300ms / ~330ms | ~230ms / ~238ms |
+
+Raw FAISS retrieval latency is unaffected by design - `VectorIndex.search`
+itself is unchanged; `EligibilityRestrictedIndex` only wraps it inside
+the serving pipeline, and the small pool-size reduction (50 -> 48
+candidates, since pool sizing is now capped by the *eligible* catalog
+count) is not enough to explain a measurable difference on its own. The
+end-to-end figure looking faster after Phase 11 is most plausibly ordinary
+single-machine run-to-run variance (different session, different
+background load) rather than a real effect of this change - re-running
+either figure independently on this same machine has historically shown
+some spread; take both numbers as sanity checks ("still fast, still
+dominated by Keras `.predict()` overhead at this tiny batch scale, not by
+the extra eligibility bookkeeping"), not a precise A/B benchmark.
 
 **This is not evidence of real-world recommendation quality.** All
 numbers above come from a synthetic, persona-correlated dataset with no
 real user behavior - they demonstrate that the pipeline is implemented
-correctly and that each stage (ranker, re-ranking) measurably does what
-it's supposed to relative to the stage before it, nothing more. See
-`docs/data-mapping.md` §8.
+correctly and that each stage (ranker, re-ranking, eligibility) measurably
+does what it's supposed to relative to the stage before it, nothing more.
+See `docs/data-mapping.md` §8.
 
 ## Known limitations & V1 scope
 
@@ -387,6 +450,7 @@ ranking, re-ranking, eligibility, the API, or the dashboard.
 8. Versioned (`/v1`) FastAPI recommendation API - dependency-injected, model artifacts loaded once at startup, thin wrapper over the Phase 7 pipeline (no duplicated logic).
 9. Internal Streamlit dashboard for demonstrating/debugging the recommendation engine - user signals, cold-start tier, candidate-pool/eligibility diagnostics, offline metrics - reusing the API's RecommendationService in-process.
 10. Production hardening: multi-stage Docker (test/api/dashboard), startup artifact validation, env-var config overrides, structured observability, a full reliability pass, Windows + Docker/Linux integration verification, and this documentation - see `docs/production-readiness.md` for the critical review.
+11. Mentor-reviewed architecture change: hard PRE-retrieval eligibility (isActive/stockQuantity gate candidate generation itself, via `retrieval.index.eligibility_filter.EligibilityRestrictedIndex` for the VectorIndex path) plus a final lightweight eligibility re-validation as a defense-in-depth safety net - no Two-Tower/ranker retraining or VectorIndex rebuild required when catalog/stock state changes.
 
 Each phase is a separate commit, reviewed and approved before the next
 begins. See `docs/data-mapping.md` §13 for the full phase-to-decision map.

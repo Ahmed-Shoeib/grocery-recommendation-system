@@ -1,3 +1,5 @@
+import dataclasses
+
 import numpy as np
 import pytest
 
@@ -134,11 +136,175 @@ def test_no_history_user_without_preferred_category_falls_back_to_global(scenari
 
 
 def test_eligibility_excludes_inactive_and_out_of_stock(scenario):
+    """Phase 11: 200 (inactive) and 201 (out of stock) are excluded by the
+    HARD PRE-RETRIEVAL gate, not the final validation - they never reach
+    candidate generation at all, so the final-validation exclusion count
+    stays 0 and the pre-retrieval count reflects exactly these two.
+    """
     profile = EngagementProfile(user_id=5, profile=UserProfile(user_id=5))
     result = _run(scenario, profile, top_n=20)
     assert 200 not in result.product_ids
     assert 201 not in result.product_ids
-    assert result.num_excluded_by_eligibility >= 0  # 200/201 may or may not have been retrieved into the pool
+    assert result.num_excluded_pre_retrieval == 2
+    assert result.num_excluded_by_eligibility == 0
+
+
+def test_pre_retrieval_gate_excludes_inactive_and_out_of_stock_from_candidate_generation(scenario):
+    """Requirement: inactive/out-of-stock products must not PARTICIPATE in
+    retrieval candidate generation at all - checked against the pool
+    BEFORE re-ranking/final-validation (`pre_rerank_product_ids`), not
+    just the final Top-N.
+    """
+    profile = EngagementProfile(
+        user_id=13, profile=UserProfile(user_id=13),
+        purchases=[PurchaseRecord(user_id=13, product_id=pid, order_id=i, quantity=1, unit_price=1.0) for i, pid in enumerate([100, 101, 102])],
+    )
+    result = _run(scenario, profile, top_n=20)
+    assert 200 not in result.pre_rerank_product_ids
+    assert 201 not in result.pre_rerank_product_ids
+    assert 200 not in result.pre_eligibility_product_ids
+    assert 201 not in result.pre_eligibility_product_ids
+
+
+def test_fallback_no_history_never_surfaces_inactive_or_out_of_stock(scenario):
+    """Pre-retrieval eligibility applies to the NO_HISTORY fallback
+    (category/global popularity) too, not just personalized Two-Tower
+    retrieval - deliberately picks preferred categories ("Cat0"/"Cat1")
+    that contain the inactive (200) / out-of-stock (201) products, to
+    actually exercise the fallback ranking functions with them present.
+    """
+    profile = EngagementProfile(user_id=14, profile=UserProfile(user_id=14, preferred_category="Cat0"))
+    result = _run(scenario, profile, top_n=20)
+    assert result.tier.value == "no_history"
+    assert 200 not in result.pre_rerank_product_ids
+    assert 200 not in result.product_ids
+
+    profile2 = EngagementProfile(user_id=15, profile=UserProfile(user_id=15, preferred_category="Cat1"))
+    result2 = _run(scenario, profile2, top_n=20)
+    assert 201 not in result2.pre_rerank_product_ids
+    assert 201 not in result2.product_ids
+
+
+def test_eligible_products_retrieve_normally(scenario):
+    """Sanity check: pre-retrieval eligibility only excludes the two
+    deliberately-ineligible products - every active/in-stock product is
+    still a normal, unaffected candidate.
+    """
+    profile = EngagementProfile(
+        user_id=16, profile=UserProfile(user_id=16),
+        purchases=[PurchaseRecord(user_id=16, product_id=pid, order_id=i, quantity=1, unit_price=1.0) for i, pid in enumerate([100, 101, 102])],
+    )
+    result = _run(scenario, profile, top_n=20)
+    assert result.product_ids
+    assert set(result.product_ids) <= {100 + i for i in range(12)}
+    for pid in result.product_ids:
+        pf = scenario["product_features"][pid]
+        assert pf.is_active and pf.stock_quantity > 0
+
+
+def test_fill_rate_drops_when_fewer_eligible_products_than_requested(scenario):
+    """12 eligible products exist in the catalog; requesting more than
+    that must honestly return fewer than requested, not pad/crash.
+    """
+    profile = EngagementProfile(
+        user_id=17, profile=UserProfile(user_id=17),
+        purchases=[PurchaseRecord(user_id=17, product_id=pid, order_id=i, quantity=1, unit_price=1.0) for i, pid in enumerate([100, 101, 102])],
+    )
+    result = _run(scenario, profile, top_n=20)
+    assert len(result.product_ids) == 12
+    assert result.fill_rate == pytest.approx(12 / 20)
+    assert result.num_excluded_pre_retrieval == 2
+
+
+def test_stock_and_active_changes_do_not_require_index_or_model_rebuild(scenario):
+    """Requirement: stock/isActive changes must not require retraining the
+    Two-Tower or ranker, or rebuilding the VectorIndex - only refreshing
+    `product_features`. Proven by reusing the exact same VectorIndex/
+    user_tower/ranker_model object instances (never rebuilt/retrained
+    between the two calls) and only swapping the `product_features` dict.
+    """
+    profile = EngagementProfile(
+        user_id=18, profile=UserProfile(user_id=18),
+        purchases=[PurchaseRecord(user_id=18, product_id=pid, order_id=i, quantity=1, unit_price=1.0) for i, pid in enumerate([100, 101, 102])],
+    )
+    vector_index = scenario["vector_index"]
+    user_tower = scenario["user_tower"]
+    ranker_model = scenario["ranker_model"]
+    size_before = vector_index.size
+
+    result_before = _run(scenario, profile, top_n=20)
+    assert 100 in result_before.product_ids  # all 12 eligible items fit within top_n=20
+
+    mutated_features = dict(scenario["product_features"])
+    mutated_features[100] = dataclasses.replace(mutated_features[100], stock_quantity=0)
+    scenario_after = dict(scenario, product_features=mutated_features)
+    result_after = _run(scenario_after, profile, top_n=20)
+
+    # The exact same (never rebuilt) index/model objects were reused.
+    assert scenario["vector_index"] is vector_index
+    assert scenario["user_tower"] is user_tower
+    assert scenario["ranker_model"] is ranker_model
+    assert vector_index.size == size_before
+
+    assert 100 not in result_after.product_ids
+    assert len(result_after.product_ids) == 11
+    assert result_after.num_excluded_pre_retrieval == result_before.num_excluded_pre_retrieval + 1
+
+
+def test_final_validation_catches_product_that_becomes_unavailable_after_retrieval(scenario):
+    """Requirement: the final lightweight validation protects against a
+    product becoming unavailable between pre-retrieval filtering and the
+    final response. Simulated via `final_product_features`: product 100
+    is eligible in `product_features` (used for pre-retrieval + ranking,
+    so it IS retrieved/ranked normally), but a fresher snapshot passed
+    only to the final-validation stage shows it as inactive - proving the
+    final check independently re-validates rather than trusting
+    pre-retrieval filtering.
+    """
+    from recommendation.serving.pipeline import generate_recommendations
+
+    profile = EngagementProfile(
+        user_id=19, profile=UserProfile(user_id=19),
+        purchases=[PurchaseRecord(user_id=19, product_id=pid, order_id=i, quantity=1, unit_price=1.0) for i, pid in enumerate([100, 101, 102])],
+    )
+    user_features = build_user_features(profile, scenario["product_lookup"], scenario["product_embeddings"], FeatureConfig())
+
+    fresher_features = dict(scenario["product_features"])
+    fresher_features[100] = dataclasses.replace(fresher_features[100], is_active=False)
+
+    result = generate_recommendations(
+        user_features, scenario["product_features"], scenario["product_embeddings"], scenario["all_item_ids"],
+        scenario["tt_encoder"], scenario["user_tower"], scenario["ranker_model"], scenario["vector_index"],
+        scenario["config"], 20, final_product_features=fresher_features,
+    )
+
+    assert 100 not in result.product_ids
+    assert result.num_excluded_by_eligibility >= 1
+    assert "is_active" in result.excluded_reasons.get(100, [])
+    # Pre-retrieval filtering (against the ORIGINAL, not-yet-stale snapshot)
+    # still let it through as a candidate - only the final check caught it.
+    assert 100 in result.pre_eligibility_product_ids
+
+
+def test_no_eligible_products_returns_empty_result_gracefully(scenario):
+    """If literally nothing in the catalog is eligible, the pipeline must
+    return an honest, empty, zero-fill-rate result - not raise.
+    """
+    profile = EngagementProfile(user_id=20, profile=UserProfile(user_id=20))
+    user_features = build_user_features(profile, scenario["product_lookup"], scenario["product_embeddings"], FeatureConfig())
+    all_ineligible = {pid: dataclasses.replace(pf, is_active=False) for pid, pf in scenario["product_features"].items()}
+
+    from recommendation.serving.pipeline import generate_recommendations
+
+    result = generate_recommendations(
+        user_features, all_ineligible, scenario["product_embeddings"], scenario["all_item_ids"],
+        scenario["tt_encoder"], scenario["user_tower"], scenario["ranker_model"], scenario["vector_index"],
+        scenario["config"], 10,
+    )
+    assert result.product_ids == []
+    assert result.fill_rate == 0.0
+    assert result.num_excluded_pre_retrieval == len(all_ineligible)
+    assert result.num_excluded_by_eligibility == 0
 
 
 def test_result_has_no_duplicate_product_ids(scenario):

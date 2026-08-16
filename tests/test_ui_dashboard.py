@@ -99,7 +99,11 @@ class _FakeChatbot(ChatbotContextAdapter):
 
 
 def _product(pid: int, category: str) -> Product:
-    return Product(id=pid, category_id=pid, slug=f"p{pid}", name=f"Product {pid}", price=5.0 + pid, category_name=category)
+    # stock_quantity must be explicit and > 0 - it defaults to 0 on the
+    # `Product` schema, which would make every fake product ineligible
+    # under Phase 11's hard pre-retrieval eligibility gate (is_active
+    # already defaults to True, so it doesn't need to be set here).
+    return Product(id=pid, category_id=pid, slug=f"p{pid}", name=f"Product {pid}", price=5.0 + pid, category_name=category, stock_quantity=10)
 
 
 def _build_service() -> RecommendationService:

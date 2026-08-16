@@ -1,13 +1,34 @@
-"""Final business-rules/eligibility policy (Phase 7) - applied LAST, after
-retrieval, ranking, and re-ranking (docs/data-mapping.md section 5). V1
-uses exactly the fields the ERD actually has: `Product.isActive` and
-`Product.stockQuantity`. No candidate is dropped before this stage.
+"""Hard global catalog-eligibility policy (Phase 7, re-architected
+Phase 11) - `isActive`/`stockQuantity`, the fields the ERD actually has.
+No `isDeleted` or similar field is invented.
+
+This one policy (`build_eligibility_rules` + `apply_eligibility`) is
+applied at TWO points in `serving.pipeline.generate_recommendations`,
+never a third stage in between:
+
+1. **Pre-retrieval** (hard gate): before any candidate generation -
+   personalized (Two-Tower/VectorIndex, via `retrieval.index
+   .eligibility_filter.EligibilityRestrictedIndex`) or fallback
+   (category/global popularity) - so inactive/out-of-stock products never
+   become candidates, never get ranked, never get re-ranked.
+2. **Final validation** (lightweight safety net): again, over the fully
+   re-ranked pool, immediately before the Top-N is returned - defense in
+   depth against a product becoming unavailable between pre-retrieval
+   filtering and the final response, independent of whether stage 1
+   already guarantees eligibility.
+
+Both stages call this same module so the rules can never drift apart
+between them. User-specific/list-specific business rules (a future
+regional restriction, a purchase-eligibility rule tied to the requesting
+user) are NOT pre-retrieval-hard-eligibility - they belong at the final
+stage only, since they aren't global catalog facts (see
+docs/data-mapping.md section 5).
 
 A plain, ordered list of named predicate rules, not hard-coded boolean
-logic inline - a future rule (a real `isDeleted`/soft-delete flag,
-regional restrictions, other purchase-eligibility rules) is another
-`EligibilityRule` appended in `build_eligibility_rules`, with zero
-changes to `apply_eligibility` or its callers.
+logic inline - a future rule (a real `isDeleted`/soft-delete flag, other
+GLOBAL catalog-eligibility rules) is another `EligibilityRule` appended
+in `build_eligibility_rules`, with zero changes to `apply_eligibility`,
+its callers, or which of the two pipeline stages it participates in.
 """
 
 from __future__ import annotations

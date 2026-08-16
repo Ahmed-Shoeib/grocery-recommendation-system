@@ -114,7 +114,8 @@ cold_start:
     popularity: 0.2
   no_history_fallback_order: ["preferred_category", "category_popularity", "global_popularity"]
 
-# Phase 7: business-rules/eligibility policy, applied LAST.
+# Phase 7/11: hard global catalog-eligibility policy, applied as both a
+# pre-retrieval gate and a final lightweight validation (docs/data-mapping.md section 5).
 eligibility:
   require_active: true
   require_in_stock: true

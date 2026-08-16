@@ -8,9 +8,11 @@ request, never rebuilding per-request. `schemas.py` is the versioned
 wire contract, kept separate from internal domain/model schemas.
 `routes.py` implements `/v1/health`, `/v1/ready`, and
 `/v1/users/{user_id}/recommendations`, always deferring to `serving
-.pipeline.recommend` (Two-Tower -> VectorIndex -> Ranker -> Re-ranking
--> Business Rules/Eligibility -> Final Top-N) - business-rule filtering
-stays exactly where Phase 7 put it, at the end.
+.pipeline.recommend` (hard pre-retrieval eligibility -> Two-Tower ->
+VectorIndex -> Ranker -> Re-ranking -> remaining business rules -> final
+lightweight eligibility validation -> Final Top-N) - eligibility
+filtering stays exactly where `serving.pipeline` puts it (Phase 11: a
+pre-retrieval gate AND a final safety-net check), never duplicated here.
 """
 
 from __future__ import annotations

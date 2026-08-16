@@ -1,9 +1,10 @@
 """V1 recommendation API routes. Every handler is a thin translation
 layer: validate/parse -> call `RecommendationService` (which itself only
 calls `serving.pipeline.recommend`, no logic duplicated here) -> map the
-result onto the versioned `api.schemas` wire contract. Business-rule
-filtering happens inside the pipeline, at the end, unchanged - nothing
-here re-filters or reorders results.
+result onto the versioned `api.schemas` wire contract. Eligibility
+filtering (hard pre-retrieval gate + final lightweight validation)
+happens entirely inside the pipeline - nothing here re-filters or
+reorders results.
 """
 
 from __future__ import annotations
@@ -96,6 +97,7 @@ async def get_recommendations(
         returned_count=len(items),
         fill_rate=result.fill_rate,
         pool_size=result.pool_size,
+        num_excluded_pre_retrieval=result.num_excluded_pre_retrieval,
         num_excluded_by_eligibility=result.num_excluded_by_eligibility,
         api_version=API_VERSION,
         model_version=service.ranker_model_version,
