@@ -290,7 +290,7 @@ body shape across every failure path.
 ### Dashboard usage
 
 Select a user from the full user table (shows `preferredCategory`/
-`ageGroup` when present) to see: the four V1 engagement signals with
+`ageGroup` when present) to see: the five V1 engagement signals with
 explicit empty states; cold-start tier and category/brand affinity;
 final recommendations with catalog info joined in for display only;
 pipeline diagnostics (candidate pool size, eligibility exclusions with
@@ -303,8 +303,8 @@ metric.
 ## Testing
 
 ```bash
-pytest                                    # native Windows - 368 passed, 3 skipped (ScaNN: no Windows wheel)
-docker run --rm grocery-recs-test         # Docker/Linux - 385 passed, 0 skipped (ScaNN runs for real)
+pytest                                    # native Windows - 387 passed, 3 skipped (ScaNN: no Windows wheel)
+docker run --rm grocery-recs-test         # Docker/Linux - 404 passed, 0 skipped (ScaNN runs for real)
 ```
 
 The difference is exactly the ScaNN-specific tests - the `test_scann_index.py` module (skipped as a single collection unit via `pytest.importorskip`) plus two individually-skipped ScaNN tests in `test_eligibility_restricted_index.py` (Phase 11) - all executed for real, including the FAISS-vs-ScaNN cross-backend agreement tests, in Docker.

@@ -12,6 +12,7 @@ from __future__ import annotations
 from recommendation.data.adapters.base import (
     CartAdapter,
     ChatbotContextAdapter,
+    ClickAdapter,
     PurchaseAdapter,
     ReviewAdapter,
     SearchAdapter,
@@ -26,6 +27,7 @@ def build_engagement_profile(
     user_adapter: UserAdapter,
     purchase_adapter: PurchaseAdapter,
     cart_adapter: CartAdapter,
+    click_adapter: ClickAdapter,
     search_adapter: SearchAdapter,
     chatbot_adapter: ChatbotContextAdapter,
     review_adapter: ReviewAdapter,
@@ -34,6 +36,7 @@ def build_engagement_profile(
     return EngagementProfile(
         user_id=user_id,
         profile=profile,
+        clicks=click_adapter.get_clicks(user_id),
         purchases=purchase_adapter.get_purchases(user_id),
         cart_items=cart_adapter.get_cart_items(user_id),
         searches=search_adapter.get_search_history(user_id),

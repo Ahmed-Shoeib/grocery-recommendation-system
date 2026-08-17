@@ -70,6 +70,15 @@ def test_reviews_only_exist_for_purchased_products():
     assert review_pairs <= purchased_pairs
 
 
+def test_click_records_reference_real_products_and_are_synthetic_sourced():
+    dataset = generate_synthetic_dataset(_small_config())
+    product_ids = {p.id for p in dataset.products}
+    assert dataset.click_records  # sanity: the small dataset still produces some clicks
+    for record in dataset.click_records:
+        assert record.product_id in product_ids
+        assert record.source == "synthetic"
+
+
 def test_search_records_have_either_a_matched_product_or_a_term_only():
     dataset = generate_synthetic_dataset(_small_config())
     product_ids = {p.id for p in dataset.products}

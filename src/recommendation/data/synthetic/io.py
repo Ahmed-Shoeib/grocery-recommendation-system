@@ -14,7 +14,7 @@ from pathlib import Path
 
 from pydantic import TypeAdapter
 
-from recommendation.data.schemas.engagement import ChatbotContextRecord, SearchRecord
+from recommendation.data.schemas.engagement import ChatbotContextRecord, ClickRecord, SearchRecord
 from recommendation.data.synthetic.dataset import SyntheticDataset
 from recommendation.data.synthetic.raw_schemas import (
     RawCart,
@@ -40,6 +40,7 @@ _TABLE_MODELS = {
     "carts": RawCart,
     "cart_items": RawCartItem,
     "reviews": RawReview,
+    "click_records": ClickRecord,
     "search_records": SearchRecord,
     "chatbot_records": ChatbotContextRecord,
 }

@@ -60,7 +60,7 @@ def run_feature_pipeline(
     user_ids = bundle.users.list_user_ids()
     engagement_profiles = {
         uid: build_engagement_profile(
-            uid, bundle.users, bundle.purchases, bundle.cart, bundle.search, bundle.chatbot, bundle.reviews
+            uid, bundle.users, bundle.purchases, bundle.cart, bundle.clicks, bundle.search, bundle.chatbot, bundle.reviews
         )
         for uid in user_ids
     }

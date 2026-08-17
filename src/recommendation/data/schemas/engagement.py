@@ -1,18 +1,25 @@
 """Canonical per-signal engagement records and the combined engagement layer.
 
-These are the four V1 signals (purchases, cart, search, chatbot) plus
-reviews and the user profile, in the shape feature engineering consumes.
-Adapters (Phase 2) are responsible for producing these from either the
-real ERD tables or a synthetic provider - model/feature code downstream
-never sees the source distinction.
+These are the five V1 signals (clicks, purchases, cart, search, chatbot)
+plus reviews and the user profile, in the shape feature engineering
+consumes. Adapters (Phase 2) are responsible for producing these from
+either the real ERD tables, the confirmed future `User_events`
+activity-log table (`adapters.user_events_adapter.UserEventsAdapter`), or
+a synthetic provider - model/feature code downstream never sees the
+source distinction.
 
-Raw timestamp fields (`order_created_at`, `review_created_at`) are kept
-where the ERD actually has them (Order.CreationDate, Review.CreationDate)
-so the canonical schema doesn't lie about what the backend provides, but
-per the V1 scope decision (docs/data-mapping.md, section 1) feature
+Raw timestamp fields (`order_created_at`, `review_created_at`,
+`action_time`) are kept where a source actually has them (ERD
+Order.CreationDate/Review.CreationDate, or `User_events.action_time`) so
+the canonical schema doesn't lie about what the backend provides, but per
+the V1 scope decision (docs/data-mapping.md, section 1/7) feature
 engineering must not derive recency/time-decay signals from them. They
 exist here purely so a future V2 recency feature doesn't require a schema
-change.
+change. The synthetic V1 generators for click/cart/search do not produce
+real timestamps (there's nothing to derive them from), so `action_time`
+is `None` on synthetic-sourced records; a `UserEventsAdapter`-sourced
+record always populates it from `UserInteraction.action_time`
+(`data.schemas.events`).
 """
 
 from __future__ import annotations
@@ -25,45 +32,102 @@ from recommendation.data.schemas.user import UserProfile
 
 
 class PurchaseRecord(BaseModel):
-    """One product line from a past order (Order + OrderItem + Product)."""
+    """One product line from a past order (Order + OrderItem + Product),
+    or - from a future `User_events` PURCHASE row - one resolved purchase
+    interaction. `order_id`/`unit_price`/`order_status` are ERD-specific
+    (Order/OrderItem) fields a `User_events` row doesn't carry, so they're
+    optional: populated for the ERD-backed synthetic/real-Order path,
+    `None` for the `User_events`-sourced path (`quantity` defaults to 1 -
+    one event row = one interaction, not an arbitrary order-line quantity).
+    """
 
     user_id: int
     product_id: int
-    order_id: int
-    quantity: int
-    unit_price: float
+    order_id: int | None = None
+    quantity: int = 1
+    unit_price: float | None = None
     order_status: str | None = None
     order_created_at: datetime | None = None  # not used for recency in V1
 
 
 class CartAffinityRecord(BaseModel):
-    """One product currently (or recently) in a user's cart (Cart + CartItem)."""
+    """One product currently (or recently) in a user's cart (Cart +
+    CartItem), or - from a future `User_events` ADD_TO_CART row - one
+    resolved add-to-cart interaction (`quantity` defaults to 1 in that
+    case, matching `PurchaseRecord`).
+    """
 
     user_id: int
     product_id: int
-    quantity: int
+    quantity: int = 1
+    action_time: datetime | None = None  # populated only for User_events-sourced records; see module docstring
+
+
+class ClickRecord(BaseModel):
+    """A CLICK engagement event: the user viewed/clicked a specific
+    product. First-class fifth V1 signal (docs/data-mapping.md section 4);
+    no backend table exists yet distinct from the future `User_events`
+    log, so V1 uses a synthetic generator the same way SEARCH/CHATBOT do.
+
+    `source` distinguishes provider origin ("synthetic" vs a future
+    `User_events`-backed value) so a real `ClickAdapter` is a drop-in
+    replacement - nothing downstream branches on it.
+    """
+
+    user_id: int
+    product_id: int
+    source: str = "synthetic"
+    action_time: datetime | None = None
 
 
 class SearchRecord(BaseModel):
-    """A search event. No backend table exists yet - always synthetic in V1.
+    """A search event.
+
+    `search_term` is optional: the current synthetic generator always
+    populates it (there's no `User_events`-style raw-query storage to
+    draw from otherwise), but the confirmed `User_events` contract never
+    provides raw search text at all - only resolved-to-a-product SEARCH
+    rows are stored, so a future `UserEventsAdapter`-sourced `SearchRecord`
+    always has `matched_product_id` set and `search_term=None`. Feature
+    engineering only reads `search_term` when `matched_product_id is
+    None`, so this is safe: a `User_events`-sourced search always takes
+    the `matched_product_id` path.
 
     `source` distinguishes provider origin so a future SearchAdapter backed
     by a real API/table/event pipeline is a drop-in replacement.
     """
 
     user_id: int
-    search_term: str
+    search_term: str | None = None
     matched_product_id: int | None = None
     source: str = "synthetic"
+    action_time: datetime | None = None  # populated only for User_events-sourced records; see module docstring
 
 
 class ChatbotContextRecord(BaseModel):
-    """Structured chatbot interaction summary for one user.
+    """Aggregated chatbot interaction summary for one user (one record per
+    user, not one per conversation - see below).
 
-    No backend table exists yet - always synthetic in V1. Deliberately
-    loose/optional fields since the real backend's eventual representation
-    (API response, DB entity, event summary) is unknown; whichever shape it
-    provides, a ChatbotContextAdapter maps it into this record.
+    Synthetic V1 sources this from a template-based generator with a free-
+    text `summary`/`keywords`. Per the confirmed `User_events` contract,
+    the real backend will NEVER provide that free text to this
+    recommender - it only writes a CHATBOT row once a conversation
+    resolves to a specific `product_id`, with no query/summary/keyword
+    text at all (docs/data-mapping.md section 4). A future
+    `UserEventsAdapter` therefore populates only `mentioned_product_ids`
+    (one entry per resolved CHATBOT row for that user) and leaves
+    `summary`/`keywords`/`product_interest`/`preferred_category` at their
+    defaults - this record's optional/loose fields are exactly what makes
+    that a non-breaking, drop-in mapping instead of a schema change.
+
+    Known V1 simplification: this stays a single aggregated record per
+    user (matching the existing synthetic shape), not a list of one
+    record per resolved mention, so an individual mention's `action_time`
+    isn't preserved here even for `User_events`-sourced data. Nothing
+    downstream currently needs per-mention chatbot timestamps (V1 doesn't
+    do recency/sequence modeling at all - see docs/data-mapping.md section
+    7/12); if that's ever needed, this record would need to become a list
+    of single-mention records at that time.
     """
 
     user_id: int
@@ -87,11 +151,17 @@ class EngagementProfile(BaseModel):
     """Canonical combined engagement layer for one user.
 
     This, not any individual adapter output, is what feature engineering
-    (Phase 3) and the cold-start tiering logic (Phase 7) consume.
+    (Phase 3) and the cold-start tiering logic (Phase 7) consume. Combines
+    all five V1 engagement signals (clicks, purchases, cart adds,
+    searches, chatbot context) plus reviews and the user profile -
+    identical shape whether populated by the synthetic adapters or, later,
+    by `adapters.user_events_adapter.UserEventsAdapter` reading the real
+    `User_events` table.
     """
 
     user_id: int
     profile: UserProfile
+    clicks: list[ClickRecord] = Field(default_factory=list)
     purchases: list[PurchaseRecord] = Field(default_factory=list)
     cart_items: list[CartAffinityRecord] = Field(default_factory=list)
     searches: list[SearchRecord] = Field(default_factory=list)

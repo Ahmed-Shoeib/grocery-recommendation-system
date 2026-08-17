@@ -13,6 +13,7 @@ def _user_features(**overrides) -> UserFeatures:
         age_group=None,
         has_preferred_category=False,
         has_age_group=False,
+        click_count=0,
         purchase_count=0,
         distinct_products_purchased=0,
         cart_item_count=0,

@@ -4,7 +4,8 @@ Source of truth for the backend schema: `docs/erd.jpeg`. This document
 reconciles that ERD with the recommendation system's requirements, records
 the assumptions V1 makes, and defines the scope boundary between V1 and
 deferred V2 work. It is updated as clarifications arrive (last updated
-after the Phase 1 clarification round).
+after the backend team's `User_events` activity-log contract was
+confirmed - see §4).
 
 ## 1. Entities as drawn in the ERD
 
@@ -14,10 +15,11 @@ after the Phase 1 clarification round).
 | Category | Id, ParentId (self-FK), Name, CreatedAt | Category + parent-category features. |
 | Product | Id, CategoryId, Slug, Name, Description, Brand, Price, SalePrice, DiscountPercentage, StockQuantity, Ingredients, isActive, ProductImage, AltText | Core item metadata; text fields feed the Sentence Transformer; isActive/StockQuantity feed the hard pre-retrieval eligibility gate AND the final lightweight eligibility validation (§5). |
 | ProductTags / Tag | join table + Name | Tag text feeds the Sentence Transformer input. |
-| Cart / Cart_Item | Cart(Id, CartItemId FK, UserId); CartItem(Id, CartId, ProductId, Quantity) | Add-to-cart habit signal (D). |
-| Order / Order_Item | Order(Id, UserId, VoucherId, AddressId, IdempotenceKey, TotalAmount, Status, PaymentMethod, CreationDate, DeliveryDate); OrderItem(Id, ProductId, OrderId, Quantity, UnitPrice) | Previous purchases signal (A) - the strongest V1 signal. |
-| Review | Id, UserId, ProductId, Rating, Comment, CreationDate | Auxiliary ranking signal (rating/review-count affinity). |
+| Cart / Cart_Item | Cart(Id, CartItemId FK, UserId); CartItem(Id, CartId, ProductId, Quantity) | Add-to-cart habit signal (D) - today's ERD-backed path only; see §4 for the future `User_events`-sourced path. |
+| Order / Order_Item | Order(Id, UserId, VoucherId, AddressId, IdempotenceKey, TotalAmount, Status, PaymentMethod, CreationDate, DeliveryDate); OrderItem(Id, ProductId, OrderId, Quantity, UnitPrice) | Previous purchases signal (A) - the strongest V1 signal. Today's ERD-backed path only; see §4. |
+| Review | Id, UserId, ProductId, Rating, Comment, CreationDate | Auxiliary ranking signal (rating/review-count affinity). Unaffected by the `User_events` contract (§4) - stays ERD-backed. |
 | UserAddress, Voucher | address/voucher fields | Not used by the recommender. |
+| **User_events** (confirmed, not yet built) | Id, UserId, ProductId, ActionTime, ActionType (`CLICK` / `ADD_TO_CART` / `PURCHASE` / `SEARCH` / `CHATBOT`) | The future single append-style activity log for ALL FIVE engagement signals - see §4 for the full contract. Not in `docs/erd.jpeg` (which predates this confirmation), analogous to the §2 `preferredCategory`/`ageGroup` addition. |
 
 ### Known ERD discrepancy
 
@@ -58,8 +60,8 @@ Treatment in this codebase:
 ## 3. Three-level personalization strategy
 
 Cold start is not binary. History strength is computed from event counts
-across the four V1 engagement signals (purchases, cart adds, searches,
-chatbot-context presence) and thresholded via `configs/base.yaml:
+across the five V1 engagement signals (clicks, purchases, cart adds,
+searches, chatbot-context presence) and thresholded via `configs/base.yaml:
 cold_start.*` (implemented in Phase 7):
 
 | Tier | Condition | Strategy |
@@ -80,7 +82,7 @@ and `"preferred_category"` are DISTINCT fallback sources:
 `"preferred_category"` uses the confirmed `UserProfile.preferred_category`
 attribute directly; `"category_popularity"` uses the user's single
 highest-affinity category from `UserFeatures.category_affinity` (which
-factors in `preferred_category` plus whatever sparse purchase/cart/
+factors in `preferred_category` plus whatever sparse click/purchase/cart/
 search/chatbot signal exists). For a true zero-signal user these
 necessarily coincide (affinity has nothing else to draw on); for a
 SPARSE_HISTORY user with some real signal they can genuinely differ -
@@ -112,22 +114,141 @@ structured error body. Conflating the two would hide a real "this user
 doesn't exist" condition (e.g. a stale/mistyped id) behind what looks
 like a normal cold-start recommendation.
 
-## 4. Search and chatbot context - adapters, not backend tables
+## 4. `User_events` - the confirmed future engagement source, click/search/chatbot adapters today
 
-Neither `SearchHistory` nor any chatbot entity exists in the ERD. V1 uses:
+**Confirmed by the backend team (2026-08-17)**: engagement tracking will
+NOT be five separate backend tables. It will be one append-style
+activity/audit-log table:
 
-- `SearchAdapter` (interface) / `SyntheticSearchAdapter` (V1 implementation)
-- `ChatbotContextAdapter` (interface) / `SyntheticChatbotAdapter` (V1 implementation)
+```
+User_events
+    id
+    user_id
+    product_id
+    action_time
+    action_type
+```
 
-Both produce the canonical `SearchRecord` / `ChatbotContextRecord` schemas
-(`src/recommendation/data/schemas/engagement.py`). The chatbot record
-supports summary text, mentioned product IDs, a preferred category, and
-keywords/intent - whichever subset a future real backend (API, DB entity,
-event summary) provides, the adapter maps it into this same shape. If
-summary text is present, it may be encoded with the same Sentence
-Transformer used for product text (Phase 3+).
+`action_type` is one of five values, covering ALL FIVE V1 engagement
+signals: `CLICK`, `ADD_TO_CART`, `PURCHASE`, `SEARCH`, `CHATBOT`. This is
+an append-only activity log, not a deduplicated relation: multiple rows
+for the same `(user_id, product_id)` pair are valid and expected - a user
+clicking, then adding to cart, then purchasing the same product each
+produce their own row, each with its own `action_time`.
 
-No permanent backend table is assumed or invented for either signal.
+**`product_id` is required for every event this recommender consumes -
+including SEARCH and CHATBOT.** The backend only writes a `User_events`
+row for those two signals once the interaction has been resolved to a
+specific product:
+
+- **SEARCH**: a row is written only once a search has been resolved to a
+  specific product. The raw search query text is NOT part of this
+  contract and is NOT needed by this recommender - an unresolved search
+  simply never produces a row here.
+- **CHATBOT**: a row is written only once a chatbot conversation has been
+  resolved to a specific product. Chatbot summary text, keywords, intent
+  JSON, or any other chatbot-specific metadata are NOT part of this
+  contract and NOT needed by this recommender - a conversation that never
+  names a product simply never produces a row here.
+
+This recommender intentionally operates on resolved, product-level
+interactions only, never on raw free text for these two signals. Category/
+brand/etc. are derived via `User_events.product_id -> Product`; age_group/
+preferredCategory are derived via `User_events.user_id -> User` (§2) - no
+additional columns (`search_query`, `chatbot_text`, `chatbot_summary`,
+`chatbot_keywords`, `chatbot_preferred_category`, a metadata JSON blob,
+etc.) are needed on `User_events` itself.
+
+### Canonical representation and the adapter boundary
+
+`data.schemas.events.UserInteraction` (`user_id`, `product_id`,
+`action_type`, `action_time`) is the canonical, source-agnostic shape of
+one `User_events` row. `data.adapters.user_events_adapter
+.UserEventsAdapter` is the seam that will translate real `User_events`
+rows into `UserInteraction`s and, from there, into the SAME per-signal
+canonical records (`ClickRecord`, `PurchaseRecord`, `CartAffinityRecord`,
+`SearchRecord`, `ChatbotContextRecord`) that `EngagementProfile`
+(`data.schemas.engagement`) already uses today - by implementing the
+existing `ClickAdapter`/`PurchaseAdapter`/`CartAdapter`/`SearchAdapter`/
+`ChatbotContextAdapter` interfaces from that one unified event list
+(action-type fan-out), instead of five separate ERD-backed adapters. Feature
+engineering, the Two-Tower model, the ranker, and the serving pipeline
+depend only on `EngagementProfile`/`AdapterBundle` and never see
+`UserInteraction` or know which adapter produced their input - the
+architectural goal stated at the top of this document:
+
+```
+Today (synthetic V1):
+  synthetic generators -> existing per-signal adapters -> EngagementProfile -> features -> models
+
+Future (real backend):
+  User_events table -> UserEventsAdapter -> EngagementProfile -> features -> models
+                        (same interfaces, same downstream, only construction differs)
+```
+
+`build_user_events_adapters(events, products_adapter, users_adapter,
+reviews_adapter)` (`data.adapters.user_events_adapter`) is the real-backend
+counterpart of today's `build_synthetic_adapters` - it returns the same
+`AdapterBundle` type, so no call site depending on it needs to change once
+a real `User_events` query replaces the synthetic generators.
+
+**What actually changes when the real database arrives**: only whatever
+runs the SQL query against `User_events` and maps each row into a
+`UserInteraction` - i.e. the construction of the `events` list passed to
+`UserEventsAdapter`. `UserEventsAdapter` itself, `AdapterBundle`,
+`EngagementProfile`, all feature engineering, the Two-Tower model, the
+ranker, and the serving pipeline require no changes.
+
+### Field-availability gap vs. the ERD-backed path
+
+`User_events` never carries `Order`/`OrderItem`-specific fields
+(`order_id`, `unit_price`) or `CartItem.quantity`, or any search/chatbot
+free text. `PurchaseRecord.order_id`/`unit_price`/`order_status` and
+`CartAffinityRecord`/`PurchaseRecord.quantity` are therefore optional on
+the canonical schemas (default `None`/`1`) specifically so
+`UserEventsAdapter` can construct them with only what `User_events`
+actually provides - see `data.schemas.engagement` for the full field-by-
+field rationale. `ChatbotContextRecord` stays a single aggregated record
+per user (one entry in `mentioned_product_ids` per resolved CHATBOT row);
+see that class's docstring for the known V1 simplification this implies
+(no per-mention timestamp within that aggregate).
+
+### CLICK - the fifth V1 engagement signal
+
+CLICK (the user viewed/clicked a specific product) is now a first-class
+V1 engagement signal, not deferred to V2 (contrast with §7, which still
+defers the *real-time event-tracking pipeline* - impressions, CTR,
+session-level click-stream - not the click signal itself as consumed by
+this recommender). Today, with no `User_events` table yet, V1 sources it
+the same way SEARCH/CHATBOT are sourced: `ClickAdapter` (interface) /
+`SyntheticClickAdapter` (V1 implementation), producing canonical
+`ClickRecord`s. It contributes to `UserFeatures.category_affinity`/
+`brand_affinity`/`semantic_embedding` (weighted by
+`config.features.click_weight`) and to `total_engagement_events` (cold-
+start tiering, §3), exactly like the other signals.
+
+`click_weight` is a small, deliberately unbenchmarked placeholder (see
+`FeatureConfig` docstring, `src/recommendation/utils/config.py`) - CLICK
+has no real usage data to calibrate against yet. It does NOT add a new
+numeric input slot to the Two-Tower or ranker feature vectors (those
+dimensions are baked into already-trained model artifacts); it only flows
+through the existing vocabulary-/embedding-dimensioned affinity/embedding
+features and the existing `total_engagement_events` numeric slot. All
+signal weights - not just this one - should be re-benchmarked once the
+real `User_events` dataset is available; nothing in this codebase should
+claim the current weights are tuned.
+
+### Timestamps
+
+`action_time` is preserved end-to-end from the adapter layer
+(`UserEventsAdapter` populates `PurchaseRecord.order_created_at`/
+`CartAffinityRecord.action_time`/`ClickRecord.action_time`/
+`SearchRecord.action_time` from `UserInteraction.action_time`) so a V2
+temporal train/validation/test split, recency weighting, or event-
+sequence feature doesn't require another data-contract change. Per §7/§12,
+V1 feature engineering does NOT derive any recency/decay signal from these
+timestamps, and this architecture change does not add one - only
+preservation, not consumption, changed.
 
 ## 5. Eligibility / business rules - hard PRE-retrieval gate + final validation
 
@@ -255,12 +376,19 @@ context, not as current behavior.
 
 ## 6. Popularity terminology
 
-V1 has no timestamps, views, clicks, or event tracking feeding the
-recommender (see §7), so nothing is called "trending" - that word implies
-a time window V1 cannot compute. The two fallback signals are:
+V1 does not derive recency/time-decay from any timestamp, and no
+real-time event-tracking/impression pipeline feeds the recommender (see
+§7), so nothing is called "trending" - that word implies a time window V1
+cannot compute. This is true even though CLICK is now a first-class
+engagement *signal* (§4): clicks feed user-side category/brand affinity
+and the semantic embedding, not the popularity fallback signals below,
+which remain purchase/cart/review-derived only. The two fallback signals
+are:
 
 - **global popularity** - derived from order quantities (and, where
-  useful, cart/review volume) aggregated across all time, no decay.
+  useful, cart/review volume) aggregated across all time, no decay. Not
+  click-derived in V1 - see §7 for why a click-based popularity/CTR
+  signal stays deferred.
 - **category popularity** - the same aggregation, scoped to a category.
 
 ## 7. V1 scope vs. the original user story - explicitly deferred to V2
@@ -268,20 +396,26 @@ a time window V1 cannot compute. The two fallback signals are:
 The following are **documented requirements, not implemented in V1**.
 Nothing in this codebase should claim these acceptance criteria are met:
 
-- Event tracking pipeline (product views, clicks, impressions)
-- Real-time ingestion / event bus
+- Real-time event-tracking pipeline / event bus / impression logging
+  (CLICK as a per-user, per-product *engagement signal* is implemented in
+  V1 as of §4 - what's still deferred is a live ingestion pipeline,
+  impression-level tracking, and CTR/conversion computed from it)
 - Session infrastructure, anonymous-user sessions
 - Recency / time-decay features and freshness scoring
-- Recommendation impression logging
 - CTR, add-to-cart conversion, purchase conversion (online metrics)
 - Sequential / recent-intent models over event streams
+- Product-level click-popularity/"trending" fallback signal (§6) - clicks
+  are consumed as a user-side affinity signal only, not yet aggregated
+  into a popularity ranking signal
 
 Timestamp fields that already exist in the ERD (`Order.CreationDate`,
-`Order.DeliveryDate`, `Review.CreationDate`) are **retained in the
-canonical schemas** (`PurchaseRecord.order_created_at`,
-`ReviewRecord.review_created_at`) precisely so V2 can add recency features
-without a schema migration - but V1 feature engineering must not derive
-any recency/decay signal from them. This is enforced by convention now and
+`Order.DeliveryDate`, `Review.CreationDate`), plus `action_time` on the
+confirmed future `User_events` table (§4, threaded through to
+`PurchaseRecord.order_created_at`/`CartAffinityRecord.action_time`/
+`ClickRecord.action_time`/`SearchRecord.action_time`), are **retained in
+the canonical schemas** precisely so V2 can add recency features without
+another schema migration - but V1 feature engineering must not derive any
+recency/decay signal from them. This is enforced by convention now and
 should be enforced by a feature-engineering-layer test once Phase 3 lands.
 
 Extensibility is achieved through interfaces (adapters, the `context`
@@ -469,9 +603,10 @@ generalizing.
 
 Mitigations, implemented in `recommendation.features.user_features`:
 
-- **Purchases/cart**: excluding a product drops the entire record (its
-  content *is* the product reference) - see `exclude_product_ids` on
-  `build_user_features`.
+- **Clicks/purchases/cart**: excluding a product drops the entire record
+  (its content *is* the product reference, same as purchases/cart) - see
+  `exclude_product_ids` on `build_user_features`. Clicks carry no free
+  text, so no separate text-leakage heuristic is needed for them.
 - **Search**: a search matched to the excluded product (`matched_product_id`)
   has that match scrubbed; an *unmatched* search whose raw `search_term`
   text names the excluded product (substring match against the product's
@@ -485,7 +620,7 @@ Mitigations, implemented in `recommendation.features.user_features`:
 
 This is a **heuristic, not a guarantee**: it catches exact-name mentions,
 not paraphrases, synonyms, or a search/chatbot event that references the
-target only indirectly. Event *counts* (`search_count`,
+target only indirectly. Event *counts* (`click_count`, `search_count`,
 `has_chatbot_context`) are intentionally left unaffected by exclusion -
 only the product-content signal is scrubbed - so the leakage guard doesn't
 silently distort the history-strength signal Phase 7's cold-start tiering
@@ -497,12 +632,12 @@ genuinely temporal held-out split instead of this content-based heuristic.
 | Section here | Implementing phase |
 |---|---|
 | §2 UserProfile fields | Phase 2 |
-| §3 Cold-start tiers | Phase 7 |
-| §4 Search/Chatbot adapters | Phase 2 |
+| §3 Cold-start tiers | Phase 7 (four signals) / User_events contract change (five signals, click added) |
+| §4 Click/Search/Chatbot adapters; `User_events` contract, `UserInteraction`, `UserEventsAdapter` | Phase 2 (search/chatbot synthetic adapters) / User_events contract change (click signal + synthetic adapter, `UserInteraction` canonical event, `UserEventsAdapter` future real-backend adapter, action_time preservation) |
 | §5 Eligibility/business rules policy (hard pre-retrieval gate + final lightweight validation) | Phase 7 (policy interface, originally applied last) / Phase 11 (moved to a hard pre-retrieval gate, mentor-reviewed) |
 | §6 Popularity | Phase 2 (data) / Phase 7 (fallback ranking) |
 | §8 Offline evaluation | Phase 4 (Recall/HitRate) / Phase 5 (latency) / Phase 6 (Precision/NDCG/MRR) / Phase 7 (coverage/diversity/duplicate/fill-rate/cold-start/pipeline latency) / Phase 8 (HTTP end-to-end latency) |
 | §9 Surface context hook / dashboard architecture | Phase 7 (pipeline parameter, not yet exposed via API) / Phase 9 (dashboard reuses RecommendationService in-process, not via HTTP) |
 | §10 VectorIndex backends | Phase 5 (ScaNN primary/Docker + FAISS Windows dev fallback) |
 | §11 Neural ranking (VectorIndex candidates, richer cross features, baseline comparison) | Phase 6 |
-| §12 Leakage-limitation mitigation | Phase 3 (guard) / Phase 4 (consumer) / Phase 6 (extended to ranking negatives) |
+| §12 Leakage-limitation mitigation | Phase 3 (guard) / Phase 4 (consumer) / Phase 6 (extended to ranking negatives) / User_events contract change (extended to clicks) |

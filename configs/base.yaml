@@ -51,6 +51,11 @@ synthetic_data:
 
   review_prob: 0.35
 
+  # Click (fifth V1 engagement signal, synthetic-only for now - see
+  # docs/data-mapping.md section 4).
+  click_count_lambda: 4.0
+  click_max_count: 15
+
   search_count_lambda: 2.5
   search_max_count: 10
   search_product_term_prob: 0.7
@@ -72,7 +77,10 @@ embedding:
   encode_batch_size: 32
 
 # Phase 3: user/product feature engineering weights.
+# click_weight is an unbenchmarked placeholder for the newly-added CLICK
+# signal - see FeatureConfig docstring (src/recommendation/utils/config.py).
 features:
+  click_weight: 0.1
   purchase_weight: 0.45
   cart_weight: 0.25
   search_weight: 0.15
@@ -110,8 +118,8 @@ retrieval:
   min_candidate_pool: 50
 
 # Phase 7: three-level personalization / cold-start strategy.
-# History strength = count of events across the four V1 engagement signals
-# (purchases, cart adds, searches, chatbot context presence).
+# History strength = count of events across the five V1 engagement signals
+# (clicks, purchases, cart adds, searches, chatbot context presence).
 cold_start:
   strong_history_min_signals: 5
   sparse_history_min_signals: 1

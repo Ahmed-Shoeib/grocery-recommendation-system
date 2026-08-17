@@ -4,7 +4,7 @@ Produces `RawUser` rows (the ERD-shaped table, including the confirmed
 `preferred_category_id` / `age_group` fields) plus a parallel
 `UserLatentProfile` per user - the persona/brand-affinity/activity-level
 assignment used only during generation (never exposed to adapters,
-features, or models) to keep the four V1 signals statistically correlated.
+features, or models) to keep the five V1 signals statistically correlated.
 """
 
 from __future__ import annotations

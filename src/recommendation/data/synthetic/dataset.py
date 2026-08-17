@@ -19,9 +19,10 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from recommendation.data.schemas.engagement import ChatbotContextRecord, SearchRecord
+from recommendation.data.schemas.engagement import ChatbotContextRecord, ClickRecord, SearchRecord
 from recommendation.data.synthetic.catalog import build_catalog, build_categories, build_tags
 from recommendation.data.synthetic.chatbot import generate_chatbot_records
+from recommendation.data.synthetic.clicks import generate_click_records
 from recommendation.data.synthetic.interactions import generate_carts, generate_orders, generate_reviews
 from recommendation.data.synthetic.raw_schemas import (
     RawCart,
@@ -52,6 +53,7 @@ class SyntheticDataset:
     carts: list[RawCart]
     cart_items: list[RawCartItem]
     reviews: list[RawReview]
+    click_records: list[ClickRecord]
     search_records: list[SearchRecord]
     chatbot_records: list[ChatbotContextRecord]
     # Generation-only debug metadata (latent persona per user). Not a
@@ -63,9 +65,17 @@ def generate_synthetic_dataset(config: AppConfig | None = None) -> SyntheticData
     config = config or get_config()
     sd: SyntheticDataConfig = config.synthetic_data
 
+    # click_rng is spawned LAST (index 7), after all previously-existing
+    # stages, so adding it doesn't reassign the spawn indices (and
+    # therefore the random draws) of catalog/user/order/cart/review/
+    # search/chatbot - preserving byte-identical reproducibility for those
+    # signals at a fixed seed, per this docstring's reproducibility
+    # guarantee. Only search/chatbot's positions were already fixed at
+    # indices 5/6 before this change; click could not be inserted before
+    # them without perturbing their draws.
     seed_sequence = np.random.SeedSequence(sd.random_seed)
-    catalog_rng, user_rng, order_rng, cart_rng, review_rng, search_rng, chatbot_rng = (
-        np.random.default_rng(s) for s in seed_sequence.spawn(7)
+    catalog_rng, user_rng, order_rng, cart_rng, review_rng, search_rng, chatbot_rng, click_rng = (
+        np.random.default_rng(s) for s in seed_sequence.spawn(8)
     )
 
     categories = build_categories()
@@ -81,6 +91,7 @@ def generate_synthetic_dataset(config: AppConfig | None = None) -> SyntheticData
     )
     search_records = generate_search_records(users, latent_profiles, products, product_tags, tags, search_rng, sd)
     chatbot_records = generate_chatbot_records(users, latent_profiles, products, product_tags, tags, chatbot_rng, sd)
+    click_records = generate_click_records(users, latent_profiles, products, product_tags, tags, click_rng, sd)
 
     return SyntheticDataset(
         categories=categories,
@@ -93,6 +104,7 @@ def generate_synthetic_dataset(config: AppConfig | None = None) -> SyntheticData
         carts=carts,
         cart_items=cart_items,
         reviews=reviews,
+        click_records=click_records,
         search_records=search_records,
         chatbot_records=chatbot_records,
         debug_user_personas={uid: p.persona_key for uid, p in latent_profiles.items()},

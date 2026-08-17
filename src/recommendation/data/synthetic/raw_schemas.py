@@ -13,7 +13,12 @@ backed ones with identical constructors), and every canonical schema,
 feature, and model downstream is unaffected.
 
 Excluded on purpose (per the V1 scope decision, docs/data-mapping.md
-section 1/7): no view/click/impression fields, no session ids. Timestamp
+section 1/7): no impression fields, no session ids. CLICK is a supported
+V1 engagement signal (docs/data-mapping.md section 4), but - like
+search/chatbot - has no dedicated ERD raw table here; it is produced
+directly as canonical `ClickRecord`s by `synthetic.clicks
+.generate_click_records`, standing in for the future `User_events`
+table's CLICK rows. Timestamp
 fields that genuinely exist in the ERD (Order.CreationDate,
 Order.DeliveryDate, Review.CreationDate) are kept here and threaded through
 to the canonical schemas, but are never consumed by V1 feature engineering.

@@ -67,6 +67,13 @@ class SyntheticDataConfig(BaseModel):
     # Reviews (auxiliary signal).
     review_prob: float = 0.35
 
+    # Click (synthetic-only signal in V1; fifth engagement signal - see
+    # docs/data-mapping.md section 4). Deliberately a higher-volume, lower-
+    # intent signal than search: `replace=True` sampling (a user can click
+    # the same product more than once) with a higher default lambda.
+    click_count_lambda: float = 4.0
+    click_max_count: int = 15
+
     # Search (synthetic-only signal).
     search_count_lambda: float = 2.5
     search_max_count: int = 10
@@ -97,12 +104,22 @@ class EmbeddingConfig(BaseModel):
 
 
 class FeatureConfig(BaseModel):
-    """Weights for blending the four V1 engagement signals (+ the confirmed
+    """Weights for blending the five V1 engagement signals (+ the confirmed
     preferredCategory attribute) into user category/brand affinity
     distributions and the user semantic embedding. Kept configurable per
     docs/data-mapping.md - never hard-coded in the feature-building code.
+
+    `click_weight` is a placeholder default, not a tuned value: CLICK is a
+    newly-added, weaker-intent signal (view-only, no explicit commitment
+    like a purchase or cart add) with no real usage data to benchmark
+    against yet. It is deliberately the smallest weight here so it can't
+    dominate category/brand affinity or the semantic embedding by
+    accident. All signal weights - not just this one - should be
+    re-benchmarked once the real `User_events` dataset is available (see
+    docs/data-mapping.md section 4).
     """
 
+    click_weight: float = 0.1
     purchase_weight: float = 0.45
     cart_weight: float = 0.25
     search_weight: float = 0.15

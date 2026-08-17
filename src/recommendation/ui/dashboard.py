@@ -27,6 +27,7 @@ from recommendation.ui.data_access import (
     category_distribution,
     format_chatbot_context,
     format_cart_items,
+    format_clicks,
     format_purchases,
     format_recommendation_table,
     format_searches,
@@ -60,6 +61,13 @@ def _render_engagement_signals(detail: UserDetail, product_lookup) -> None:
     col1, col2 = st.columns(2)
 
     with col1:
+        st.markdown("**Clicked products**")
+        clicks = format_clicks(detail.engagement, product_lookup)
+        if clicks:
+            st.dataframe(pd.DataFrame(clicks), hide_index=True, use_container_width=True)
+        else:
+            st.info("No click history for this user.")
+
         st.markdown("**Previous purchases**")
         purchases = format_purchases(detail.engagement, product_lookup)
         if purchases:

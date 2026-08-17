@@ -61,7 +61,8 @@ def load_user_detail(service: RecommendationService, user_id: int) -> UserDetail
         return None
 
     engagement = service.engagement_profiles.get(user_id) or build_engagement_profile(
-        user_id, service.bundle.users, service.bundle.purchases, service.bundle.cart, service.bundle.search, service.bundle.chatbot, service.bundle.reviews
+        user_id, service.bundle.users, service.bundle.purchases, service.bundle.cart, service.bundle.clicks,
+        service.bundle.search, service.bundle.chatbot, service.bundle.reviews
     )
     features = build_user_features(
         engagement, service.product_lookup, service.product_embeddings, service.config.features, text_embeddings=service.text_embeddings
@@ -93,6 +94,16 @@ def run_recommendations(service: RecommendationService, detail: UserDetail, top_
 
 
 # --- formatting: engagement signals -----------------------------------------
+
+def format_clicks(engagement: EngagementProfile, product_lookup: dict[int, Product]) -> list[dict]:
+    return [
+        {
+            "product_id": c.product_id,
+            "product_name": product_lookup[c.product_id].name if c.product_id in product_lookup else "(unknown product)",
+        }
+        for c in engagement.clicks
+    ]
+
 
 def format_purchases(engagement: EngagementProfile, product_lookup: dict[int, Product]) -> list[dict]:
     return [

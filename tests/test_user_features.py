@@ -4,6 +4,7 @@ import pytest
 from recommendation.data.schemas.engagement import (
     CartAffinityRecord,
     ChatbotContextRecord,
+    ClickRecord,
     EngagementProfile,
     PurchaseRecord,
     SearchRecord,
@@ -48,6 +49,7 @@ def test_no_history_user_has_empty_features_and_no_embedding():
     profile = EngagementProfile(user_id=1, profile=UserProfile(user_id=1))
     features = build_user_features(profile, _products(), _embeddings(), _config())
 
+    assert features.click_count == 0
     assert features.purchase_count == 0
     assert features.cart_item_count == 0
     assert features.search_count == 0
@@ -199,17 +201,62 @@ def test_exclude_product_ids_also_scrubs_chatbot_mentions_and_matched_searches()
     assert features.semantic_embedding is None
 
 
-def test_total_engagement_events_sums_all_four_signals():
+def test_total_engagement_events_sums_all_five_signals():
     profile = EngagementProfile(
         user_id=1,
         profile=UserProfile(user_id=1),
+        clicks=[ClickRecord(user_id=1, product_id=3)],
         purchases=[PurchaseRecord(user_id=1, product_id=1, order_id=1, quantity=1, unit_price=4.0)],
         cart_items=[CartAffinityRecord(user_id=1, product_id=2, quantity=1)],
         searches=[SearchRecord(user_id=1, search_term="milk")],
         chatbot_context=ChatbotContextRecord(user_id=1, summary="hi"),
     )
     features = build_user_features(profile, _products(), _embeddings(), _config())
-    assert features.total_engagement_events == 4  # 1 purchase + 1 cart + 1 search + 1 (chatbot presence)
+    assert features.total_engagement_events == 5  # 1 click + 1 purchase + 1 cart + 1 search + 1 (chatbot presence)
+
+
+# --- CLICK (fifth V1 signal) --------------------------------------------
+
+def test_click_contributes_to_category_and_brand_affinity():
+    profile = EngagementProfile(
+        user_id=1,
+        profile=UserProfile(user_id=1),
+        clicks=[ClickRecord(user_id=1, product_id=1)],
+    )
+    config = _config(click_weight=1.0)
+    features = build_user_features(profile, _products(), _embeddings(), config)
+    assert features.click_count == 1
+    assert features.category_affinity == {"Dairy & Eggs": pytest.approx(1.0)}
+    assert features.brand_affinity == {"GreenValley": pytest.approx(1.0)}
+
+
+def test_click_contributes_to_semantic_embedding_when_only_signal():
+    profile = EngagementProfile(
+        user_id=1,
+        profile=UserProfile(user_id=1),
+        clicks=[ClickRecord(user_id=1, product_id=2)],
+    )
+    features = build_user_features(profile, _products(), _embeddings(), _config(click_weight=0.1))
+    assert features.semantic_embedding is not None
+    assert np.allclose(features.semantic_embedding, _embeddings()[2])
+
+
+def test_exclude_product_ids_removes_target_leakage_from_clicks():
+    profile = EngagementProfile(
+        user_id=1,
+        profile=UserProfile(user_id=1),
+        clicks=[
+            ClickRecord(user_id=1, product_id=1),
+            ClickRecord(user_id=1, product_id=3),
+        ],
+    )
+    full = build_user_features(profile, _products(), _embeddings(), _config())
+    assert full.click_count == 2
+
+    leave_one_out = build_user_features(
+        profile, _products(), _embeddings(), _config(), exclude_product_ids=frozenset({1})
+    )
+    assert leave_one_out.click_count == 1
 
 
 def test_max_top_categories_truncates_and_renormalizes():

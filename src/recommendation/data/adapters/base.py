@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from recommendation.data.schemas.engagement import (
     CartAffinityRecord,
     ChatbotContextRecord,
+    ClickRecord,
     PurchaseRecord,
     ReviewRecord,
     SearchRecord,
@@ -74,6 +75,30 @@ class CartAdapter(ABC):
         ...
 
 
+class ClickAdapter(ABC):
+    """Fifth V1 engagement signal. No backend table distinct from the
+    future `User_events` activity log exists yet (docs/data-mapping.md
+    section 4) - V1 implementation is synthetic-only, matching
+    SearchAdapter/ChatbotContextAdapter; a real backend implementation
+    (`adapters.user_events_adapter.UserEventsAdapter`, filtering
+    `User_events` rows to `action_type == CLICK`) implements this same
+    interface.
+    """
+
+    @abstractmethod
+    def get_clicks(self, user_id: int) -> list[ClickRecord]: ...
+
+    @abstractmethod
+    def list_all_clicks(self) -> list[ClickRecord]:
+        """Catalog-wide click records, for aggregate features - mirrors
+        PurchaseAdapter/CartAdapter's `list_all_*` methods. Not currently
+        consumed by any product-level popularity feature (see
+        docs/data-mapping.md section 6); kept for interface symmetry and
+        so a future click-popularity feature needs no adapter change.
+        """
+        ...
+
+
 class ReviewAdapter(ABC):
     """Backed by ERD entity: Review (auxiliary ranking signal)."""
 
@@ -108,16 +133,21 @@ class ChatbotContextAdapter(ABC):
 
 @dataclass
 class AdapterBundle:
-    """The seven interfaces wired together. Feature engineering, models,
+    """The eight interfaces wired together. Feature engineering, models,
     the API, and the dashboard depend on this type - never on which
     concrete adapters (synthetic in-memory today, a real backend later)
-    populated it.
+    populated it. `build_synthetic_adapters` (factory.py) is today's only
+    producer; a future `build_user_events_adapters`
+    (`adapters.user_events_adapter`) backed by the real `User_events`
+    table is a drop-in replacement - no call site depending on
+    `AdapterBundle` needs to change.
     """
 
     products: ProductCatalogAdapter
     users: UserAdapter
     purchases: PurchaseAdapter
     cart: CartAdapter
+    clicks: ClickAdapter
     reviews: ReviewAdapter
     search: SearchAdapter
     chatbot: ChatbotContextAdapter

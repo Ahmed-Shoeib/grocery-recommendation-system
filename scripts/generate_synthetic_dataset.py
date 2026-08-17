@@ -29,6 +29,7 @@ def print_stats(dataset) -> None:
     n_order_items = len(dataset.order_items)
     n_cart_items = len(dataset.cart_items)
     n_reviews = len(dataset.reviews)
+    n_clicks = len(dataset.click_records)
     n_searches = len(dataset.search_records)
     n_chatbot = len(dataset.chatbot_records)
 
@@ -50,6 +51,7 @@ def print_stats(dataset) -> None:
     print(f"Orders:                {n_orders} ({n_order_items} order items)")
     print(f"Cart items:            {n_cart_items}")
     print(f"Reviews:               {n_reviews}")
+    print(f"Click records:         {n_clicks}")
     print(f"Search records:        {n_searches}")
     print(f"Chatbot context recs:  {n_chatbot} ({n_chatbot / n_users:.1%} of users)")
     print()

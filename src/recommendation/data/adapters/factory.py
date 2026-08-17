@@ -13,6 +13,7 @@ from __future__ import annotations
 from recommendation.data.adapters.base import AdapterBundle
 from recommendation.data.adapters.cart_adapter import InMemoryCartAdapter
 from recommendation.data.adapters.chatbot_adapter import SyntheticChatbotAdapter
+from recommendation.data.adapters.click_adapter import SyntheticClickAdapter
 from recommendation.data.adapters.product_adapter import InMemoryProductCatalogAdapter
 from recommendation.data.adapters.purchase_adapter import InMemoryPurchaseAdapter
 from recommendation.data.adapters.review_adapter import InMemoryReviewAdapter
@@ -32,6 +33,7 @@ def build_synthetic_adapters(dataset: SyntheticDataset, config: SyntheticDataCon
             dataset.orders, dataset.order_items, counted_statuses=set(config.order_counted_statuses)
         ),
         cart=InMemoryCartAdapter(dataset.carts, dataset.cart_items),
+        clicks=SyntheticClickAdapter(dataset.click_records),
         reviews=InMemoryReviewAdapter(dataset.reviews),
         search=SyntheticSearchAdapter(dataset.search_records),
         chatbot=SyntheticChatbotAdapter(dataset.chatbot_records),

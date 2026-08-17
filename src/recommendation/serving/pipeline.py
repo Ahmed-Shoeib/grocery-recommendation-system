@@ -334,7 +334,7 @@ def recommend(
     from recommendation.data.adapters.engagement import build_engagement_profile
 
     profile = build_engagement_profile(
-        user_id, bundle.users, bundle.purchases, bundle.cart, bundle.search, bundle.chatbot, bundle.reviews
+        user_id, bundle.users, bundle.purchases, bundle.cart, bundle.clicks, bundle.search, bundle.chatbot, bundle.reviews
     )
     user_features = build_user_features(profile, product_lookup, product_embeddings, config.features, text_embeddings=text_embeddings)
     return generate_recommendations(

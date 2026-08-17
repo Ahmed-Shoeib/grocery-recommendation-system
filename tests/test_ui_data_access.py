@@ -6,6 +6,7 @@ from recommendation.data.adapters.base import (
     AdapterBundle,
     CartAdapter,
     ChatbotContextAdapter,
+    ClickAdapter,
     ProductCatalogAdapter,
     PurchaseAdapter,
     ReviewAdapter,
@@ -15,6 +16,7 @@ from recommendation.data.adapters.base import (
 from recommendation.data.schemas.engagement import (
     CartAffinityRecord,
     ChatbotContextRecord,
+    ClickRecord,
     EngagementProfile,
     PurchaseRecord,
     SearchRecord,
@@ -31,6 +33,7 @@ from recommendation.ui.data_access import (
     category_distribution,
     format_cart_items,
     format_chatbot_context,
+    format_clicks,
     format_purchases,
     format_recommendation_table,
     format_searches,
@@ -87,6 +90,17 @@ class _FakeCart(CartAdapter):
         return self._by_user.get(user_id, [])
 
     def list_all_cart_items(self):
+        return [c for records in self._by_user.values() for c in records]
+
+
+class _FakeClicks(ClickAdapter):
+    def __init__(self, by_user=None):
+        self._by_user = by_user or {}
+
+    def get_clicks(self, user_id):
+        return self._by_user.get(user_id, [])
+
+    def list_all_clicks(self):
         return [c for records in self._by_user.values() for c in records]
 
 
@@ -147,6 +161,7 @@ def service() -> RecommendationService:
     }
     purchases = {1: [PurchaseRecord(user_id=1, product_id=100, order_id=0, quantity=2, unit_price=5.0, order_status="DELIVERED")]}
     cart = {1: [CartAffinityRecord(user_id=1, product_id=101, quantity=1)]}
+    clicks = {1: [ClickRecord(user_id=1, product_id=104)]}
     searches = {1: [SearchRecord(user_id=1, search_term="milk", matched_product_id=102), SearchRecord(user_id=1, search_term="cheap snacks")]}
     chatbot = {1: ChatbotContextRecord(user_id=1, summary="Looking for breakfast items", preferred_category="Cat0", mentioned_product_ids=[103], keywords=["breakfast", "quick"])}
 
@@ -155,6 +170,7 @@ def service() -> RecommendationService:
         users=_FakeUsers(profiles),
         purchases=_FakePurchases(purchases),
         cart=_FakeCart(cart),
+        clicks=_FakeClicks(clicks),
         reviews=_FakeReviews(),
         search=_FakeSearch(searches),
         chatbot=_FakeChatbot(chatbot),
@@ -166,7 +182,7 @@ def service() -> RecommendationService:
     )
 
     engagement_profiles = {
-        1: EngagementProfile(user_id=1, profile=profiles[1], purchases=purchases[1], cart_items=cart[1], searches=searches[1], chatbot_context=chatbot[1]),
+        1: EngagementProfile(user_id=1, profile=profiles[1], clicks=clicks[1], purchases=purchases[1], cart_items=cart[1], searches=searches[1], chatbot_context=chatbot[1]),
         2: EngagementProfile(user_id=2, profile=profiles[2]),
     }
 
@@ -238,6 +254,17 @@ def test_format_purchases_includes_product_name(service):
 def test_format_purchases_empty_for_no_history_user(service):
     detail = load_user_detail(service, 2)
     assert format_purchases(detail.engagement, service.product_lookup) == []
+
+
+def test_format_clicks(service):
+    detail = load_user_detail(service, 1)
+    rows = format_clicks(detail.engagement, service.product_lookup)
+    assert rows == [{"product_id": 104, "product_name": "Product 104"}]
+
+
+def test_format_clicks_empty_for_no_history_user(service):
+    detail = load_user_detail(service, 2)
+    assert format_clicks(detail.engagement, service.product_lookup) == []
 
 
 def test_format_cart_items(service):

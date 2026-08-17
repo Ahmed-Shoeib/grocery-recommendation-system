@@ -1,7 +1,7 @@
 """Persona -> product affinity scoring and weighted sampling.
 
-Shared by order, cart, search, and chatbot generation so all four V1
-signals are driven by the same underlying (noisy) user preference
+Shared by order, cart, click, search, and chatbot generation so all five
+V1 signals are driven by the same underlying (noisy) user preference
 structure - which is what makes them realistically correlated with each
 other, not just individually correlated with the persona.
 """

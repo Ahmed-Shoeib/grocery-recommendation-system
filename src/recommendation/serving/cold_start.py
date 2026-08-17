@@ -1,8 +1,8 @@
 """Three-level personalization/cold-start tiering (docs/data-mapping.md
 section 3, Phase 7). History strength = `UserFeatures
-.total_engagement_events` (count across the four V1 engagement signals:
-purchases, cart adds, searches, chatbot-context presence) - thresholded
-via `configs/base.yaml: cold_start.*`, never hard-coded.
+.total_engagement_events` (count across the five V1 engagement signals:
+clicks, purchases, cart adds, searches, chatbot-context presence) -
+thresholded via `configs/base.yaml: cold_start.*`, never hard-coded.
 """
 
 from __future__ import annotations

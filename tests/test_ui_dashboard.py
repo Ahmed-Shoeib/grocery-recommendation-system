@@ -16,6 +16,7 @@ from recommendation.data.adapters.base import (
     AdapterBundle,
     CartAdapter,
     ChatbotContextAdapter,
+    ClickAdapter,
     ProductCatalogAdapter,
     PurchaseAdapter,
     ReviewAdapter,
@@ -80,6 +81,14 @@ class _FakeCart(CartAdapter):
         return []
 
 
+class _FakeClicks(ClickAdapter):
+    def get_clicks(self, user_id):
+        return []
+
+    def list_all_clicks(self):
+        return []
+
+
 class _FakeReviews(ReviewAdapter):
     def get_reviews(self, user_id):
         return []
@@ -139,7 +148,7 @@ def _build_service() -> RecommendationService:
     }
     bundle = AdapterBundle(
         products=_FakeProducts(products), users=_FakeUsers(profiles), purchases=_FakePurchases(purchases),
-        cart=_FakeCart(), reviews=_FakeReviews(), search=_FakeSearch(), chatbot=_FakeChatbot(),
+        cart=_FakeCart(), clicks=_FakeClicks(), reviews=_FakeReviews(), search=_FakeSearch(), chatbot=_FakeChatbot(),
     )
     config = AppConfig(
         cold_start=ColdStartConfig(strong_history_min_signals=3, sparse_history_min_signals=1),

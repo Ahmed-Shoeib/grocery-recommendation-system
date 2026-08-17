@@ -1,8 +1,8 @@
 """User feature engineering from the canonical EngagementProfile.
 
-Combines the four V1 signals (previous purchases, add-to-cart behavior,
-searched items, chatbot context) plus the confirmed `preferredCategory`
-attribute into:
+Combines the five V1 signals (clicks, previous purchases, add-to-cart
+behavior, searched items, chatbot context) plus the confirmed
+`preferredCategory` attribute into:
 
   - `category_affinity` / `brand_affinity`: normalized distributions,
     blended across signals using `config.features.*_weight` (never
@@ -37,7 +37,22 @@ dropped from the semantic-embedding signal, and a chatbot record is
 dropped *entirely* (summary embedding included, not just the flagged
 mention) if it mentions an excluded product by id or by name in its
 summary text - rather than trying to salvage the "safe" remainder of that
-conversation.
+conversation. Clicks carry no free text at all (`ClickRecord`'s entire
+content IS the product reference, like `PurchaseRecord`/
+`CartAffinityRecord`), so excluding a product simply drops the matching
+click record(s) - no separate text-leakage heuristic is needed for it.
+
+CLICK is a newly-added signal (`config.features.click_weight`, currently
+a small, unbenchmarked placeholder - see `FeatureConfig` docstring). It
+deliberately does NOT introduce a new numeric input slot on the Two-Tower
+or ranker feature vectors (`retrieval.two_tower.feature_encoding`,
+`ranking.features`): those vectors have fixed dimensions baked into
+already-trained model artifacts, and adding a slot there would silently
+break loading them. Clicks instead flow only through the same
+vocabulary-/embedding-dimensioned features every other signal already
+uses (`category_affinity`, `brand_affinity`, `semantic_embedding`) and
+through `total_engagement_events` (an existing numeric slot whose *value*,
+not shape, now also reflects clicks) - see docs/data-mapping.md section 4.
 """
 
 from __future__ import annotations
@@ -69,12 +84,13 @@ class UserFeatures:
     has_preferred_category: bool
     has_age_group: bool
 
+    click_count: int
     purchase_count: int
     distinct_products_purchased: int
     cart_item_count: int
     search_count: int
     has_chatbot_context: bool
-    total_engagement_events: int  # sum of the four V1 signal event counts; Phase 7 thresholds this for cold-start tiering
+    total_engagement_events: int  # sum of the five V1 signal event counts; Phase 7 thresholds this for cold-start tiering
 
     category_affinity: dict[str, float] = field(default_factory=dict)
     brand_affinity: dict[str, float] = field(default_factory=dict)
@@ -111,7 +127,7 @@ def _normalize_text(text: str) -> str:
 
 
 def _text_mentions_excluded_product(
-    text: str, exclude_product_ids: frozenset[int], product_lookup: dict[int, Product]
+    text: str | None, exclude_product_ids: frozenset[int], product_lookup: dict[int, Product]
 ) -> bool:
     """Conservative (no-timestamp) leakage check: True if `text` contains
     an excluded product's name as a substring, even though it wasn't
@@ -165,6 +181,7 @@ def build_user_features(
     # excluded product's contribution to category/brand/embedding signals
     # is scrubbed. This is what makes leave-one-out correct without also
     # fabricating a different search/chatbot interaction history.
+    clicks = [c for c in profile.clicks if c.product_id not in exclude_product_ids]
     purchases = [p for p in profile.purchases if p.product_id not in exclude_product_ids]
     cart_items = [c for c in profile.cart_items if c.product_id not in exclude_product_ids]
     searches = profile.searches
@@ -195,6 +212,15 @@ def build_user_features(
     # --- category / brand affinity -----------------------------------
     category_counts: Counter[str] = Counter()
     brand_counts: Counter[str] = Counter()
+
+    for cl in clicks:
+        product = product_lookup.get(cl.product_id)
+        if product is None:
+            continue
+        if product.category_name:
+            category_counts[product.category_name] += config.click_weight
+        if product.brand:
+            brand_counts[product.brand] += config.click_weight
 
     for p in purchases:
         product = product_lookup.get(p.product_id)
@@ -245,6 +271,7 @@ def build_user_features(
     brand_affinity = _normalize_and_truncate(brand_counts, config.max_top_brands)
 
     # --- semantic embedding --------------------------------------------
+    click_vectors = [product_embeddings[cl.product_id] for cl in clicks if cl.product_id in product_embeddings]
     purchase_vectors = [product_embeddings[p.product_id] for p in purchases if p.product_id in product_embeddings]
     cart_vectors = [product_embeddings[c.product_id] for c in cart_items if c.product_id in product_embeddings]
     search_vectors = [
@@ -261,6 +288,8 @@ def build_user_features(
         chatbot_vectors.append(text_embeddings[chatbot.summary])
 
     components: list[tuple[np.ndarray, float]] = []
+    if click_vectors:
+        components.append((np.mean(click_vectors, axis=0), config.click_weight))
     if purchase_vectors:
         components.append((np.mean(purchase_vectors, axis=0), config.purchase_weight))
     if cart_vectors:
@@ -272,7 +301,7 @@ def build_user_features(
 
     semantic_embedding = _weighted_average(components)
 
-    total_events = len(purchases) + len(cart_items) + len(searches) + (1 if chatbot is not None else 0)
+    total_events = len(clicks) + len(purchases) + len(cart_items) + len(searches) + (1 if chatbot is not None else 0)
 
     return UserFeatures(
         user_id=profile.user_id,
@@ -280,6 +309,7 @@ def build_user_features(
         age_group=profile.profile.age_group,
         has_preferred_category=profile.profile.preferred_category is not None,
         has_age_group=profile.profile.age_group is not None,
+        click_count=len(clicks),
         purchase_count=len(purchases),
         distinct_products_purchased=len({p.product_id for p in purchases}),
         cart_item_count=len(cart_items),

@@ -2,14 +2,17 @@ import pytest
 from pydantic import ValidationError
 
 from recommendation.data.schemas import (
+    ActionType,
     CartAffinityRecord,
     Category,
     ChatbotContextRecord,
+    ClickRecord,
     EngagementProfile,
     Product,
     PurchaseRecord,
     ReviewRecord,
     SearchRecord,
+    UserInteraction,
     UserProfile,
 )
 
@@ -52,8 +55,28 @@ def test_chatbot_context_record_matches_prompt_example_shape():
     assert record.source == "synthetic"
 
 
+def test_click_record_defaults():
+    record = ClickRecord(user_id=1, product_id=5)
+    assert record.source == "synthetic"
+    assert record.action_time is None
+
+
+def test_action_type_has_five_values():
+    assert {a.value for a in ActionType} == {"CLICK", "ADD_TO_CART", "PURCHASE", "SEARCH", "CHATBOT"}
+
+
+def test_user_interaction_requires_product_id_and_defaults_action_time_to_none():
+    event = UserInteraction(user_id=1, product_id=5, action_type=ActionType.CLICK)
+    assert event.product_id == 5
+    assert event.action_time is None
+
+    with pytest.raises(ValidationError):
+        UserInteraction(user_id=1, action_type=ActionType.CLICK)  # missing product_id
+
+
 def test_engagement_profile_defaults_to_empty_history():
     profile = EngagementProfile(user_id=1, profile=UserProfile(user_id=1))
+    assert profile.clicks == []
     assert profile.purchases == []
     assert profile.cart_items == []
     assert profile.searches == []
@@ -61,16 +84,18 @@ def test_engagement_profile_defaults_to_empty_history():
     assert profile.reviews == []
 
 
-def test_engagement_profile_aggregates_all_four_v1_signals():
+def test_engagement_profile_aggregates_all_five_v1_signals():
     profile = EngagementProfile(
         user_id=1,
         profile=UserProfile(user_id=1, preferred_category="Dairy", age_group="35-44"),
+        clicks=[ClickRecord(user_id=1, product_id=12)],
         purchases=[PurchaseRecord(user_id=1, product_id=10, order_id=100, quantity=2, unit_price=4.0)],
         cart_items=[CartAffinityRecord(user_id=1, product_id=11, quantity=1)],
         searches=[SearchRecord(user_id=1, search_term="greek yogurt")],
         chatbot_context=ChatbotContextRecord(user_id=1, preferred_category="Dairy"),
         reviews=[ReviewRecord(user_id=1, product_id=10, rating=4.5)],
     )
+    assert len(profile.clicks) == 1
     assert len(profile.purchases) == 1
     assert len(profile.cart_items) == 1
     assert len(profile.searches) == 1

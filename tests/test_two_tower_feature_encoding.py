@@ -59,7 +59,7 @@ def _product_features(**overrides) -> ProductFeatures:
 def _user_features(**overrides) -> UserFeatures:
     defaults = dict(
         user_id=1, preferred_category="Snacks", age_group="25-34", has_preferred_category=True, has_age_group=True,
-        purchase_count=3, distinct_products_purchased=3, cart_item_count=1, search_count=2, has_chatbot_context=False,
+        click_count=0, purchase_count=3, distinct_products_purchased=3, cart_item_count=1, search_count=2, has_chatbot_context=False,
         total_engagement_events=6, category_affinity={"Snacks": 0.7, "Dairy & Eggs": 0.3}, brand_affinity={"SnackWorks": 1.0},
         semantic_embedding=np.ones(8, dtype=np.float32),
     )

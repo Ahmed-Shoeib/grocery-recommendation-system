@@ -69,6 +69,12 @@ def validate_dataset(dataset: SyntheticDataset) -> list[str]:
         if review.product_id not in product_ids:
             issues.append(f"Review {review.id} has dangling product_id {review.product_id}")
 
+    for record in dataset.click_records:
+        if record.user_id not in user_ids:
+            issues.append(f"ClickRecord for user {record.user_id} has dangling user_id")
+        if record.product_id not in product_ids:
+            issues.append(f"ClickRecord for user {record.user_id} has dangling product_id {record.product_id}")
+
     for record in dataset.search_records:
         if record.user_id not in user_ids:
             issues.append(f"SearchRecord for user {record.user_id} has dangling user_id")
