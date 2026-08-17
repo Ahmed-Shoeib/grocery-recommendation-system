@@ -33,6 +33,12 @@ class PathsConfig(BaseModel):
     data_processed: str = "data/processed"
     data_synthetic: str = "data/synthetic"
     models_dir: str = "models"
+    # Backend-shaped synthetic integration/experimentation dataset (see
+    # scripts/generate_backend_shaped_sqlite.py) - read-only, never the
+    # live serving data source in V1. Default consumed by
+    # adapters.sqlite_factory.build_sqlite_adapters when no explicit path
+    # is passed.
+    data_sqlite: str = "data/sqlite/backend_shaped_synthetic.db"
 
 
 class SyntheticDataConfig(BaseModel):

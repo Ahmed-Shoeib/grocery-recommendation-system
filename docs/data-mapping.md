@@ -250,6 +250,79 @@ V1 feature engineering does NOT derive any recency/decay signal from these
 timestamps, and this architecture change does not add one - only
 preservation, not consumption, changed.
 
+### SQLite integration: `data/sqlite/backend_shaped_synthetic.db`
+
+**This database is entirely SYNTHETIC - not real user or purchase data,
+and no documentation should ever describe it as such.** It is a
+deterministic, backend-ERD-shaped SQLite database (`scripts
+.generate_backend_shaped_sqlite.py`, `scripts.validate_backend_shaped_sqlite.py`)
+built to mirror the confirmed backend contract above as closely as
+possible: 1,000 users, 1,200 products, and a genuine row-per-action
+`User_events` table (all five action types, all product-resolved,
+individually timestamped) - replacing an earlier-inspected POC
+(`ecommerce.db`) that used a pre-aggregated, non-conforming activity table
+and is kept only as an untouched historical reference, not integrated.
+
+`recommendation.data.adapters.sqlite_factory.build_sqlite_adapters` is the
+adapter path for this source - the SQLite counterpart of
+`adapters.factory.build_synthetic_adapters`, returning the exact same
+`AdapterBundle` type:
+
+```
+data/sqlite/backend_shaped_synthetic.db
+    -> recommendation.data.sqlite.loader (SQL -> RawCategory/RawProduct/
+       RawUser/RawReview/UserInteraction - the SAME raw/canonical models
+       the synthetic generator path already produces)
+    -> InMemoryProductCatalogAdapter / InMemoryUserAdapter /
+       InMemoryReviewAdapter (reused as-is, just fed SQLite rows) +
+       UserEventsAdapter (reused as-is, fed the loaded UserInteraction list)
+    -> AdapterBundle  (identical interface to the synthetic path)
+    -> EngagementProfile -> feature engineering -> Two-Tower -> ranker -> serving
+```
+
+No new adapter *classes* were needed - only the SQL-to-Raw-object mapping
+in `data.sqlite.loader`. Access is read-only (`data.sqlite.connection
+.open_readonly_connection`, SQLite `mode=ro` URI - verified to actually
+reject writes, not just a naming convention); this dataset must never be
+mutated by the recommender.
+
+**Purchase/cart authoritative source (avoiding double-counting):**
+`User_events` (`action_type = PURCHASE` / `ADD_TO_CART`) is the sole
+engagement-truth source consumed by this adapter path. `data.sqlite.loader`
+never queries `Cart`/`Cart_Item` or `"Order"`/`Order_Item` at all -
+those tables exist in the database (kept relationally consistent with
+`User_events` by the generator, see `scripts
+.generate_backend_shaped_sqlite.py`'s module docstring) but are simply
+never read here, so double-counting is structurally impossible, not just
+avoided by convention.
+
+**Configuration:** `config.paths.data_sqlite` (default
+`data/sqlite/backend_shaped_synthetic.db`) - `build_sqlite_adapters(db_path=None)`
+falls back to this when no explicit path is passed, following the
+existing `paths.*` config pattern rather than introducing a new
+"data source" abstraction. This is an integration/experimentation path
+only in this phase - the live API/dashboard service
+(`api.dependencies.build_recommendation_service`) still uses the
+synthetic path exclusively; nothing about which source serves live
+requests changed here.
+
+**Status of price/timestamp readiness (see the SQLite inspection report
+from this phase, not reproduced here):** `Product.Price`/`SalePrice`/
+`DiscountPercentage` are correctly exposed through the canonical `Product`
+schema, but no price-aware feature consumes them yet. `action_time` is
+parsed into real `datetime` values and survives the adapter boundary
+exactly as it does for the synthetic path, but is likewise not consumed
+for recency/temporal-splitting/time-of-day purposes yet - both remain
+explicitly deferred, matching §7/§12's existing scope boundary.
+
+**Future real backend integration:** per this section's flow above,
+swapping this database for a real backend DB/API means writing a new
+`build_<real>_adapters` factory (or updating `data.sqlite.loader`'s SQL if
+the real backend also happens to be SQLite/SQL-compatible) - it does not
+mean touching `EngagementProfile`, feature engineering, Two-Tower, the
+ranker, or serving. The adapter boundary is exactly where this integration
+was designed to absorb that change.
+
 ## 5. Eligibility / business rules - hard PRE-retrieval gate + final validation
 
 **Revised 2026-08-16** (mentor-reviewed architecture change, supersedes
@@ -633,7 +706,7 @@ genuinely temporal held-out split instead of this content-based heuristic.
 |---|---|
 | §2 UserProfile fields | Phase 2 |
 | §3 Cold-start tiers | Phase 7 (four signals) / User_events contract change (five signals, click added) |
-| §4 Click/Search/Chatbot adapters; `User_events` contract, `UserInteraction`, `UserEventsAdapter` | Phase 2 (search/chatbot synthetic adapters) / User_events contract change (click signal + synthetic adapter, `UserInteraction` canonical event, `UserEventsAdapter` future real-backend adapter, action_time preservation) |
+| §4 Click/Search/Chatbot adapters; `User_events` contract, `UserInteraction`, `UserEventsAdapter` | Phase 2 (search/chatbot synthetic adapters) / User_events contract change (click signal + synthetic adapter, `UserInteraction` canonical event, `UserEventsAdapter` future real-backend adapter, action_time preservation) / SQLite integration phase (`backend_shaped_synthetic.db`, `adapters.sqlite_factory.build_sqlite_adapters`, `data.sqlite.*`) |
 | §5 Eligibility/business rules policy (hard pre-retrieval gate + final lightweight validation) | Phase 7 (policy interface, originally applied last) / Phase 11 (moved to a hard pre-retrieval gate, mentor-reviewed) |
 | §6 Popularity | Phase 2 (data) / Phase 7 (fallback ranking) |
 | §8 Offline evaluation | Phase 4 (Recall/HitRate) / Phase 5 (latency) / Phase 6 (Precision/NDCG/MRR) / Phase 7 (coverage/diversity/duplicate/fill-rate/cold-start/pipeline latency) / Phase 8 (HTTP end-to-end latency) |

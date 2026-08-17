@@ -22,6 +22,10 @@ paths:
   data_processed: "data/processed"
   data_synthetic: "data/synthetic"
   models_dir: "models"
+  # Backend-shaped synthetic integration dataset (see
+  # scripts/generate_backend_shaped_sqlite.py) - read-only, not the live
+  # serving data source in V1.
+  data_sqlite: "data/sqlite/backend_shaped_synthetic.db"
 
 # Phase 2 synthetic dataset generation.
 synthetic_data:

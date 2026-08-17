@@ -21,6 +21,7 @@ paths:
   data_processed: "data/processed"
   data_synthetic: "data/synthetic"
   models_dir: "models"
+  data_sqlite: "data/sqlite/backend_shaped_synthetic.db"
 
 # Phase 2 synthetic dataset generation.
 synthetic_data:
@@ -50,6 +51,9 @@ synthetic_data:
 
   review_prob: 0.35
 
+  click_count_lambda: 4.0
+  click_max_count: 15
+
   search_count_lambda: 2.5
   search_max_count: 10
   search_product_term_prob: 0.7
@@ -72,6 +76,7 @@ embedding:
 
 # Phase 3: user/product feature engineering weights.
 features:
+  click_weight: 0.1
   purchase_weight: 0.45
   cart_weight: 0.25
   search_weight: 0.15

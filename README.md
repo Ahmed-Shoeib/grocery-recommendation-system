@@ -426,9 +426,9 @@ Summarized here; full rationale for each in `docs/data-mapping.md` and
 ### How the real backend will replace synthetic adapters
 
 Every model/feature/serving component depends on the `AdapterBundle`
-interface (`src/recommendation/data/adapters/base.py`) - seven ABCs
+interface (`src/recommendation/data/adapters/base.py`) - eight ABCs
 (`ProductCatalogAdapter`, `UserAdapter`, `PurchaseAdapter`,
-`CartAdapter`, `ReviewAdapter`, `SearchAdapter`,
+`CartAdapter`, `ClickAdapter`, `ReviewAdapter`, `SearchAdapter`,
 `ChatbotContextAdapter`) - never on the fact that
 `data.adapters.factory.build_synthetic_adapters` currently populates
 them from in-memory synthetic data. Pointing the system at the real
@@ -437,6 +437,16 @@ returning the same `AdapterBundle` from real SQL/API calls, then swap
 the one call site (`scripts/*.py`, `api.dependencies
 .build_recommendation_service`) - no change to features, models,
 ranking, re-ranking, eligibility, the API, or the dashboard.
+
+This pattern is no longer just theoretical: `data.adapters.sqlite_factory
+.build_sqlite_adapters` is a second, working `AdapterBundle` factory,
+reading the backend-ERD-shaped, entirely-synthetic
+`data/sqlite/backend_shaped_synthetic.db` (`scripts
+.generate_backend_shaped_sqlite.py`) instead of the in-memory generators -
+see `docs/data-mapping.md` §4's "SQLite integration" subsection for the
+full mapping. It is an integration/experimentation path, not (yet) the
+live API/dashboard data source, and it is read-only by construction. A
+real backend factory would follow the exact same shape.
 
 ## Development phases
 
