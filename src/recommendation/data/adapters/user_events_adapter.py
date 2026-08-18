@@ -149,13 +149,21 @@ class UserEventsAdapter(ClickAdapter, PurchaseAdapter, CartAdapter, SearchAdapte
     # CHATBOT row for this user becomes one entry in mentioned_product_ids.
     # No summary/keywords/preferred_category/product_interest text exists
     # in User_events, so those stay at their schema defaults (None/[]).
+    # `action_time` is set to the MOST RECENT resolved mention's timestamp
+    # (see `ChatbotContextRecord` docstring) - `None` only if every mention
+    # somehow lacks a timestamp, which never happens for real User_events
+    # rows but is handled defensively for a malformed/test input.
 
     def get_chatbot_context(self, user_id: int) -> ChatbotContextRecord | None:
         events = self._for_user(user_id, ActionType.CHATBOT)
         if not events:
             return None
+        times = [e.action_time for e in events if e.action_time is not None]
         return ChatbotContextRecord(
-            user_id=user_id, mentioned_product_ids=[e.product_id for e in events], source=_SOURCE
+            user_id=user_id,
+            mentioned_product_ids=[e.product_id for e in events],
+            source=_SOURCE,
+            action_time=max(times) if times else None,
         )
 
 

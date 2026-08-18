@@ -109,6 +109,22 @@ class EmbeddingConfig(BaseModel):
     encode_batch_size: int = 32
 
 
+class RecencyConfig(BaseModel):
+    """Configures the exponential half-life recency decay applied inside
+    feature construction (`features.recency.effective_weight`) -
+    `effective_weight = signal_weight * 0.5 ** (age_days / half_life_days)`.
+    See `FeatureConfig` and docs/data-mapping.md section 14.
+
+    `half_life_days=21` (three weeks) is an initial, explicitly
+    unbenchmarked baseline chosen for grocery's typical weekly/biweekly
+    replenishment cadence, not a tuned value - it should be re-evaluated
+    once real usage data is available, exactly like `click_weight` below.
+    """
+
+    enabled: bool = True
+    half_life_days: float = 21.0
+
+
 class FeatureConfig(BaseModel):
     """Weights for blending the five V1 engagement signals (+ the confirmed
     preferredCategory attribute) into user category/brand affinity
@@ -134,6 +150,8 @@ class FeatureConfig(BaseModel):
 
     max_top_categories: int = 5
     max_top_brands: int = 5
+
+    recency: RecencyConfig = Field(default_factory=RecencyConfig)
 
 
 class TwoTowerConfig(BaseModel):

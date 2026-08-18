@@ -11,13 +11,15 @@ source distinction.
 Raw timestamp fields (`order_created_at`, `review_created_at`,
 `action_time`) are kept where a source actually has them (ERD
 Order.CreationDate/Review.CreationDate, or `User_events.action_time`) so
-the canonical schema doesn't lie about what the backend provides, but per
-the V1 scope decision (docs/data-mapping.md, section 1/7) feature
-engineering must not derive recency/time-decay signals from them. They
-exist here purely so a future V2 recency feature doesn't require a schema
-change. The synthetic V1 generators for click/cart/search do not produce
-real timestamps (there's nothing to derive them from), so `action_time`
-is `None` on synthetic-sourced records; a `UserEventsAdapter`-sourced
+the canonical schema doesn't lie about what the backend provides. As of
+this phase, feature engineering (`features.user_features`) DOES derive a
+recency/time-decay weight from these fields where present - see
+`features.recency` and docs/data-mapping.md section 14 - superseding the
+earlier V1 scope decision (section 1/7) that deferred this. The synthetic
+V1 generators for click/cart/search do not produce real timestamps
+(there's nothing to derive them from), so `action_time` is `None` on
+synthetic-sourced records - these fall back to a neutral (unweighted)
+recency contribution rather than being dropped; a `UserEventsAdapter`-sourced
 record always populates it from `UserInteraction.action_time`
 (`data.schemas.events`).
 """
@@ -123,11 +125,13 @@ class ChatbotContextRecord(BaseModel):
     Known V1 simplification: this stays a single aggregated record per
     user (matching the existing synthetic shape), not a list of one
     record per resolved mention, so an individual mention's `action_time`
-    isn't preserved here even for `User_events`-sourced data. Nothing
-    downstream currently needs per-mention chatbot timestamps (V1 doesn't
-    do recency/sequence modeling at all - see docs/data-mapping.md section
-    7/12); if that's ever needed, this record would need to become a list
-    of single-mention records at that time.
+    isn't preserved here even for `User_events`-sourced data - only the
+    MOST RECENT resolved-mention timestamp for this user is kept (`action_time`
+    below), used exclusively for recency-weighting the chatbot signal's
+    whole contribution as one group (docs/data-mapping.md section 14); it
+    is not per-mention recency. If per-mention chatbot recency is ever
+    needed, this record would need to become a list of single-mention
+    records at that time.
     """
 
     user_id: int
@@ -137,6 +141,11 @@ class ChatbotContextRecord(BaseModel):
     summary: str | None = None
     keywords: list[str] = Field(default_factory=list)
     source: str = "synthetic"
+    # Most recent CHATBOT resolution `action_time` for this user; `None`
+    # for the synthetic generator (no timestamp to draw from) - see class
+    # docstring and `features.recency.effective_weight`'s missing-
+    # timestamp fallback.
+    action_time: datetime | None = None
 
 
 class ReviewRecord(BaseModel):

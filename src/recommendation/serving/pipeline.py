@@ -330,13 +330,24 @@ def recommend(
     `recommend(user_id, limit, context=None)` shape: looks up the user's
     full engagement history (no exclusion - this is live serving, not
     leave-one-out evaluation) and runs `generate_recommendations`.
+
+    Recency (docs/data-mapping.md section 14) is opt-in per
+    `build_user_features` call (`features.user_features` docstring) - this
+    is the live-request boundary, so it explicitly supplies
+    `reference_time=datetime.now()` (wall-clock "now" is legitimate here,
+    unlike in offline evaluation or the non-temporal training path).
     """
+    from datetime import datetime
+
     from recommendation.data.adapters.engagement import build_engagement_profile
 
     profile = build_engagement_profile(
         user_id, bundle.users, bundle.purchases, bundle.cart, bundle.clicks, bundle.search, bundle.chatbot, bundle.reviews
     )
-    user_features = build_user_features(profile, product_lookup, product_embeddings, config.features, text_embeddings=text_embeddings)
+    user_features = build_user_features(
+        profile, product_lookup, product_embeddings, config.features,
+        text_embeddings=text_embeddings, reference_time=datetime.now(),
+    )
     return generate_recommendations(
         user_features, product_features, product_embeddings, all_item_ids, tt_encoder, user_tower, ranker_model, vector_index, config, limit
     )

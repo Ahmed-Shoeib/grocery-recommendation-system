@@ -85,6 +85,12 @@ features:
   max_top_categories: 5
   max_top_brands: 5
 
+  # Recency (time-decay) weighting - see docs/data-mapping.md section 14
+  # and the matching comment in configs/base.yaml.
+  recency:
+    enabled: true
+    half_life_days: 21.0
+
 # Phase 4: Two-Tower retrieval model.
 two_tower:
   projection_dims: [256, 128]

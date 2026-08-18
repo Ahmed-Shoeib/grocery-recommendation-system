@@ -93,6 +93,19 @@ features:
   max_top_categories: 5
   max_top_brands: 5
 
+  # Recency (time-decay) weighting - see docs/data-mapping.md section 14.
+  # effective_weight = signal_weight * 0.5 ** (age_days / half_life_days).
+  # half_life_days=21 (three weeks) is an initial, explicitly unbenchmarked
+  # baseline for grocery's weekly/biweekly replenishment cadence - chosen
+  # by inspection of the SQLite dataset's ~7-month (Jan 15 - Aug 17) event
+  # span, not tuned against real usage data. Only events that actually
+  # carry a real action_time (the User_events/SQLite-sourced path) are
+  # ever decayed - the old timestamp-less ERD synthetic signals fall back
+  # to a neutral weight (see features.recency.effective_weight).
+  recency:
+    enabled: true
+    half_life_days: 21.0
+
 # Phase 4: Two-Tower retrieval model.
 two_tower:
   projection_dims: [256, 128]

@@ -17,6 +17,12 @@ def test_load_config_defaults():
     assert config.retrieval.backend in ("faiss", "scann")
 
 
+def test_recency_config_defaults():
+    config = load_config()
+    assert config.features.recency.enabled is True
+    assert config.features.recency.half_life_days == 21.0
+
+
 def test_cold_start_sparse_blend_sums_to_one():
     config = load_config()
     blend = config.cold_start.sparse_blend

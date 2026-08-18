@@ -15,10 +15,24 @@ behavior, searched items, chatbot context) plus the confirmed
     user's history mean semantically" in the same space the Item Tower
     already operates in.
 
-No recency: purchases/cart/search/chatbot are aggregated as unweighted-by-
-time counts/means (docs/data-mapping.md section 1/7) - `age_group` is
-carried through as an opaque label, never given hard-coded semantics
-(section 2).
+Recency weighting (docs/data-mapping.md section 14): every per-event
+contribution to `category_affinity`/`brand_affinity`/`semantic_embedding`
+is scaled by `features.recency.effective_weight(base_signal_weight,
+event_time, reference_time, config.recency)` -
+`effective_weight = signal_weight * 0.5 ** (age_days / half_life_days)` -
+so a more recent interaction contributes more strongly than an equally-
+weighted older one, without deleting old history. `reference_time` is the
+point in time recency is measured against - the caller-supplied
+evaluation cutoff for offline (temporal future-purchase) evaluation, or
+"now" for live serving - see `build_user_features`'s docstring. An event
+with no timestamp (the old ERD-based synthetic generators for click/cart/
+search/chatbot) falls back to a neutral (unweighted) contribution rather
+than being dropped - see `features.recency.effective_weight`. Raw event
+*counts* (`click_count`, `purchase_count`, `total_engagement_events`, ...)
+are NEVER recency-weighted - they stay exact historical counts so cold-
+start tiering (`serving.cold_start`) keeps meaning "how much history does
+this user have," not "how much RECENT history." `age_group` is carried
+through as an opaque label, never given hard-coded semantics (section 2).
 
 Target-leakage guard: `exclude_product_ids` lets a caller building a
 (user, candidate_product) training example (Phase 4) strip that
@@ -59,12 +73,14 @@ from __future__ import annotations
 
 from collections import Counter
 from dataclasses import dataclass, field
+from datetime import datetime
 
 import numpy as np
 
 from recommendation.data.schemas.engagement import EngagementProfile, SearchRecord
 from recommendation.data.schemas.product import Product
-from recommendation.utils.config import FeatureConfig
+from recommendation.features.recency import effective_weight
+from recommendation.utils.config import FeatureConfig, RecencyConfig
 
 
 @dataclass
@@ -108,10 +124,15 @@ def _normalize_and_truncate(counts: Counter, top_k: int) -> dict[str, float]:
 
 
 def _weighted_average(components: list[tuple[np.ndarray, float]]) -> np.ndarray | None:
-    """Weighted average over only the signal components a user actually
-    has data for (missing signals are omitted, not zero-padded), so a
-    user with only a chatbot summary isn't diluted toward a zero vector
-    for the purchase/cart/search components they lack.
+    """Weighted average over only the (vector, effective_weight) components
+    a user actually has data for (missing signals contribute zero
+    components, not a zero-padded placeholder), so a user with only a
+    chatbot summary isn't diluted toward a zero vector for the purchase/
+    cart/search components they lack. Generic over what one "component"
+    represents - see `_signal_embedding_component` below, which is what
+    turns a whole signal's (product-embedding, event_time) pairs into the
+    single recency-weighted `(vector, effective_signal_weight)` component
+    this function actually consumes.
     """
     present = [(vec, w) for vec, w in components if w > 0]
     if not present:
@@ -120,6 +141,50 @@ def _weighted_average(components: list[tuple[np.ndarray, float]]) -> np.ndarray 
     weights = np.array([w for _, w in present], dtype=np.float64)
     weights = weights / weights.sum()
     return (vectors * weights[:, None]).sum(axis=0).astype(np.float32)
+
+
+def _signal_embedding_component(
+    vectors_with_times: list[tuple[np.ndarray, datetime | None]],
+    base_weight: float,
+    reference_time: datetime | None,
+    recency_config: RecencyConfig,
+) -> tuple[np.ndarray, float] | None:
+    """Turns one signal's per-event `(product/text vector, event_time)`
+    pairs into a single `_weighted_average` component:
+    `(recency-weighted mean vector, effective_signal_weight)`.
+
+    Two separate uses of recency, deliberately kept distinct:
+      - CONTENT: the mean vector is itself a per-event recency-weighted
+        average, so which particular items dominate the signal's blended
+        vector shifts toward recently-interacted ones (docs/data-mapping.md
+        section 14's "recent Coffee CLICK should contribute more" example).
+      - MAGNITUDE: `effective_signal_weight = base_weight * mean(per-event
+        recency weights)` - the AVERAGE (not sum) of this signal's
+        per-event recency weights, so this signal's overall blend weight
+        shifts toward `base_weight` when its history is fresh and shrinks
+        when it's stale, WITHOUT becoming sensitive to how many events the
+        signal has (an average is invariant to event count, matching the
+        pre-recency behavior where one component == one fixed
+        `base_weight` regardless of event volume - see `_weighted_average`
+        docstring). When recency is disabled, or every event in this
+        signal has no timestamp, every per-event weight is exactly 1.0, so
+        this reduces to the original plain-mean-of-vectors /
+        `component_weight=base_weight` behavior byte-for-byte.
+    """
+    if not vectors_with_times:
+        return None
+    weights = np.array(
+        [effective_weight(1.0, t, reference_time, recency_config) for _, t in vectors_with_times],
+        dtype=np.float64,
+    )
+    vectors = np.stack([v for v, _ in vectors_with_times])
+    weight_sum = weights.sum()
+    if weight_sum <= 0:
+        mean_vector = vectors.mean(axis=0)
+    else:
+        mean_vector = (vectors * (weights / weight_sum)[:, None]).sum(axis=0)
+    effective_signal_weight = base_weight * float(weights.mean())
+    return mean_vector.astype(np.float32), effective_signal_weight
 
 
 def _normalize_text(text: str) -> str:
@@ -169,7 +234,34 @@ def build_user_features(
     config: FeatureConfig,
     text_embeddings: dict[str, np.ndarray] | None = None,
     exclude_product_ids: frozenset[int] = frozenset(),
+    reference_time: datetime | None = None,
 ) -> UserFeatures:
+    """`reference_time` is the point in time recency (`config.recency`) is
+    measured against - see `features.recency` and docs/data-mapping.md
+    section 14. Recency is strictly OPT-IN per call: omitting
+    `reference_time` (the default) makes every recency-weighted
+    contribution neutral (`effective_weight == base_weight`), regardless
+    of `config.recency.enabled` - see `features.recency.effective_weight`.
+    There is no implicit wall-clock fallback here.
+
+      - Offline (temporal future-purchase) evaluation: the caller MUST
+        pass the evaluation cutoff (e.g.
+        `evaluation.temporal_future_purchase.TemporalUserSplit.val_cutoff`/
+        `test_cutoff`) - the profile passed in is already point-in-time
+        truncated to that same cutoff
+        (`build_point_in_time_engagement_profile`), and passing anything
+        else here would let recency be computed relative to a time the
+        evaluation example isn't supposed to know about.
+      - Live serving: the request boundary (`serving.pipeline`) passes
+        `datetime.now()` explicitly.
+      - The pre-existing, non-temporal leave-one-out training path
+        (`retrieval.two_tower.examples`, `ranking.examples`) deliberately
+        never passes `reference_time` - those per-training-example calls
+        have no natural per-example "now," and recency must not silently
+        introduce wall-clock-relative drift into a protocol with no
+        temporal semantics of its own (this was caught by a training
+        pipeline regression test - see git history for this phase).
+    """
     text_embeddings = text_embeddings or {}
 
     # Leave-one-out exclusion rule: a PurchaseRecord/CartAffinityRecord's
@@ -217,28 +309,31 @@ def build_user_features(
         product = product_lookup.get(cl.product_id)
         if product is None:
             continue
+        w = effective_weight(config.click_weight, cl.action_time, reference_time, config.recency)
         if product.category_name:
-            category_counts[product.category_name] += config.click_weight
+            category_counts[product.category_name] += w
         if product.brand:
-            brand_counts[product.brand] += config.click_weight
+            brand_counts[product.brand] += w
 
     for p in purchases:
         product = product_lookup.get(p.product_id)
         if product is None:
             continue
+        w = effective_weight(config.purchase_weight, p.order_created_at, reference_time, config.recency) * p.quantity
         if product.category_name:
-            category_counts[product.category_name] += config.purchase_weight * p.quantity
+            category_counts[product.category_name] += w
         if product.brand:
-            brand_counts[product.brand] += config.purchase_weight * p.quantity
+            brand_counts[product.brand] += w
 
     for c in cart_items:
         product = product_lookup.get(c.product_id)
         if product is None:
             continue
+        w = effective_weight(config.cart_weight, c.action_time, reference_time, config.recency) * c.quantity
         if product.category_name:
-            category_counts[product.category_name] += config.cart_weight * c.quantity
+            category_counts[product.category_name] += w
         if product.brand:
-            brand_counts[product.brand] += config.cart_weight * c.quantity
+            brand_counts[product.brand] += w
 
     for s in searches:
         signal_product_id = _search_signal_product_id(s)
@@ -247,57 +342,81 @@ def build_user_features(
         product = product_lookup.get(signal_product_id)
         if product is None:
             continue
+        w = effective_weight(config.search_weight, s.action_time, reference_time, config.recency)
         if product.category_name:
-            category_counts[product.category_name] += config.search_weight
+            category_counts[product.category_name] += w
         if product.brand:
-            brand_counts[product.brand] += config.search_weight
+            brand_counts[product.brand] += w
 
     if chatbot is not None and not chatbot_content_excluded:
+        # Whole-chatbot-record recency: see `ChatbotContextRecord.action_time`
+        # docstring - one timestamp (most recent resolved mention) governs
+        # every part of this chatbot record's contribution (preferred
+        # category, mentions, summary embedding alike), since per-mention
+        # timestamps aren't preserved.
+        chatbot_w = effective_weight(config.chatbot_weight, chatbot.action_time, reference_time, config.recency)
         if chatbot.preferred_category:
-            category_counts[chatbot.preferred_category] += config.chatbot_weight
+            category_counts[chatbot.preferred_category] += chatbot_w
         for pid in chatbot_mentions:
             product = product_lookup.get(pid)
             if product is None:
                 continue
             if product.category_name:
-                category_counts[product.category_name] += config.chatbot_weight
+                category_counts[product.category_name] += chatbot_w
             if product.brand:
-                brand_counts[product.brand] += config.chatbot_weight
+                brand_counts[product.brand] += chatbot_w
 
     if profile.profile.preferred_category:
+        # A standing profile attribute, not a timestamped interaction -
+        # never recency-weighted (docs/data-mapping.md section 14).
         category_counts[profile.profile.preferred_category] += config.preferred_category_weight
 
     category_affinity = _normalize_and_truncate(category_counts, config.max_top_categories)
     brand_affinity = _normalize_and_truncate(brand_counts, config.max_top_brands)
 
     # --- semantic embedding --------------------------------------------
-    click_vectors = [product_embeddings[cl.product_id] for cl in clicks if cl.product_id in product_embeddings]
-    purchase_vectors = [product_embeddings[p.product_id] for p in purchases if p.product_id in product_embeddings]
-    cart_vectors = [product_embeddings[c.product_id] for c in cart_items if c.product_id in product_embeddings]
-    search_vectors = [
-        product_embeddings[pid]
+    # Each signal's vectors are paired with their own event_time so
+    # `_signal_embedding_component` can recency-weight both WHICH items
+    # dominate within the signal and how strongly the signal's whole
+    # component counts in the cross-signal blend - see that function's
+    # docstring.
+    click_vectors_t = [
+        (product_embeddings[cl.product_id], cl.action_time) for cl in clicks if cl.product_id in product_embeddings
+    ]
+    purchase_vectors_t = [
+        (product_embeddings[p.product_id], p.order_created_at) for p in purchases if p.product_id in product_embeddings
+    ]
+    cart_vectors_t = [
+        (product_embeddings[c.product_id], c.action_time) for c in cart_items if c.product_id in product_embeddings
+    ]
+    search_vectors_t = [
+        (product_embeddings[pid], s.action_time)
         for s in searches
         if (pid := _search_signal_product_id(s)) is not None and pid in product_embeddings
     ] + [
-        text_embeddings[s.search_term]
+        (text_embeddings[s.search_term], s.action_time)
         for s in searches
         if s.matched_product_id is None and s.search_term in text_embeddings and not _search_text_is_leakage_risky(s)
     ]
-    chatbot_vectors = [product_embeddings[pid] for pid in chatbot_mentions if pid in product_embeddings]
-    if chatbot is not None and not chatbot_content_excluded and chatbot.summary and chatbot.summary in text_embeddings:
-        chatbot_vectors.append(text_embeddings[chatbot.summary])
+    chatbot_vectors_t: list[tuple[np.ndarray, datetime | None]] = []
+    if chatbot is not None and not chatbot_content_excluded:
+        chatbot_vectors_t = [
+            (product_embeddings[pid], chatbot.action_time) for pid in chatbot_mentions if pid in product_embeddings
+        ]
+        if chatbot.summary and chatbot.summary in text_embeddings:
+            chatbot_vectors_t.append((text_embeddings[chatbot.summary], chatbot.action_time))
 
     components: list[tuple[np.ndarray, float]] = []
-    if click_vectors:
-        components.append((np.mean(click_vectors, axis=0), config.click_weight))
-    if purchase_vectors:
-        components.append((np.mean(purchase_vectors, axis=0), config.purchase_weight))
-    if cart_vectors:
-        components.append((np.mean(cart_vectors, axis=0), config.cart_weight))
-    if search_vectors:
-        components.append((np.mean(search_vectors, axis=0), config.search_weight))
-    if chatbot_vectors:
-        components.append((np.mean(chatbot_vectors, axis=0), config.chatbot_weight))
+    for vectors_t, base_weight in (
+        (click_vectors_t, config.click_weight),
+        (purchase_vectors_t, config.purchase_weight),
+        (cart_vectors_t, config.cart_weight),
+        (search_vectors_t, config.search_weight),
+        (chatbot_vectors_t, config.chatbot_weight),
+    ):
+        component = _signal_embedding_component(vectors_t, base_weight, reference_time, config.recency)
+        if component is not None:
+            components.append(component)
 
     semantic_embedding = _weighted_average(components)
 

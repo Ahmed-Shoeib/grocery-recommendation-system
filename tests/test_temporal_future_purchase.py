@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
+import numpy as np
 import pytest
 
 from recommendation.data.adapters.base import UserAdapter
@@ -354,3 +355,61 @@ def test_audit_does_not_flag_legitimate_repeat_purchase_of_target_product():
     history = [ev(1, 77, ActionType.PURCHASE, t(1))]  # legitimately before cutoff
     result = audit_no_leakage(1, history, cutoff=t(30), target_ids=frozenset({77}))
     assert result.ok
+
+
+# --- recency weighting through the temporal harness (section 14/16) ------
+#
+# Proves recency (`features.recency`, `features.user_features`) composes
+# correctly with this protocol's point-in-time truncation: computing
+# recency relative to the evaluation cutoff never accepts a future-dated
+# event, and every point-in-time-truncated evaluation example produces a
+# usable (non-raising) recency-weighted feature set.
+
+def test_recency_over_point_in_time_profile_never_leaks(users_adapter, reviews_adapter):
+    """The canonical, non-buggy path: history is truncated to the cutoff
+    FIRST (`build_point_in_time_engagement_profile`), THEN
+    `build_user_features(reference_time=cutoff)` computes recency over
+    that already-truncated profile. No event in the truncated profile can
+    be `>= cutoff`, so this must never raise `RecencyLeakageError`.
+    """
+    from recommendation.features.user_features import build_user_features
+    from recommendation.utils.config import FeatureConfig, RecencyConfig
+
+    events = [
+        ev(1, 10, ActionType.CLICK, t(1)),
+        ev(1, 11, ActionType.SEARCH, t(2)),
+        ev(1, 10, ActionType.ADD_TO_CART, t(3)),
+        ev(1, 10, ActionType.PURCHASE, t(4)),
+        ev(1, 12, ActionType.PURCHASE, t(10)),  # the held-out future target - must never leak
+    ]
+    cutoff = t(5)
+    profile = build_point_in_time_engagement_profile(1, events, cutoff=cutoff, users_adapter=users_adapter, reviews_adapter=reviews_adapter)
+
+    product_lookup = {
+        10: Product(id=10, category_id=1, slug="p10", name="P10", price=1.0, category_name="Dairy & Eggs"),
+        11: Product(id=11, category_id=2, slug="p11", name="P11", price=1.0, category_name="Snacks"),
+        12: Product(id=12, category_id=1, slug="p12", name="P12", price=1.0, category_name="Dairy & Eggs"),
+    }
+    embeddings = {pid: np.array([float(pid), 0.0], dtype=np.float32) for pid in product_lookup}
+    config = FeatureConfig(recency=RecencyConfig(enabled=True, half_life_days=21.0))
+
+    # Must not raise - every event in `profile` is strictly < cutoff.
+    features = build_user_features(profile, product_lookup, embeddings, config, reference_time=cutoff)
+    assert features.click_count == 1
+    assert features.purchase_count == 1  # only the pre-cutoff purchase; the t(10) target is excluded
+
+
+def test_recency_reference_time_bounded_by_cutoff_cannot_see_future_target(users_adapter, reviews_adapter):
+    """A stricter, deliberately-adversarial check: even if a caller made a
+    mistake and handed `build_user_features` the UNTRUNCATED event list
+    (bypassing `build_point_in_time_engagement_profile`), recency itself
+    still catches the leak - the future target's own timestamp is `>=
+    cutoff`, so scoring it against `reference_time=cutoff` must raise
+    rather than silently producing a (wrong) weight.
+    """
+    from recommendation.features.recency import RecencyLeakageError, recency_weight
+
+    cutoff = t(5)
+    future_purchase_time = t(10)
+    with pytest.raises(RecencyLeakageError):
+        recency_weight(future_purchase_time, cutoff, half_life_days=21.0)

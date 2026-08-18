@@ -243,12 +243,12 @@ claim the current weights are tuned.
 `action_time` is preserved end-to-end from the adapter layer
 (`UserEventsAdapter` populates `PurchaseRecord.order_created_at`/
 `CartAffinityRecord.action_time`/`ClickRecord.action_time`/
-`SearchRecord.action_time` from `UserInteraction.action_time`) so a V2
-temporal train/validation/test split, recency weighting, or event-
-sequence feature doesn't require another data-contract change. Per §7/§12,
-V1 feature engineering does NOT derive any recency/decay signal from these
-timestamps, and this architecture change does not add one - only
-preservation, not consumption, changed.
+`SearchRecord.action_time` from `UserInteraction.action_time`, and
+`ChatbotContextRecord.action_time` from the most recent resolved mention -
+see §14) so the temporal future-purchase evaluation split (§8.1) and
+recency weighting (§14) don't require another data-contract change.
+Sequential/event-order features beyond point-in-time truncation and
+recency remain out of scope (§7).
 
 ### SQLite integration: `data/sqlite/backend_shaped_synthetic.db`
 
@@ -306,14 +306,15 @@ only in this phase - the live API/dashboard service
 synthetic path exclusively; nothing about which source serves live
 requests changed here.
 
-**Status of price/timestamp readiness (see the SQLite inspection report
-from this phase, not reproduced here):** `Product.Price`/`SalePrice`/
+**Status of price/timestamp readiness:** `Product.Price`/`SalePrice`/
 `DiscountPercentage` are correctly exposed through the canonical `Product`
-schema, but no price-aware feature consumes them yet. `action_time` is
-parsed into real `datetime` values and survives the adapter boundary
-exactly as it does for the synthetic path, but is likewise not consumed
-for recency/temporal-splitting/time-of-day purposes yet - both remain
-explicitly deferred, matching §7/§12's existing scope boundary.
+schema, but no price-aware feature consumes them yet - still deferred.
+`action_time` is parsed into real `datetime` values and survives the
+adapter boundary exactly as it does for the synthetic path; it is now
+consumed for BOTH the temporal future-purchase evaluation split (§8.1)
+AND recency weighting (§14, STEP 5) - time-of-day/session-sequence
+features remain the only still-deferred timestamp use, matching §7's
+scope boundary.
 
 **Future real backend integration:** per this section's flow above,
 swapping this database for a real backend DB/API means writing a new
@@ -474,7 +475,14 @@ Nothing in this codebase should claim these acceptance criteria are met:
   V1 as of §4 - what's still deferred is a live ingestion pipeline,
   impression-level tracking, and CTR/conversion computed from it)
 - Session infrastructure, anonymous-user sessions
-- Recency / time-decay features and freshness scoring
+- ~~Recency / time-decay features and freshness scoring~~ - **implemented
+  as of the STEP 5 recency phase, see §14**, for every signal that
+  actually carries a real `action_time` (the `User_events`/SQLite-sourced
+  path); the old, timestamp-less ERD synthetic signals still get a
+  neutral (unweighted) fallback, so this bullet's ORIGINAL scope (a
+  freshness signal derived from real timestamps) is what's now done -
+  "freshness scoring" as a separate product-side signal (e.g. a listing's
+  own age) remains out of scope.
 - CTR, add-to-cart conversion, purchase conversion (online metrics)
 - Sequential / recent-intent models over event streams
 - Product-level click-popularity/"trending" fallback signal (§6) - clicks
@@ -486,10 +494,10 @@ Timestamp fields that already exist in the ERD (`Order.CreationDate`,
 confirmed future `User_events` table (§4, threaded through to
 `PurchaseRecord.order_created_at`/`CartAffinityRecord.action_time`/
 `ClickRecord.action_time`/`SearchRecord.action_time`), are **retained in
-the canonical schemas** precisely so V2 can add recency features without
-another schema migration - but V1 feature engineering must not derive any
-recency/decay signal from them. This is enforced by convention now and
-should be enforced by a feature-engineering-layer test once Phase 3 lands.
+the canonical schemas** precisely so recency features could be added
+without another schema migration - as of the STEP 5 recency phase (§14),
+feature engineering DOES derive a decay signal from them, superseding
+this section's original "must not" for those fields specifically.
 
 Extensibility is achieved through interfaces (adapters, the `context`
 parameter on the serving entrypoint, the eligibility policy interface),
@@ -856,3 +864,135 @@ genuinely temporal held-out split instead of this content-based heuristic.
 | §10 VectorIndex backends | Phase 5 (ScaNN primary/Docker + FAISS Windows dev fallback) |
 | §11 Neural ranking (VectorIndex candidates, richer cross features, baseline comparison) | Phase 6 |
 | §12 Leakage-limitation mitigation | Phase 3 (guard) / Phase 4 (consumer) / Phase 6 (extended to ranking negatives) / User_events contract change (extended to clicks) |
+| §14 Recency weighting (`features.recency`, `effective_weight`, `_signal_embedding_component`) | STEP 5 recency phase |
+
+## 14. Recency weighting (STEP 5)
+
+**Formula.** `features.recency.effective_weight(base_signal_weight,
+event_time, reference_time, config.recency)` =
+`base_signal_weight * 0.5 ** (age_days / half_life_days)`, where
+`age_days = (reference_time - event_time).total_seconds() / 86400`.
+`age=0 -> 1.0`, `age=half_life -> 0.5`, `age=2*half_life -> 0.25`,
+asymptotically approaching but never reaching 0 for very old events.
+
+**Config** (`configs/base.yaml: features.recency`): `enabled` (default
+`true`) and `half_life_days` (default `21.0`, three weeks) - a single
+global half-life, not per-signal, kept deliberately simple/interpretable
+for this phase. `half_life_days=21` is an **initial, explicitly
+unbenchmarked baseline** for grocery's weekly/biweekly replenishment
+cadence, chosen by inspecting this SQLite dataset's ~7-month event span
+(2026-01-15 .. 2026-08-17) - not tuned against real usage data, and
+should be re-evaluated once real usage data exists (same caveat as
+`click_weight`, §4).
+
+**Recency is strictly opt-in per call**, never an implicit wall-clock
+lookup: `build_user_features(..., reference_time=None)` (the default)
+leaves every recency-weighted contribution neutral
+(`effective_weight == base_weight`), REGARDLESS of `config.recency
+.enabled`. A caller must explicitly pass a `reference_time` for recency
+to take effect:
+  - Offline temporal evaluation (§8.1): the caller passes the evaluation
+    cutoff (`TemporalUserSplit.val_cutoff`/`test_cutoff`), matching the
+    already-point-in-time-truncated `EngagementProfile`.
+  - Live serving (`serving.pipeline.recommend`): passes `datetime.now()`
+    at the request boundary.
+  - The pre-existing, non-temporal leave-one-out training path
+    (`retrieval.two_tower.examples`, `ranking.examples`,
+    `retrieval.two_tower.train`) deliberately never passes
+    `reference_time` - those per-training-example calls have no natural
+    per-example "now." This was NOT a hypothetical concern: an earlier
+    version of this phase defaulted `reference_time` to
+    `datetime.now()` whenever `config.recency.enabled` was true and no
+    explicit value was supplied, and that silently decayed the OLD
+    ERD-based synthetic dataset's purchase dates relative to whatever day
+    the code happened to run on - caught by
+    `test_two_tower_train_pipeline.py::test_training_beats_random_baseline_on_test_set`
+    dropping below its quality floor. The opt-in design fixes this: that
+    training path's features are now provably byte-for-byte unchanged by
+    this phase (see `tests/test_user_features.py::test_reference_time_omitted_leaves_recency_neutral_even_when_events_are_timestamped`).
+
+**Missing-timestamp fallback**: an event with `event_time is None` (the
+old, timestamp-less ERD synthetic CLICK/ADD_TO_CART/SEARCH generators)
+also gets a neutral weight - never dropped, never down-weighted.
+
+**Future-event guard**: `features.recency.recency_weight`/
+`effective_weight` raise `RecencyLeakageError` if `event_time >=
+reference_time` - a future-relative event is never silently accepted
+(only ever hit by a caller bug, since both the temporal harness and live
+serving guarantee `event_time < reference_time` by construction).
+
+**Where applied** (`features.user_features.build_user_features`):
+  - `category_affinity`/`brand_affinity`: each per-event contribution is
+    scaled by `effective_weight` before accumulating into the `Counter`
+    that `_normalize_and_truncate` turns into a distribution - unchanged
+    structurally, just each addend is now recency-scaled.
+  - `semantic_embedding`: reworked from "one unweighted mean vector per
+    signal" to `_signal_embedding_component`, which recency-weights BOTH
+    which items dominate the mean WITHIN a signal (content) and that
+    signal's overall blend weight via the AVERAGE (not sum) of its
+    per-event recency weights (magnitude) - the average keeps this
+    invariant to event count, exactly matching the pre-recency behavior
+    when recency is disabled or every event lacks a timestamp (reduces to
+    the original code byte-for-byte).
+  - `Product.preferred_category`'s static profile-attribute contribution
+    is NEVER recency-weighted (it isn't a timestamped interaction).
+  - Chatbot: `ChatbotContextRecord` gained one field, `action_time` (the
+    most recent resolved-mention timestamp for that user -
+    `UserEventsAdapter.get_chatbot_context`); since per-mention timestamps
+    aren't preserved (§12), this ONE timestamp governs the whole chatbot
+    record's contribution (preferred category, mentions, summary
+    embedding alike) as a single group. This is a recommendation-layer
+    canonical-schema field, not a backend `User_events` column - no
+    backend contract change.
+  - Raw event *counts* (`click_count`, `purchase_count`,
+    `total_engagement_events`, ...) are NEVER recency-weighted - cold-
+    start tiering (§3) keeps meaning "how much history," not "how much
+    RECENT history."
+
+**Evaluation - does recency improve future-purchase quality?**
+`scripts/sqlite_recency_evaluation.py` compares BASELINE
+(`recency.enabled=False`) vs RECENCY (`half_life_days=21`) on IDENTICAL
+temporal evaluation points (same users/cutoffs/targets/eligibility/
+candidate pool - the only intended difference is recency), scored by
+cosine similarity between each user's `semantic_embedding` and the SAME
+frozen Sentence Transformer product embeddings both arms use (a
+retraining-free way to isolate this phase's effect - see that script's
+module docstring for why Two-Tower/ranker retraining on this 1,200-
+product catalog is out of scope here, matching §8.1's prior scope note).
+Results (this synthetic dataset, `min_purchase_events_for_full_split=3`):
+
+| split | arm | Recall@5 | Recall@10 | Recall@20 | NDCG@20 | MRR |
+|---|---|---|---|---|---|---|
+| val (n=378) | baseline | 0.087 | 0.151 | 0.246 | 0.106 | 0.068 |
+| val (n=378) | recency | 0.601 | 0.640 | 0.701 | 0.567 | 0.527 |
+| test (n=204) | baseline | 0.078 | 0.118 | 0.181 | 0.090 | 0.066 |
+| test (n=204) | recency | 0.564 | 0.632 | 0.691 | 0.512 | 0.459 |
+
+(HitRate@K equals Recall@K here per the single-arm-consistent-metric note
+in `evaluation.retrieval_metrics`'s module docstring - both arms hold
+multiple relevant items per query, so this is not a coincidence of
+leave-one-out.) Recency is a large, consistent win on both splits. List-
+quality stayed comparable (mean distinct top-20 categories ~4.8-5.0 for
+both arms; catalog coverage 0.81-0.97; fill rate 1.0 for both), and
+feature-build latency stayed sub-millisecond for both arms (~0.26-0.36ms
+mean) - no serving-time regression. **Interpretation caveat** (§8's
+existing caveat applies with extra force here): this dataset's session
+generator correlates SEARCH -> CLICK -> ADD_TO_CART -> PURCHASE onto the
+same product within a session (`scripts
+.generate_backend_shaped_sqlite.py`), so a user's most recent interaction
+is often mechanically predictive of their very next purchase in a way
+real-world browsing may or may not replicate as strongly - this result
+demonstrates the mechanism works and is directionally sound, not a
+real-world-calibrated lift estimate.
+
+`scripts/recency_diagnostics.py` prints the decay table for a fixed set
+of ages plus 3 real SQLite users' category/brand affinity with recency on
+vs. off, so the "recent dominates, old still contributes" property is
+directly inspectable.
+
+**Artifacts**: no Two-Tower/ranker artifacts were retrained for this
+phase (see the evaluation scope note above) - `models/` is unchanged.
+Product embeddings for this SQLite catalog are cached separately at
+`data/processed/product_embeddings_sqlite.npz` (gitignored, regenerable),
+never overwriting the synthetic V1 cache (`embedding.cache_path`).
+

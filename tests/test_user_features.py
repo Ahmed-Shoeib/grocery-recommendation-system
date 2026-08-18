@@ -1,3 +1,5 @@
+from datetime import datetime, timedelta
+
 import numpy as np
 import pytest
 
@@ -12,7 +14,7 @@ from recommendation.data.schemas.engagement import (
 from recommendation.data.schemas.product import Product
 from recommendation.data.schemas.user import UserProfile
 from recommendation.features.user_features import build_user_features, build_user_text_embeddings
-from recommendation.utils.config import FeatureConfig
+from recommendation.utils.config import FeatureConfig, RecencyConfig
 
 
 def _products() -> dict[int, Product]:
@@ -366,3 +368,179 @@ def test_build_user_text_embeddings_deduplicates_and_only_covers_needed_text():
     ]
     result = build_user_text_embeddings(profiles, _FakeEncoder())
     assert set(result.keys()) == {"healthy snacks"}
+
+
+# --- Recency weighting (docs/data-mapping.md section 14) ------------------
+
+T0 = datetime(2026, 6, 1, 0, 0, 0)
+
+
+def _t(days_ago: float) -> datetime:
+    return T0 - timedelta(days=days_ago)
+
+
+def test_reference_time_omitted_leaves_recency_neutral_even_when_events_are_timestamped():
+    """Recency is strictly opt-in per call - a caller that never passes
+    `reference_time` (the pre-existing, non-temporal leave-one-out
+    training path) must get byte-for-byte the same features whether or
+    not the underlying records happen to carry an `action_time`.
+    """
+    profile = EngagementProfile(
+        user_id=1,
+        profile=UserProfile(user_id=1),
+        clicks=[ClickRecord(user_id=1, product_id=1, action_time=_t(365))],
+    )
+    config = _config(click_weight=1.0)
+    with_time = build_user_features(profile, _products(), _embeddings(), config)  # no reference_time
+    assert with_time.category_affinity == {"Dairy & Eggs": pytest.approx(1.0)}
+    assert np.allclose(with_time.semantic_embedding, _embeddings()[1])
+
+
+def test_recent_click_contributes_more_than_older_click_to_category_affinity():
+    """Two clicks of equal configured weight in DIFFERENT categories - the
+    recent one (Dairy & Eggs) should end up with a larger affinity share
+    than the older one (Snacks) once recency is enabled.
+    """
+    profile = EngagementProfile(
+        user_id=1,
+        profile=UserProfile(user_id=1),
+        clicks=[
+            ClickRecord(user_id=1, product_id=1, action_time=_t(0)),  # Dairy & Eggs, recent
+            ClickRecord(user_id=1, product_id=2, action_time=_t(120)),  # Snacks, old
+        ],
+    )
+    config = _config(click_weight=1.0, recency=RecencyConfig(enabled=True, half_life_days=21.0))
+    features = build_user_features(profile, _products(), _embeddings(), config, reference_time=T0)
+    assert features.category_affinity["Dairy & Eggs"] > features.category_affinity["Snacks"]
+    assert sum(features.category_affinity.values()) == pytest.approx(1.0)
+
+
+def test_recent_purchase_dominates_category_affinity_over_older_purchase_same_weight():
+    """Two purchases of equal configured weight in DIFFERENT categories -
+    the recent one should end up with a larger affinity share than the
+    older one, once recency is enabled with an explicit reference_time.
+    """
+    profile = EngagementProfile(
+        user_id=1,
+        profile=UserProfile(user_id=1),
+        purchases=[
+            PurchaseRecord(user_id=1, product_id=1, quantity=1, order_created_at=_t(0)),  # Dairy & Eggs, recent
+            PurchaseRecord(user_id=1, product_id=2, quantity=1, order_created_at=_t(120)),  # Snacks, old
+        ],
+    )
+    config = _config(purchase_weight=1.0, recency=RecencyConfig(enabled=True, half_life_days=21.0))
+    features = build_user_features(profile, _products(), _embeddings(), config, reference_time=T0)
+    assert features.category_affinity["Dairy & Eggs"] > features.category_affinity["Snacks"]
+
+    # A recency-disabled run over the identical data should split evenly instead.
+    disabled_config = _config(purchase_weight=1.0, recency=RecencyConfig(enabled=False))
+    disabled_features = build_user_features(profile, _products(), _embeddings(), disabled_config, reference_time=T0)
+    assert disabled_features.category_affinity["Dairy & Eggs"] == pytest.approx(0.5)
+    assert disabled_features.category_affinity["Snacks"] == pytest.approx(0.5)
+
+
+def test_recent_purchase_pulls_semantic_embedding_toward_itself():
+    """P10 (product 1) very recent, P20 (product 2) old - the recency-
+    weighted embedding should sit closer to product 1's vector than an
+    unweighted (recency-disabled) blend would.
+    """
+    profile = EngagementProfile(
+        user_id=1,
+        profile=UserProfile(user_id=1),
+        purchases=[
+            PurchaseRecord(user_id=1, product_id=1, quantity=1, order_created_at=_t(0)),
+            PurchaseRecord(user_id=1, product_id=2, quantity=1, order_created_at=_t(150)),
+        ],
+    )
+    config = _config(purchase_weight=1.0, recency=RecencyConfig(enabled=True, half_life_days=21.0))
+    recency_features = build_user_features(profile, _products(), _embeddings(), config, reference_time=T0)
+
+    disabled_config = _config(purchase_weight=1.0, recency=RecencyConfig(enabled=False))
+    baseline_features = build_user_features(profile, _products(), _embeddings(), disabled_config, reference_time=T0)
+
+    p1, p2 = _embeddings()[1], _embeddings()[2]
+    # Cosine similarity to the recent product's own vector should be higher
+    # under recency weighting than under the unweighted 50/50 baseline.
+    def cos(a, b):
+        return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b)))
+
+    assert cos(recency_features.semantic_embedding, p1) > cos(baseline_features.semantic_embedding, p1)
+
+
+def test_raw_event_counts_are_unaffected_by_recency():
+    """Cold-start tiering depends on raw historical counts, not recency-
+    weighted strength (docs/data-mapping.md section 14) - counts must be
+    identical whether recency is enabled or disabled, and regardless of
+    reference_time.
+    """
+    profile = EngagementProfile(
+        user_id=1,
+        profile=UserProfile(user_id=1),
+        clicks=[ClickRecord(user_id=1, product_id=1, action_time=_t(200))],
+        purchases=[PurchaseRecord(user_id=1, product_id=2, quantity=1, order_created_at=_t(5))],
+        cart_items=[CartAffinityRecord(user_id=1, product_id=3, quantity=1, action_time=_t(1))],
+        searches=[SearchRecord(user_id=1, search_term="milk", matched_product_id=3, action_time=_t(50))],
+        chatbot_context=ChatbotContextRecord(user_id=1, summary="hi", action_time=_t(10)),
+    )
+    enabled = _config(recency=RecencyConfig(enabled=True, half_life_days=21.0))
+    disabled = _config(recency=RecencyConfig(enabled=False))
+
+    f_enabled = build_user_features(profile, _products(), _embeddings(), enabled, reference_time=T0)
+    f_disabled = build_user_features(profile, _products(), _embeddings(), disabled, reference_time=T0)
+    f_no_ref = build_user_features(profile, _products(), _embeddings(), enabled)  # no reference_time at all
+
+    for f in (f_enabled, f_disabled, f_no_ref):
+        assert f.click_count == 1
+        assert f.purchase_count == 1
+        assert f.cart_item_count == 1
+        assert f.search_count == 1
+        assert f.has_chatbot_context is True
+        assert f.total_engagement_events == 5
+
+
+def test_category_affinity_still_normalizes_to_one_with_recency_enabled():
+    profile = EngagementProfile(
+        user_id=1,
+        profile=UserProfile(user_id=1),
+        purchases=[
+            PurchaseRecord(user_id=1, product_id=1, quantity=2, order_created_at=_t(3)),
+            PurchaseRecord(user_id=1, product_id=2, quantity=1, order_created_at=_t(90)),
+        ],
+    )
+    config = _config(purchase_weight=0.6, recency=RecencyConfig(enabled=True, half_life_days=21.0))
+    features = build_user_features(profile, _products(), _embeddings(), config, reference_time=T0)
+    assert sum(features.category_affinity.values()) == pytest.approx(1.0)
+
+
+def test_missing_action_time_falls_back_to_neutral_weight_even_when_recency_enabled():
+    """Old ERD-based synthetic click/cart/search records with no
+    `action_time` must not be dropped or down-weighted - see
+    `features.recency.effective_weight`'s missing-timestamp policy.
+    """
+    profile = EngagementProfile(
+        user_id=1,
+        profile=UserProfile(user_id=1),
+        clicks=[ClickRecord(user_id=1, product_id=1, action_time=None)],
+    )
+    config = _config(click_weight=1.0, recency=RecencyConfig(enabled=True, half_life_days=21.0))
+    features = build_user_features(profile, _products(), _embeddings(), config, reference_time=T0)
+    assert features.category_affinity == {"Dairy & Eggs": pytest.approx(1.0)}
+    assert np.allclose(features.semantic_embedding, _embeddings()[1])
+
+
+def test_future_event_relative_to_reference_time_raises_not_silently_accepted():
+    """A defensive leakage guard: if a caller (bug) hands `build_user_features`
+    an event dated at/after its own `reference_time`, this must fail loudly
+    rather than silently computing a nonsensical (or clamped) weight - see
+    `features.recency.RecencyLeakageError` and docs/data-mapping.md section 14.
+    """
+    from recommendation.features.recency import RecencyLeakageError
+
+    profile = EngagementProfile(
+        user_id=1,
+        profile=UserProfile(user_id=1),
+        clicks=[ClickRecord(user_id=1, product_id=1, action_time=T0 + timedelta(days=1))],
+    )
+    config = _config(click_weight=1.0, recency=RecencyConfig(enabled=True, half_life_days=21.0))
+    with pytest.raises(RecencyLeakageError):
+        build_user_features(profile, _products(), _embeddings(), config, reference_time=T0)

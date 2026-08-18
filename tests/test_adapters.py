@@ -242,6 +242,25 @@ def test_user_events_adapter_chatbot_aggregates_resolved_mentions_no_text():
     assert chatbot.keywords == []
 
 
+def test_user_events_adapter_chatbot_action_time_is_most_recent_mention():
+    """`ChatbotContextRecord.action_time` (added for recency weighting -
+    docs/data-mapping.md section 14) is the MOST RECENT resolved CHATBOT
+    mention's timestamp, not the first or an arbitrary one.
+    """
+    from datetime import datetime, timedelta
+
+    t0 = datetime(2026, 1, 1)
+    events = [
+        UserInteraction(user_id=1, product_id=14, action_type=ActionType.CHATBOT, action_time=t0),
+        UserInteraction(user_id=1, product_id=15, action_type=ActionType.CHATBOT, action_time=t0 + timedelta(days=5)),
+        UserInteraction(user_id=1, product_id=16, action_type=ActionType.CHATBOT, action_time=t0 + timedelta(days=2)),
+    ]
+    adapter = UserEventsAdapter(events)
+    chatbot = adapter.get_chatbot_context(1)
+    assert chatbot is not None
+    assert chatbot.action_time == t0 + timedelta(days=5)
+
+
 def test_user_events_adapter_chatbot_returns_none_when_absent():
     adapter = UserEventsAdapter([])
     assert adapter.get_chatbot_context(1) is None
