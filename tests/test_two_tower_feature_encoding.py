@@ -51,6 +51,7 @@ def _product_features(**overrides) -> ProductFeatures:
         product_id=1, category_id=1, category_name="Dairy & Eggs", parent_category_name=None, brand="GreenValley",
         tags=["healthy"], price=4.0, effective_price=4.0, discount_percentage=0.0, is_active=True, stock_quantity=10,
         purchase_count=3, distinct_purchasers=2, cart_add_count=1, review_count=2, average_rating=4.5,
+        is_discounted=False, price_tier="mid", category_relative_price=0.5,
     )
     defaults.update(overrides)
     return ProductFeatures(**defaults)
@@ -61,7 +62,7 @@ def _user_features(**overrides) -> UserFeatures:
         user_id=1, preferred_category="Snacks", age_group="25-34", has_preferred_category=True, has_age_group=True,
         click_count=0, purchase_count=3, distinct_products_purchased=3, cart_item_count=1, search_count=2, has_chatbot_context=False,
         total_engagement_events=6, category_affinity={"Snacks": 0.7, "Dairy & Eggs": 0.3}, brand_affinity={"SnackWorks": 1.0},
-        semantic_embedding=np.ones(8, dtype=np.float32),
+        semantic_embedding=np.ones(8, dtype=np.float32), price_profile=None,
     )
     defaults.update(overrides)
     return UserFeatures(**defaults)
@@ -102,7 +103,7 @@ def test_encode_user_missing_semantic_embedding_becomes_zero_vector_with_flag():
     encoder = _encoder(embedding_dim=8)
     result = encoder.encode_user(_user_features(semantic_embedding=None))
     assert np.allclose(result["semantic_embedding"], np.zeros(8))
-    assert result["numeric"][-1] == 0.0  # has_semantic_embedding flag
+    assert result["numeric"][-2] == 0.0  # has_semantic_embedding flag (normalized_typical_price is now last - STEP 6)
 
 
 def test_encode_user_category_affinity_maps_to_correct_vocab_slot():
@@ -139,5 +140,68 @@ def test_encoder_save_and_load_round_trips(tmp_path):
     assert loaded.category_vocab.values == encoder.category_vocab.values
     assert loaded.brand_vocab.values == encoder.brand_vocab.values
     assert loaded.age_group_vocab.values == encoder.age_group_vocab.values
+    assert loaded.price_tier_vocab.values == encoder.price_tier_vocab.values
     # Encoding behavior is identical after round-trip.
     assert loaded.category_vocab.encode("Snacks") == encoder.category_vocab.encode("Snacks")
+
+
+def test_loading_pre_step6_encoder_dict_without_price_tier_vocab_falls_back_to_fixed_vocab():
+    """A JSON dict saved by a PRE-STEP-6 encoder (no `price_tier_vocab`
+    key at all) must still load, degrading to the same fixed PRICE_TIERS
+    vocabulary `fit()` always produces - see `TwoTowerFeatureEncoder
+    .from_dict`'s docstring.
+    """
+    encoder = _encoder(embedding_dim=8)
+    legacy_dict = encoder.to_dict()
+    del legacy_dict["price_tier_vocab"]
+    loaded = TwoTowerFeatureEncoder.from_dict(legacy_dict)
+    assert loaded.price_tier_vocab.values == ["budget", "mid", "premium"]
+
+
+# --- STEP 6: price-aware features (docs/data-mapping.md section 15) ------
+
+def test_item_numeric_dim_is_nine_after_step6():
+    encoder = _encoder(embedding_dim=8)
+    assert encoder.item_numeric_dim == 9  # 7 pre-STEP-6 + category_relative_price + is_discounted
+
+
+def test_user_numeric_dim_is_nine_after_step6():
+    encoder = _encoder(embedding_dim=8)
+    assert encoder.user_numeric_dim == 9  # 8 pre-STEP-6 + normalized_typical_price
+
+
+def test_encode_item_includes_price_tier_id_and_relative_price_and_discount_flag():
+    encoder = _encoder(embedding_dim=8)
+    result = encoder.encode_item(
+        _product_features(price_tier="premium", category_relative_price=0.9, is_discounted=True),
+        np.ones(8, dtype=np.float32),
+    )
+    assert result["price_tier_id"].dtype == np.int32
+    assert result["price_tier_id"] == encoder.price_tier_vocab.encode("premium")
+    assert result["numeric"][7] == pytest.approx(0.9)  # category_relative_price
+    assert result["numeric"][8] == 1.0  # is_discounted
+
+
+def test_encode_item_unknown_price_tier_falls_back_to_zero_bucket():
+    encoder = _encoder(embedding_dim=8)
+    result = encoder.encode_item(_product_features(price_tier="not_a_real_tier"), np.ones(8, dtype=np.float32))
+    assert result["price_tier_id"] == 0
+
+
+def test_encode_user_no_price_profile_gets_unknown_tier_and_zero_normalized_price():
+    encoder = _encoder(embedding_dim=8)  # max_price fit at 10.0
+    result = encoder.encode_user(_user_features(price_profile=None))
+    assert result["price_tier_id"] == 0  # unknown bucket
+    assert result["numeric"][-1] == 0.0  # normalized_typical_price
+
+
+def test_encode_user_with_price_profile_sets_tier_and_normalized_typical_price():
+    from recommendation.features.price import UserPriceProfile
+
+    encoder = _encoder(embedding_dim=8)  # max_price fit at 10.0
+    profile = UserPriceProfile(
+        typical_price=5.0, price_spread=1.0, price_tier="mid", supporting_purchase_count=3, fallback_source="purchase_history"
+    )
+    result = encoder.encode_user(_user_features(price_profile=profile))
+    assert result["price_tier_id"] == encoder.price_tier_vocab.encode("mid")
+    assert result["numeric"][-1] == pytest.approx(0.5)  # 5.0 / 10.0

@@ -127,3 +127,62 @@ def test_normalized_price_capped_at_one():
     vec = build_ranking_feature_vector(_user_features(), expensive, None, 0.0, 0, 50, 100.0)
     idx = RANKING_FEATURE_NAMES.index("item_normalized_price")
     assert vec[idx] == pytest.approx(1.0)
+
+
+# --- STEP 6: price-aware ranker features (docs/data-mapping.md section 15) --
+
+def test_ranking_feature_dimension_is_29_after_step6():
+    assert len(RANKING_FEATURE_NAMES) == 29  # 23 pre-STEP-6 + 6 price-aware
+
+
+def test_item_price_tier_and_relative_price_pass_through():
+    product = _product_features(category_relative_price=0.8, is_discounted=True)
+    vec = build_ranking_feature_vector(_user_features(), product, None, 0.0, 0, 50, 100.0)
+    assert vec[RANKING_FEATURE_NAMES.index("item_category_relative_price")] == pytest.approx(0.8)
+    assert vec[RANKING_FEATURE_NAMES.index("item_is_discounted")] == 1.0
+
+
+def test_no_price_profile_gives_neutral_price_features():
+    user = _user_features(price_profile=None)
+    vec = build_ranking_feature_vector(user, _product_features(effective_price=10.0), None, 0.0, 0, 50, 100.0)
+    assert vec[RANKING_FEATURE_NAMES.index("user_has_price_profile")] == 0.0
+    assert vec[RANKING_FEATURE_NAMES.index("user_normalized_typical_price")] == 0.0
+    assert vec[RANKING_FEATURE_NAMES.index("price_relative_distance")] == 0.0
+    assert vec[RANKING_FEATURE_NAMES.index("price_tier_match")] == 0.0
+
+
+def test_price_relative_distance_reflects_actual_gap_not_model_ranking():
+    """The handcrafted feature itself must correctly reflect price
+    distance for candidates at different distances from the user's
+    typical price - independent of any trained model's eventual ranking
+    decision (docs/data-mapping.md section 15's "do not require an
+    untrained model to rank" note - this test never touches a model).
+    """
+    from recommendation.features.price import UserPriceProfile
+
+    profile = UserPriceProfile(
+        typical_price=6.0, price_spread=1.0, price_tier="mid", supporting_purchase_count=4, fallback_source="purchase_history"
+    )
+    user = _user_features(price_profile=profile)
+
+    close = _product_features(effective_price=5.5, price_tier="mid")
+    reasonable = _product_features(effective_price=7.0, price_tier="mid")
+    far = _product_features(effective_price=30.0, price_tier="premium")
+
+    vec_close = build_ranking_feature_vector(user, close, None, 0.0, 0, 50, 100.0)
+    vec_reasonable = build_ranking_feature_vector(user, reasonable, None, 0.0, 0, 50, 100.0)
+    vec_far = build_ranking_feature_vector(user, far, None, 0.0, 0, 50, 100.0)
+
+    idx = RANKING_FEATURE_NAMES.index("price_relative_distance")
+    assert vec_close[idx] < vec_reasonable[idx] < vec_far[idx]
+
+    tier_idx = RANKING_FEATURE_NAMES.index("price_tier_match")
+    assert vec_close[tier_idx] == 1.0  # mid == mid
+    assert vec_reasonable[tier_idx] == 1.0
+    assert vec_far[tier_idx] == 0.0  # premium != mid
+
+    has_idx = RANKING_FEATURE_NAMES.index("user_has_price_profile")
+    assert vec_close[has_idx] == vec_reasonable[has_idx] == vec_far[has_idx] == 1.0
+
+    typical_idx = RANKING_FEATURE_NAMES.index("user_normalized_typical_price")
+    assert vec_close[typical_idx] == pytest.approx(0.06)  # 6.0 / 100.0 max_price, same for every candidate

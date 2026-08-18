@@ -65,7 +65,8 @@ def load_user_detail(service: RecommendationService, user_id: int) -> UserDetail
         service.bundle.search, service.bundle.chatbot, service.bundle.reviews
     )
     features = build_user_features(
-        engagement, service.product_lookup, service.product_embeddings, service.config.features, text_embeddings=service.text_embeddings
+        engagement, service.product_lookup, service.product_embeddings, service.config.features,
+        text_embeddings=service.text_embeddings, price_context=service.price_context,
     )
     tier = determine_history_tier(features.total_engagement_events, service.config.cold_start)
     return UserDetail(

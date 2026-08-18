@@ -413,3 +413,50 @@ def test_recency_reference_time_bounded_by_cutoff_cannot_see_future_target(users
     future_purchase_time = t(10)
     with pytest.raises(RecencyLeakageError):
         recency_weight(future_purchase_time, cutoff, half_life_days=21.0)
+
+
+# --- STEP 6: price profile over the point-in-time harness (section 22/29) --
+
+def test_price_profile_over_point_in_time_profile_never_sees_the_future_target(users_adapter, reviews_adapter):
+    """The essential STEP 6 leakage test: an old purchase, a held-out
+    FUTURE purchase at a very different price, and a cutoff between them.
+    Built the correct way (`build_point_in_time_engagement_profile` then
+    `build_user_features(reference_time=cutoff, price_context=...)`), the
+    future purchase's price must have ZERO influence on the user's price
+    profile - `typical_price` must reflect only the pre-cutoff purchase.
+    """
+    from recommendation.data.schemas.product import Product
+    from recommendation.features.price import build_price_catalog_context
+    from recommendation.features.user_features import build_user_features
+    from recommendation.utils.config import FeatureConfig, RecencyConfig
+
+    events = [
+        ev(1, 10, ActionType.PURCHASE, t(1)),  # old purchase, cheap product
+        ev(1, 20, ActionType.PURCHASE, t(10)),  # held-out future target, expensive product
+    ]
+    cutoff = t(5)
+    profile = build_point_in_time_engagement_profile(1, events, cutoff=cutoff, users_adapter=users_adapter, reviews_adapter=reviews_adapter)
+
+    product_lookup = {
+        10: Product(id=10, category_id=1, slug="p10", name="Cheap", price=5.0, category_name="X"),
+        20: Product(id=20, category_id=1, slug="p20", name="Expensive", price=500.0, category_name="X"),
+    }
+    price_context = build_price_catalog_context(list(product_lookup.values()))
+    config = FeatureConfig(recency=RecencyConfig(enabled=True, half_life_days=21.0))
+
+    features = build_user_features(
+        profile, product_lookup, {}, config, reference_time=cutoff, price_context=price_context
+    )
+    assert features.price_profile is not None
+    assert features.price_profile.supporting_purchase_count == 1
+    assert features.price_profile.typical_price == pytest.approx(5.0)  # never the $500 future purchase
+
+    # Advance the cutoff past the future purchase - it legitimately
+    # becomes visible history (section 23's repeat-purchase policy) and
+    # now correctly influences the profile.
+    later_cutoff = t(15)
+    later_profile = build_point_in_time_engagement_profile(1, events, cutoff=later_cutoff, users_adapter=users_adapter, reviews_adapter=reviews_adapter)
+    later_features = build_user_features(
+        later_profile, product_lookup, {}, config, reference_time=later_cutoff, price_context=price_context
+    )
+    assert later_features.price_profile.supporting_purchase_count == 2

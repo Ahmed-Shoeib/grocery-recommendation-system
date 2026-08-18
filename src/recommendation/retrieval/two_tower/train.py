@@ -21,6 +21,7 @@ from recommendation.data.adapters.base import AdapterBundle
 from recommendation.data.schemas.engagement import EngagementProfile
 from recommendation.embeddings.encoder import SentenceTransformerEncoder
 from recommendation.features.pipeline import FeaturePipelineResult
+from recommendation.features.price import build_price_catalog_context
 from recommendation.features.product_features import ProductFeatures
 from recommendation.features.user_features import build_user_text_embeddings
 from recommendation.retrieval.two_tower.evaluation import RetrievalEvalReport, evaluate_split
@@ -128,12 +129,13 @@ def train_two_tower(
         config.embedding.sentence_transformer_model, device=config.embedding.device, batch_size=config.embedding.encode_batch_size
     )
     text_embeddings = build_user_text_embeddings(list(engagement_profiles.values()), st_encoder)
+    price_context = build_price_catalog_context(products)
 
     train_examples = build_training_examples(
-        engagement_profiles, splits, product_lookup, product_embeddings, config.features, text_embeddings
+        engagement_profiles, splits, product_lookup, product_embeddings, config.features, text_embeddings, price_context
     )
     eval_cases = build_eval_cases(
-        engagement_profiles, splits, product_lookup, product_embeddings, config.features, text_embeddings
+        engagement_profiles, splits, product_lookup, product_embeddings, config.features, text_embeddings, price_context
     )
     if not train_examples:
         raise ValueError("No training examples were constructed - check that the synthetic dataset has purchases.")

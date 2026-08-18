@@ -23,6 +23,11 @@ def test_recency_config_defaults():
     assert config.features.recency.half_life_days == 21.0
 
 
+def test_price_tier_embedding_dim_default():
+    config = load_config()
+    assert config.two_tower.price_tier_embedding_dim == 8
+
+
 def test_cold_start_sparse_blend_sums_to_one():
     config = load_config()
     blend = config.cold_start.sparse_blend

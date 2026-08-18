@@ -31,6 +31,7 @@ def test_save_and_load_round_trips_item_tower_predictions(tmp_path, encoder, con
         "semantic_embedding": np.random.default_rng(0).normal(size=(4, 8)).astype(np.float32),
         "category_id": np.array([0, 1, 1, 0], dtype=np.int32),
         "brand_id": np.array([0, 0, 1, 1], dtype=np.int32),
+        "price_tier_id": np.array([0, 1, 2, 3], dtype=np.int32),
         "numeric": np.random.default_rng(1).normal(size=(4, encoder.item_numeric_dim)).astype(np.float32),
     }
     original_output = item_tower.predict(item_batch, verbose=0)

@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import numpy as np
 
+from recommendation.features.price import price_relative_distance
 from recommendation.features.product_features import ProductFeatures
 from recommendation.features.user_features import UserFeatures
 
@@ -40,7 +41,8 @@ RANKING_FEATURE_NAMES = [
     "user_has_chatbot_context",
     "user_has_preferred_category",
     "user_has_age_group",
-    # item (9) - stock_quantity/is_active kept available, not a filter (Phase 7 does that, at the end)
+    # item (11) - stock_quantity/is_active kept available, not a filter (Phase 7 does that, at the end).
+    # category_relative_price/is_discounted added STEP 6 (docs/data-mapping.md section 15).
     "item_normalized_price",
     "item_discount_fraction",
     "item_log_purchase_count",
@@ -50,12 +52,24 @@ RANKING_FEATURE_NAMES = [
     "item_has_rating",
     "item_log_stock_quantity",
     "item_is_active",
-    # user-item cross features (5) - explicit signals the Two-Tower embedding doesn't expose directly
+    "item_category_relative_price",
+    "item_is_discounted",
+    # user-item cross features (8) - explicit signals the Two-Tower embedding doesn't expose directly.
+    # The 3 price ones (STEP 6) mirror the existing category/brand/preferred
+    # "affinity match" pattern - a small, interpretable, non-redundant set
+    # (docs/data-mapping.md section 15): a raw normalized reference point
+    # (user_normalized_typical_price), the derived compatibility distance
+    # (price_relative_distance), and a coarse tier match - NOT every
+    # possible price-distance formulation.
     "category_affinity_match",
     "brand_affinity_match",
     "preferred_category_match",
     "semantic_cosine_similarity",
     "has_semantic_similarity",
+    "user_normalized_typical_price",
+    "user_has_price_profile",
+    "price_relative_distance",
+    "price_tier_match",
     # retrieval signal (2) - what Phase 5's VectorIndex already computed for this candidate
     "retrieval_score",
     "retrieval_rank_normalized",
@@ -96,6 +110,22 @@ def build_ranking_feature_vector(
     )
     normalized_price = min(product_features.effective_price / max_price, 1.0) if max_price > 0 else 0.0
 
+    # STEP 6 (docs/data-mapping.md section 15): all degrade to neutral
+    # (0.0) when the user has no price profile at all (an old call site
+    # that didn't build/pass `price_context` to `build_user_features`) -
+    # `user_has_price_profile` is what lets the model tell that apart from
+    # a genuine "price matches exactly" (distance=0) case.
+    price_profile = user_features.price_profile
+    user_normalized_typical_price = 0.0
+    price_tier_match = 0.0
+    if price_profile is not None:
+        if max_price > 0:
+            user_normalized_typical_price = min(price_profile.typical_price / max_price, 1.0)
+        price_tier_match = 1.0 if price_profile.price_tier == product_features.price_tier else 0.0
+    price_distance = price_relative_distance(
+        product_features.effective_price, price_profile.typical_price if price_profile is not None else None
+    )
+
     return np.array(
         [
             np.log1p(user_features.purchase_count),
@@ -114,11 +144,17 @@ def build_ranking_feature_vector(
             1.0 if product_features.average_rating is not None else 0.0,
             np.log1p(product_features.stock_quantity),
             1.0 if product_features.is_active else 0.0,
+            product_features.category_relative_price,
+            1.0 if product_features.is_discounted else 0.0,
             category_match,
             brand_match,
             preferred_match,
             semantic_similarity,
             1.0 if has_similarity else 0.0,
+            user_normalized_typical_price,
+            1.0 if price_profile is not None else 0.0,
+            price_distance,
+            price_tier_match,
             retrieval_score,
             retrieval_rank / max(pool_size - 1, 1),
         ],

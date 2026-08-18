@@ -544,3 +544,65 @@ def test_future_event_relative_to_reference_time_raises_not_silently_accepted():
     config = _config(click_weight=1.0, recency=RecencyConfig(enabled=True, half_life_days=21.0))
     with pytest.raises(RecencyLeakageError):
         build_user_features(profile, _products(), _embeddings(), config, reference_time=T0)
+
+
+# --- STEP 6: price_profile wiring (docs/data-mapping.md section 15) -------
+
+def test_price_context_omitted_leaves_price_profile_none():
+    profile = EngagementProfile(
+        user_id=1,
+        profile=UserProfile(user_id=1),
+        purchases=[PurchaseRecord(user_id=1, product_id=1, order_id=1, quantity=1)],
+    )
+    features = build_user_features(profile, _products(), _embeddings(), _config())
+    assert features.price_profile is None
+
+
+def test_price_context_supplied_populates_price_profile_from_purchases():
+    from recommendation.features.price import build_price_catalog_context
+
+    profile = EngagementProfile(
+        user_id=1,
+        profile=UserProfile(user_id=1),
+        purchases=[PurchaseRecord(user_id=1, product_id=1, order_id=1, quantity=1)],  # Greek Yogurt, price=4.0
+    )
+    price_context = build_price_catalog_context(list(_products().values()))
+    features = build_user_features(profile, _products(), _embeddings(), _config(), price_context=price_context)
+    assert features.price_profile is not None
+    assert features.price_profile.fallback_source == "purchase_history"
+    assert features.price_profile.typical_price == pytest.approx(4.0)
+    assert features.price_profile.supporting_purchase_count == 1
+
+
+def test_price_context_supplied_no_purchases_falls_back_gracefully():
+    from recommendation.features.price import build_price_catalog_context
+
+    profile = EngagementProfile(user_id=1, profile=UserProfile(user_id=1))  # NO_HISTORY
+    price_context = build_price_catalog_context(list(_products().values()))
+    features = build_user_features(profile, _products(), _embeddings(), _config(), price_context=price_context)
+    assert features.price_profile is not None
+    assert features.price_profile.fallback_source == "catalog_prior"
+    assert features.price_profile.supporting_purchase_count == 0
+
+
+def test_exclude_product_ids_also_excludes_that_purchase_from_price_profile():
+    """Leave-one-out (Phase 4 target-leakage guard) must apply to the price
+    profile exactly like every other purchase-derived signal - the
+    excluded product's purchase must not influence `typical_price` either.
+    """
+    from recommendation.features.price import build_price_catalog_context
+
+    profile = EngagementProfile(
+        user_id=1,
+        profile=UserProfile(user_id=1),
+        purchases=[
+            PurchaseRecord(user_id=1, product_id=1, order_id=1, quantity=1),  # Greek Yogurt, price=4.0
+            PurchaseRecord(user_id=1, product_id=3, order_id=2, quantity=1),  # Whole Milk, price=2.5
+        ],
+    )
+    price_context = build_price_catalog_context(list(_products().values()))
+    features = build_user_features(
+        profile, _products(), _embeddings(), _config(), price_context=price_context, exclude_product_ids=frozenset({1})
+    )
+    assert features.price_profile.supporting_purchase_count == 1
+    assert features.price_profile.typical_price == pytest.approx(2.5)

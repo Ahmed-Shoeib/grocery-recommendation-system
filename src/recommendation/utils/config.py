@@ -169,6 +169,13 @@ class TwoTowerConfig(BaseModel):
     category_embedding_dim: int = 16
     brand_embedding_dim: int = 16
     age_group_embedding_dim: int = 8
+    # STEP 6 (docs/data-mapping.md section 15): BUDGET/MID/PREMIUM + an
+    # "unknown/no profile" bucket - only 4 possible values, so a small
+    # embedding is deliberate (matches age_group_embedding_dim's size,
+    # not category/brand's larger vocab). A learned embedding, not a
+    # 0/1/2 ordinal integer - see FeatureConfig-adjacent design note in
+    # `retrieval.two_tower.feature_encoding`.
+    price_tier_embedding_dim: int = 8
     # A user needs at least this many DISTINCT purchased products to be
     # eligible for the val/test leave-one-out holdout (1 test + 1 val +
     # >=1 remaining in train); users below this threshold contribute all

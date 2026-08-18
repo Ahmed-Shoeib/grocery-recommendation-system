@@ -39,6 +39,7 @@ from recommendation.data.synthetic.dataset import generate_synthetic_dataset
 from recommendation.data.synthetic.validation import validate_dataset
 from recommendation.embeddings.encoder import SentenceTransformerEncoder
 from recommendation.features.pipeline import run_feature_pipeline
+from recommendation.features.price import PriceCatalogContext, build_price_catalog_context
 from recommendation.features.product_features import ProductFeatures
 from recommendation.features.user_features import build_user_text_embeddings
 from recommendation.retrieval.index.base import VectorIndex
@@ -74,6 +75,10 @@ class RecommendationService:
     vector_index: VectorIndex
     bundle: AdapterBundle
     config: AppConfig
+    # STEP 6 (docs/data-mapping.md section 15): catalog-only price stats,
+    # built ONCE at service load (same lifecycle as product_features) and
+    # reused for every request - never a leakage surface.
+    price_context: PriceCatalogContext = field(default_factory=lambda: PriceCatalogContext(0.0, 0.0, (0.0, 0.0)))
     ranker_model_version: str = "unknown"
     two_tower_model_version: str = "unknown"
     # Populated from the Phase 3 feature pipeline's own output - not
@@ -105,6 +110,7 @@ class RecommendationService:
             self.vector_index,
             self.config,
             limit,
+            price_context=self.price_context,
         )
 
     def readiness_checks(self) -> dict[str, bool]:
@@ -155,7 +161,9 @@ def build_recommendation_service(config: AppConfig) -> RecommendationService:
     )
     feature_result = run_feature_pipeline(bundle, config, encoder=st_encoder)
     text_embeddings = build_user_text_embeddings(list(feature_result.engagement_profiles.values()), st_encoder)
-    product_lookup = {p.id: p for p in bundle.products.list_products()}
+    products = bundle.products.list_products()
+    product_lookup = {p.id: p for p in products}
+    price_context = build_price_catalog_context(products)
 
     logger.info(
         "Recommendation service built: %d products, %d users, retrieval backend=%s",
@@ -174,6 +182,7 @@ def build_recommendation_service(config: AppConfig) -> RecommendationService:
         vector_index=vector_index,
         bundle=bundle,
         config=config,
+        price_context=price_context,
         ranker_model_version=str(ranker_artifacts.metadata.get("model_version", "unknown")),
         two_tower_model_version=str(two_tower_artifacts.metadata.get("model_version", "unknown")),
         engagement_profiles=feature_result.engagement_profiles,

@@ -79,6 +79,7 @@ import numpy as np
 
 from recommendation.data.schemas.engagement import EngagementProfile, SearchRecord
 from recommendation.data.schemas.product import Product
+from recommendation.features.price import PriceCatalogContext, UserPriceProfile, build_user_price_profile
 from recommendation.features.recency import effective_weight
 from recommendation.utils.config import FeatureConfig, RecencyConfig
 
@@ -111,6 +112,14 @@ class UserFeatures:
     category_affinity: dict[str, float] = field(default_factory=dict)
     brand_affinity: dict[str, float] = field(default_factory=dict)
     semantic_embedding: np.ndarray | None = None
+
+    # STEP 6 (docs/data-mapping.md section 15): `None` only when the
+    # caller didn't supply `price_context` to `build_user_features` (an
+    # old/not-yet-updated call site) - every user gets a real profile
+    # (via the purchase-history / preferred-category / catalog-median
+    # fallback hierarchy - see `features.price.build_user_price_profile`)
+    # once `price_context` is provided, including NO_HISTORY users.
+    price_profile: UserPriceProfile | None = None
 
 
 def _normalize_and_truncate(counts: Counter, top_k: int) -> dict[str, float]:
@@ -235,6 +244,7 @@ def build_user_features(
     text_embeddings: dict[str, np.ndarray] | None = None,
     exclude_product_ids: frozenset[int] = frozenset(),
     reference_time: datetime | None = None,
+    price_context: PriceCatalogContext | None = None,
 ) -> UserFeatures:
     """`reference_time` is the point in time recency (`config.recency`) is
     measured against - see `features.recency` and docs/data-mapping.md
@@ -243,6 +253,15 @@ def build_user_features(
     contribution neutral (`effective_weight == base_weight`), regardless
     of `config.recency.enabled` - see `features.recency.effective_weight`.
     There is no implicit wall-clock fallback here.
+
+    `price_context` (STEP 6, docs/data-mapping.md section 15) is a
+    `features.price.PriceCatalogContext` - built ONCE from the product
+    catalog (`features.price.build_price_catalog_context`) and reused
+    across every user. `None` (the default) leaves `UserFeatures
+    .price_profile` unset (`None`) - a call site that hasn't been updated
+    to build/pass a `PriceCatalogContext` yet degrades gracefully rather
+    than crashing; every call site this phase touches DOES pass one, so
+    `price_profile` is populated end-to-end for training/serving.
 
       - Offline (temporal future-purchase) evaluation: the caller MUST
         pass the evaluation cutoff (e.g.
@@ -422,6 +441,14 @@ def build_user_features(
 
     total_events = len(clicks) + len(purchases) + len(cart_items) + len(searches) + (1 if chatbot is not None else 0)
 
+    price_profile = (
+        build_user_price_profile(
+            purchases, product_lookup, profile.profile.preferred_category, price_context, reference_time, config.recency
+        )
+        if price_context is not None
+        else None
+    )
+
     return UserFeatures(
         user_id=profile.user_id,
         preferred_category=profile.profile.preferred_category,
@@ -438,4 +465,5 @@ def build_user_features(
         category_affinity=category_affinity,
         brand_affinity=brand_affinity,
         semantic_embedding=semantic_embedding,
+        price_profile=price_profile,
     )

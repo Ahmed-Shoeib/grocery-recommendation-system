@@ -22,6 +22,7 @@ from recommendation.data.adapters.engagement import build_engagement_profile
 from recommendation.data.schemas.engagement import EngagementProfile
 from recommendation.embeddings.encoder import SentenceTransformerEncoder
 from recommendation.embeddings.product_embeddings import ProductEmbeddingCache, get_or_compute_product_embeddings
+from recommendation.features.price import build_price_catalog_context
 from recommendation.features.product_features import ProductFeatures, build_product_features
 from recommendation.features.user_features import UserFeatures, build_user_features, build_user_text_embeddings
 from recommendation.utils.config import AppConfig, resolve_path
@@ -81,6 +82,10 @@ def run_feature_pipeline(
 
     text_embeddings = build_user_text_embeddings(list(engagement_profiles.values()), encoder)
     product_lookup = {p.id: p for p in products}
+    # STEP 6 (docs/data-mapping.md section 15): catalog-only, built ONCE
+    # and reused for every user - never a leakage surface (see
+    # `features.price` module docstring).
+    price_context = build_price_catalog_context(products)
     user_features = {
         uid: build_user_features(
             profile,
@@ -89,6 +94,7 @@ def run_feature_pipeline(
             config.features,
             text_embeddings=text_embeddings,
             reference_time=reference_time,
+            price_context=price_context,
         )
         for uid, profile in engagement_profiles.items()
     }

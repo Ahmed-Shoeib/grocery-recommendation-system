@@ -21,6 +21,7 @@ from dataclasses import dataclass
 
 from recommendation.data.schemas.engagement import EngagementProfile
 from recommendation.data.schemas.product import Product
+from recommendation.features.price import PriceCatalogContext
 from recommendation.features.user_features import UserFeatures, build_user_features
 from recommendation.retrieval.two_tower.splitting import UserSplit
 from recommendation.utils.config import FeatureConfig
@@ -48,6 +49,7 @@ def build_training_examples(
     product_embeddings: dict[int, np.ndarray],
     feature_config: FeatureConfig,
     text_embeddings: dict[str, np.ndarray],
+    price_context: PriceCatalogContext | None = None,
 ) -> list[TrainingExample]:
     examples: list[TrainingExample] = []
     for user_id, split in splits.items():
@@ -64,6 +66,7 @@ def build_training_examples(
                 feature_config,
                 text_embeddings=text_embeddings,
                 exclude_product_ids=exclude,
+                price_context=price_context,
             )
             examples.append(TrainingExample(user_id=user_id, product_id=product_id, user_features=user_features))
     return examples
@@ -76,6 +79,7 @@ def build_eval_cases(
     product_embeddings: dict[int, np.ndarray],
     feature_config: FeatureConfig,
     text_embeddings: dict[str, np.ndarray],
+    price_context: PriceCatalogContext | None = None,
 ) -> list[EvalCase]:
     cases: list[EvalCase] = []
     for user_id, split in splits.items():
@@ -89,6 +93,7 @@ def build_eval_cases(
             feature_config,
             text_embeddings=text_embeddings,
             exclude_product_ids=split.held_out_ids,
+            price_context=price_context,
         )
         cases.append(
             EvalCase(

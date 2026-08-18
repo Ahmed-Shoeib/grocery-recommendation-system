@@ -40,6 +40,7 @@ import tensorflow as tf
 
 from recommendation.data.schemas.engagement import EngagementProfile
 from recommendation.data.schemas.product import Product
+from recommendation.features.price import PriceCatalogContext
 from recommendation.features.product_features import ProductFeatures
 from recommendation.features.user_features import UserFeatures, build_user_features
 from recommendation.ranking.features import build_ranking_feature_vector
@@ -107,6 +108,7 @@ def build_ranking_dataset(
     vector_index: VectorIndex,
     pool_size: int,
     ranking_config: RankingConfig,
+    price_context: PriceCatalogContext | None = None,
 ) -> tuple[list[RankingExample], list[RankingExample], list[RankingEvalCase]]:
     trainable = {uid: split for uid, split in splits.items() if split.train_product_ids}
 
@@ -118,6 +120,7 @@ def build_ranking_dataset(
             feature_config,
             text_embeddings=text_embeddings,
             exclude_product_ids=exclude,
+            price_context=price_context,
         )
 
     def _feature_row(user_features: UserFeatures, product_id: int, score: float, rank: int) -> np.ndarray:
@@ -151,7 +154,7 @@ def build_ranking_dataset(
 
     # --- pass 3: Two-Tower's own eval cases (evaluable users, val+test excluded) ---
     tt_eval_cases = build_eval_cases(
-        engagement_profiles, splits, product_lookup, product_embeddings, feature_config, text_embeddings
+        engagement_profiles, splits, product_lookup, product_embeddings, feature_config, text_embeddings, price_context
     )
     eval_results: list[SearchResult] = []
     if tt_eval_cases:

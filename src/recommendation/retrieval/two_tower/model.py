@@ -51,6 +51,7 @@ def build_item_tower(encoder: TwoTowerFeatureEncoder, config: TwoTowerConfig) ->
     semantic_in = tf.keras.Input(shape=(encoder.embedding_dim,), name="semantic_embedding")
     category_in = tf.keras.Input(shape=(), dtype="int32", name="category_id")
     brand_in = tf.keras.Input(shape=(), dtype="int32", name="brand_id")
+    price_tier_in = tf.keras.Input(shape=(), dtype="int32", name="price_tier_id")
     numeric_in = tf.keras.Input(shape=(encoder.item_numeric_dim,), name="numeric")
 
     category_emb = tf.keras.layers.Embedding(
@@ -59,12 +60,27 @@ def build_item_tower(encoder: TwoTowerFeatureEncoder, config: TwoTowerConfig) ->
     brand_emb = tf.keras.layers.Embedding(
         encoder.brand_vocab.size, config.brand_embedding_dim, name="item_brand_embedding"
     )(brand_in)
+    # STEP 6 (docs/data-mapping.md section 15): BUDGET/MID/PREMIUM + an
+    # "unknown" bucket as a LEARNED embedding, not an ordinal 0/1/2 number
+    # - a categorical tier has no inherent numeric distance the model
+    # should be forced to assume.
+    price_tier_emb = tf.keras.layers.Embedding(
+        encoder.price_tier_vocab.size, config.price_tier_embedding_dim, name="item_price_tier_embedding"
+    )(price_tier_in)
 
-    concat = tf.keras.layers.Concatenate(name="item_concat")([semantic_in, category_emb, brand_emb, numeric_in])
+    concat = tf.keras.layers.Concatenate(name="item_concat")(
+        [semantic_in, category_emb, brand_emb, price_tier_emb, numeric_in]
+    )
     output = _projection_mlp(concat, config, "item")
 
     return tf.keras.Model(
-        inputs={"semantic_embedding": semantic_in, "category_id": category_in, "brand_id": brand_in, "numeric": numeric_in},
+        inputs={
+            "semantic_embedding": semantic_in,
+            "category_id": category_in,
+            "brand_id": brand_in,
+            "price_tier_id": price_tier_in,
+            "numeric": numeric_in,
+        },
         outputs=output,
         name="item_tower",
     )
@@ -74,6 +90,7 @@ def build_user_tower(encoder: TwoTowerFeatureEncoder, config: TwoTowerConfig) ->
     semantic_in = tf.keras.Input(shape=(encoder.embedding_dim,), name="semantic_embedding")
     preferred_category_in = tf.keras.Input(shape=(), dtype="int32", name="preferred_category_id")
     age_group_in = tf.keras.Input(shape=(), dtype="int32", name="age_group_id")
+    price_tier_in = tf.keras.Input(shape=(), dtype="int32", name="price_tier_id")
     category_affinity_in = tf.keras.Input(shape=(encoder.category_affinity_dim,), name="category_affinity")
     brand_affinity_in = tf.keras.Input(shape=(encoder.brand_affinity_dim,), name="brand_affinity")
     numeric_in = tf.keras.Input(shape=(encoder.user_numeric_dim,), name="numeric")
@@ -84,9 +101,16 @@ def build_user_tower(encoder: TwoTowerFeatureEncoder, config: TwoTowerConfig) ->
     age_group_emb = tf.keras.layers.Embedding(
         encoder.age_group_vocab.size, config.age_group_embedding_dim, name="user_age_group_embedding"
     )(age_group_in)
+    # Same fixed BUDGET/MID/PREMIUM/unknown vocabulary as the item tower
+    # (`encoder.price_tier_vocab` is shared) - the user's DERIVED price
+    # tier (`UserFeatures.price_profile.price_tier`), not the age_group-
+    # style opaque label - see `features.price.build_user_price_profile`.
+    price_tier_emb = tf.keras.layers.Embedding(
+        encoder.price_tier_vocab.size, config.price_tier_embedding_dim, name="user_price_tier_embedding"
+    )(price_tier_in)
 
     concat = tf.keras.layers.Concatenate(name="user_concat")(
-        [semantic_in, preferred_category_emb, age_group_emb, category_affinity_in, brand_affinity_in, numeric_in]
+        [semantic_in, preferred_category_emb, age_group_emb, price_tier_emb, category_affinity_in, brand_affinity_in, numeric_in]
     )
     output = _projection_mlp(concat, config, "user")
 
@@ -95,6 +119,7 @@ def build_user_tower(encoder: TwoTowerFeatureEncoder, config: TwoTowerConfig) ->
             "semantic_embedding": semantic_in,
             "preferred_category_id": preferred_category_in,
             "age_group_id": age_group_in,
+            "price_tier_id": price_tier_in,
             "category_affinity": category_affinity_in,
             "brand_affinity": brand_affinity_in,
             "numeric": numeric_in,

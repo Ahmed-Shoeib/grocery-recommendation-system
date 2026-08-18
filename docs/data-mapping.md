@@ -865,6 +865,7 @@ genuinely temporal held-out split instead of this content-based heuristic.
 | §11 Neural ranking (VectorIndex candidates, richer cross features, baseline comparison) | Phase 6 |
 | §12 Leakage-limitation mitigation | Phase 3 (guard) / Phase 4 (consumer) / Phase 6 (extended to ranking negatives) / User_events contract change (extended to clicks) |
 | §14 Recency weighting (`features.recency`, `effective_weight`, `_signal_embedding_component`) | STEP 5 recency phase |
+| §15 Price-aware derived features (`features.price`, `price_tier_id`/`PriceCatalogContext`/`UserPriceProfile`) | STEP 6 price phase |
 
 ## 14. Recency weighting (STEP 5)
 
@@ -995,4 +996,196 @@ phase (see the evaluation scope note above) - `models/` is unchanged.
 Product embeddings for this SQLite catalog are cached separately at
 `data/processed/product_embeddings_sqlite.npz` (gitignored, regenerable),
 never overwriting the synthetic V1 cache (`embedding.cache_path`).
+
+## 15. Price-aware derived features (STEP 6)
+
+**Non-negotiable ERD constraint**: every concept below (`effective_price`,
+price tiers, category-relative price, the user price profile,
+compatibility features) is derived ENTIRELY in the recommendation feature
+layer (`features.price`) from `Product.Price`/`SalePrice`/
+`DiscountPercentage` (plain backend data inputs) and purchase history.
+NONE of it is written back to `Product`, `User`, `User_events`, or any
+other backend/SQLite entity - no `price_tier`, `preferred_price`,
+`price_sensitivity`, etc. column was added anywhere in the ERD.
+
+**Price support that existed BEFORE this phase**: `ProductFeatures
+.effective_price` (`sale_price if set else price`, no validity check) and
+two Two-Tower/ranker numeric features (`normalized_price`,
+`discount_fraction`/`item_discount_fraction`) - product-side only. There
+was NO user-side price signal anywhere in the pipeline.
+
+**`effective_price`** (`features.price.effective_price`): `sale_price`
+when it's a VALID discount (`0 < sale_price < price`), else `price` -
+stricter than the pre-existing formula (which only checked `sale_price is
+not None`); a malformed `sale_price >= price` now safely falls back to
+`price` instead of being treated as a discount. Not observed in
+`data/sqlite/backend_shaped_synthetic.db` (0 malformed rows out of 466
+discounted products, verified by inspection), but `Product`'s schema
+doesn't forbid it.
+
+**Product-side features added** (`ProductFeatures`, computed once over
+the full catalog in `build_product_features`): `is_discounted` (bool),
+`price_tier` (`"budget"`/`"mid"`/`"premium"` - catalog-wide TERTILES of
+`effective_price`, `compute_catalog_tier_boundaries` - data-relative, not
+arbitrary absolute cutoffs), `category_relative_price` (percentile rank
+of `effective_price` WITHIN the product's own category, `0.5` for a
+category of size 1 - "no meaningful comparison" possible - so the same
+$20 item can rank very differently depending on category, e.g. $20
+cereal vs. $20 meat).
+All three default to neutral values (`False`/`"mid"`/`0.5`) on the
+dataclass so every PRE-EXISTING call site/test that constructs a
+`ProductFeatures` directly kept working unchanged.
+
+**User price profile** (`features.price.UserPriceProfile`/
+`build_user_price_profile`, one new `UserFeatures.price_profile` field,
+`None` unless a caller supplies `price_context`): `typical_price`,
+`price_spread` (population std - `0.0` for a single data point, never
+NaN), `price_tier`, `supporting_purchase_count`, `fallback_source`.
+**PURCHASE is the sole driver** - clicks/cart/search/chatbot are
+deliberately NOT used as price evidence (a click on a $500 item doesn't
+prove willingness to pay $500; only a purchase does - keeping this phase
+simple per its own scope, not an oversight). Three-level, fully
+deterministic fallback hierarchy:
+
+  1. `"purchase_history"` - >=1 purchase with a resolvable price.
+     `typical_price` is the RECENCY-WEIGHTED mean of those prices, reusing
+     STEP 5's `features.recency.effective_weight`/`reference_time`
+     UNCHANGED (no second recency implementation) - so a documented
+     "recent spending shift" (e.g. purchases at ~20-30 six months ago,
+     ~70-80 recently) pulls `typical_price` toward the recent cluster
+     rather than averaging them away (proven in
+     `tests/test_price.py::test_recent_purchases_outweigh_old_ones_when_recency_enabled`
+     and shown live for a real SQLite user by `scripts
+     /price_diagnostics.py`).
+  2. `"preferred_category_prior"` - zero usable purchases, but the user
+     has a `preferredCategory`: falls back to that category's catalog
+     median price (catalog-only, never user behavior).
+  3. `"catalog_prior"` - zero usable purchases AND no preferred category
+     (the true NO_HISTORY case): falls back to the whole-catalog median.
+
+  AgeGroup is deliberately NEVER used to infer price preference (no
+  older-is-premium/younger-is-budget assumption) - it plays no role
+  anywhere in this section.
+
+**Historical-price limitation (important, honest gap)**:
+`PurchaseRecord.unit_price` (the real transaction price) is populated
+ONLY for the ERD-based synthetic path (`Order`/`OrderItem.UnitPrice`) -
+the confirmed `User_events` contract (§4) carries no price at all, so a
+`User_events`/SQLite-sourced purchase falls back to the product's CURRENT
+`effective_price` as the best available proxy for "what did this cost."
+This is not necessarily the price at the actual moment of purchase - only
+matters if a product's price has since changed, which this static
+catalog snapshot never does, but is documented rather than hidden (same
+spirit as §12's "no timestamps" limitation).
+
+**Leakage safety (temporal evaluation)**: `build_user_price_profile`
+takes the SAME `reference_time`/`config.recency` STEP 5 already threads
+through `build_user_features` - no separate wall-clock lookup, no second
+leakage surface. Catalog-wide statistics (`PriceCatalogContext` - median/
+std/tertile boundaries/per-category median/std) are built ONCE from the
+product catalog ALONE (`build_price_catalog_context` takes only a
+`products` list - verified by a signature-introspection test, not just
+documented by convention) and are therefore never a leakage risk
+regardless of evaluation cutoff - this project has exactly one static
+catalog snapshot throughout, so "the snapshot available at evaluation
+time" is trivially always the same snapshot.
+`tests/test_temporal_future_purchase.py::test_price_profile_over_point_in_time_profile_never_sees_the_future_target`
+proves the essential scenario end-to-end: an old purchase, a held-out
+FUTURE purchase at a very different price, and a cutoff between them -
+the future purchase's price has zero influence before its cutoff, and
+correctly becomes usable history once the cutoff moves past it (§23's
+repeat-purchase policy, unchanged).
+
+**User x product compatibility features** (`features.price
+.price_relative_distance` + a tier-match check, consumed by the ranker):
+`price_relative_distance = |candidate_price - user_typical_price| /
+max(user_typical_price, epsilon)` (scale-invariant) and `price_tier_match`
+(coarse categorical agreement) - a deliberately SMALL, non-redundant set,
+not every possible price-distance formulation. **No hand-coded "expensive
+is better" rule exists anywhere** - price answers "is this price
+compatible with this user's behavior," never "how expensive is this
+candidate."
+
+**Product/Item Tower** (`retrieval.two_tower`): `ITEM_NUMERIC_FEATURE_NAMES`
+gained `category_relative_price`/`is_discounted` (+2). A NEW categorical
+input, `price_tier_id`, was added with its OWN learned `Embedding`
+(`config.two_tower.price_tier_embedding_dim`, default 8) over a FIXED
+4-value vocabulary (`features.price.PRICE_TIERS` = budget/mid/premium +
+an "unknown" bucket at index 0) - deliberately NOT an ordinal 0/1/2
+number (a categorical tier has no numeric distance the model should be
+forced to assume).
+
+**User Tower**: `USER_NUMERIC_FEATURE_NAMES` gained
+`normalized_typical_price` (+1, normalized by the SAME catalog
+`max_price` the item tower already uses - consistent scale, no new
+normalization stat). The user's derived `price_tier` shares the item
+tower's exact `price_tier_id`/`Embedding` mechanism (same fixed
+vocabulary). No separate "has price profile" numeric flag is needed on
+this side - `price_tier_id`'s dedicated "unknown" bucket already
+disambiguates "no `price_profile` at all" (an old/unwired call site) from
+every REAL profile (which always gets a real budget/mid/premium tier,
+even the catalog-prior fallback).
+
+**Ranker** (`ranking.features`): gained `item_category_relative_price`,
+`item_is_discounted` (item block), and `user_normalized_typical_price`,
+`user_has_price_profile`, `price_relative_distance`, `price_tier_match`
+(cross-feature block) - 6 new features. `user_has_price_profile` IS
+needed here (unlike the towers) because the ranker has no embedding-based
+"unknown" bucket for its plain numeric cross features - it disambiguates
+"no data" (distance=0.0, flag=0.0) from "genuinely close" (distance=0.0,
+flag=1.0).
+
+**Exact dimensions - BEFORE -> AFTER**:
+
+| Encoder | Before | After | Delta |
+|---|---|---|---|
+| Two-Tower item numeric (`item_numeric_dim`) | 7 | 9 | +2 |
+| Two-Tower user numeric (`user_numeric_dim`) | 8 | 9 | +1 |
+| Two-Tower item tower categorical inputs | category_id, brand_id | + price_tier_id | +1 input |
+| Two-Tower user tower categorical inputs | preferred_category_id, age_group_id | + price_tier_id | +1 input |
+| Ranker feature vector (`RANKING_FEATURE_NAMES`) | 23 | 29 | +6 |
+
+**Model artifact compatibility**: because `item_numeric_dim`/
+`user_numeric_dim`/the new `price_tier_id` input/`RANKING_FEATURE_NAMES`'
+length all changed, the Two-Tower/ranker artifacts currently under
+`models/` (trained against the OLD 7/8/23-dimensional shapes) are
+DIMENSION-INCOMPATIBLE with the code as of this phase - loading them and
+calling `.predict()` would raise a Keras shape-mismatch error (verified:
+this is exactly what broke `RecommendationService`/live API/dashboard
+would hit, NOT the automated test suite - every test that exercises a
+real Keras Two-Tower/ranker model BUILDS one fresh via `build_user_tower`/
+`build_item_tower`/`build_ranker_model` in the same test, so it always
+matches the CURRENT encoder's dimensions; no test loads a stale
+cross-run artifact). `models/` was intentionally left untouched (not
+retrained, not mutated) - the NEXT phase is specifically scoped to
+retrain Two-Tower/ranker/rebuild the ScaNN/FAISS index against this
+SQLite catalog with the new price-aware feature set.
+`TwoTowerFeatureEncoder.from_dict` degrades a pre-STEP-6 serialized
+encoder dict missing the `price_tier_vocab` key to the same fixed
+`PRICE_TIERS` vocabulary `fit()` always produces, rather than raising.
+
+**Evaluation in this phase**: feature-level diagnostics only
+(`scripts/price_diagnostics.py`: product examples, 5 real-user price-
+profile examples spanning strong history / recent spending shift / one
+purchase / engagement-no-purchase / NO_HISTORY, and 3 user x candidate
+compatibility examples) - no retraining, no Top-N recommendation-quality
+comparison (that requires the SAME retrained-Two-Tower/ranker work the
+NEXT phase is scoped to do, per §8.1's precedent of deferring Top-N
+evaluation until an appropriately-dimensioned model exists for this
+catalog).
+
+**Revenue-aware metrics**: NOT implemented this phase (deliberately -
+see §35 of this phase's own spec: "prepare, don't optimize yet"). The
+primary offline ground truth is UNCHANGED and remains held-out FUTURE
+PURCHASE products (§8.1) - Precision/Recall/HitRate/NDCG/MRR@K continue
+to treat every future purchase as equally "relevant" regardless of price;
+a future Revenue@K or purchase-value-weighted metric would be a SEPARATE,
+secondary business metric, never a redefinition of relevance.
+
+**Limitations of synthetic price behavior**: this dataset's purchase
+prices are drawn from a synthetic price-affinity model, not real
+willingness-to-pay data - the price tiers/typical-price estimates this
+phase produces are internally consistent and mechanically correct, but
+(like every other V1 offline result, §8) they demonstrate PIPELINE
+CORRECTNESS, not a real-world-calibrated price-sensitivity signal.
 

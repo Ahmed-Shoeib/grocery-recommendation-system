@@ -22,6 +22,7 @@ import tensorflow as tf
 from recommendation.data.adapters.base import AdapterBundle
 from recommendation.embeddings.encoder import SentenceTransformerEncoder
 from recommendation.features.pipeline import FeaturePipelineResult
+from recommendation.features.price import build_price_catalog_context
 from recommendation.features.user_features import build_user_text_embeddings
 from recommendation.ranking.evaluation import RankingEvalReport, baseline_scores, evaluate_ranking
 from recommendation.ranking.examples import RankingExample, build_ranking_dataset
@@ -96,6 +97,7 @@ def train_ranker(
         config.embedding.sentence_transformer_model, device=config.embedding.device, batch_size=config.embedding.encode_batch_size
     )
     text_embeddings = build_user_text_embeddings(list(engagement_profiles.values()), st_encoder)
+    price_context = build_price_catalog_context(products)
 
     vector_index = build_vector_index(config.retrieval)
     vector_index.build(two_tower_artifacts.item_ids, two_tower_artifacts.item_embeddings)
@@ -116,6 +118,7 @@ def train_ranker(
         vector_index,
         pool_size,
         rk_config,
+        price_context,
     )
     if not train_examples:
         raise ValueError("No ranking training examples were constructed - check that the synthetic dataset has purchases.")

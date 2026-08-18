@@ -28,6 +28,7 @@ def _item_batch(encoder: TwoTowerFeatureEncoder, n: int) -> dict[str, np.ndarray
         "semantic_embedding": np.random.default_rng(0).normal(size=(n, encoder.embedding_dim)).astype(np.float32),
         "category_id": np.zeros(n, dtype=np.int32),
         "brand_id": np.zeros(n, dtype=np.int32),
+        "price_tier_id": np.zeros(n, dtype=np.int32),
         "numeric": np.random.default_rng(1).normal(size=(n, encoder.item_numeric_dim)).astype(np.float32),
     }
 
@@ -37,6 +38,7 @@ def _user_batch(encoder: TwoTowerFeatureEncoder, n: int) -> dict[str, np.ndarray
         "semantic_embedding": np.random.default_rng(2).normal(size=(n, encoder.embedding_dim)).astype(np.float32),
         "preferred_category_id": np.zeros(n, dtype=np.int32),
         "age_group_id": np.zeros(n, dtype=np.int32),
+        "price_tier_id": np.zeros(n, dtype=np.int32),
         "category_affinity": np.random.default_rng(3).random((n, encoder.category_affinity_dim)).astype(np.float32),
         "brand_affinity": np.random.default_rng(4).random((n, encoder.brand_affinity_dim)).astype(np.float32),
         "numeric": np.random.default_rng(5).normal(size=(n, encoder.user_numeric_dim)).astype(np.float32),

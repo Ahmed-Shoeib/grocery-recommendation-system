@@ -60,6 +60,7 @@ import tensorflow as tf
 
 from recommendation.data.adapters.base import AdapterBundle
 from recommendation.data.schemas.product import Product
+from recommendation.features.price import PriceCatalogContext
 from recommendation.features.product_features import ProductFeatures
 from recommendation.features.user_features import UserFeatures, build_user_features
 from recommendation.ranking.features import build_ranking_feature_vector
@@ -325,6 +326,7 @@ def recommend(
     config: AppConfig,
     limit: int,
     context: dict | None = None,  # noqa: ARG001 - extensibility hook, unused by any V1 model (see module docstring)
+    price_context: PriceCatalogContext | None = None,
 ) -> RecommendationResult:
     """Convenience wrapper matching `serving/__init__.py`'s documented
     `recommend(user_id, limit, context=None)` shape: looks up the user's
@@ -336,6 +338,12 @@ def recommend(
     is the live-request boundary, so it explicitly supplies
     `reference_time=datetime.now()` (wall-clock "now" is legitimate here,
     unlike in offline evaluation or the non-temporal training path).
+
+    `price_context` (STEP 6, docs/data-mapping.md section 15) is likewise
+    threaded straight through to `build_user_features` - `None` (default)
+    leaves `UserFeatures.price_profile` unset for this request, degrading
+    gracefully (neutral price features) rather than crashing; the real
+    caller (`RecommendationService.recommend`) builds and passes one.
     """
     from datetime import datetime
 
@@ -346,7 +354,7 @@ def recommend(
     )
     user_features = build_user_features(
         profile, product_lookup, product_embeddings, config.features,
-        text_embeddings=text_embeddings, reference_time=datetime.now(),
+        text_embeddings=text_embeddings, reference_time=datetime.now(), price_context=price_context,
     )
     return generate_recommendations(
         user_features, product_features, product_embeddings, all_item_ids, tt_encoder, user_tower, ranker_model, vector_index, config, limit

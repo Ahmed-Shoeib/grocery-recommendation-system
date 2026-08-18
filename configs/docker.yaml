@@ -103,6 +103,7 @@ two_tower:
   category_embedding_dim: 16
   brand_embedding_dim: 16
   age_group_embedding_dim: 8
+  price_tier_embedding_dim: 8
   min_distinct_products_for_holdout: 3
   eval_k_values: [5, 10, 20]
   early_stopping_patience: 3
