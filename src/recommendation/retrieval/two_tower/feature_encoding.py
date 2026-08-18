@@ -55,29 +55,32 @@ class Vocabulary:
         return cls(values=values, index={v: i + 1 for i, v in enumerate(values)})
 
 
-ITEM_NUMERIC_FEATURE_NAMES = [
+ITEM_NUMERIC_FEATURE_NAMES_BASE = [
     "normalized_price", "discount_fraction", "log_purchase_count",
     "log_cart_add_count", "log_review_count", "average_rating", "has_rating",
-    # STEP 6 (docs/data-mapping.md section 15): `category_relative_price`
-    # is already a [0,1] percentile (no extra normalization needed);
-    # `price_tier` itself is NOT here - it's a categorical (see
-    # `price_tier_id`/`price_tier_vocab` below), not an ordinal number.
-    "category_relative_price", "is_discounted",
 ]
-USER_NUMERIC_FEATURE_NAMES = [
+# STEP 6 (docs/data-mapping.md section 15): `category_relative_price` is
+# already a [0,1] percentile (no extra normalization needed). `price_tier`
+# itself is NOT a numeric feature - it's a categorical (see `price_tier_id`/
+# `price_tier_vocab` below), not an ordinal number.
+ITEM_NUMERIC_FEATURE_NAMES_PRICE_EXTRA = ["category_relative_price", "is_discounted"]
+ITEM_NUMERIC_FEATURE_NAMES = ITEM_NUMERIC_FEATURE_NAMES_BASE + ITEM_NUMERIC_FEATURE_NAMES_PRICE_EXTRA
+
+USER_NUMERIC_FEATURE_NAMES_BASE = [
     "log_purchase_count", "log_cart_item_count", "log_search_count", "log_total_engagement_events",
     "has_chatbot_context", "has_preferred_category", "has_age_group", "has_semantic_embedding",
-    # STEP 6: the user's typical purchase price, normalized by the SAME
-    # catalog `max_price` the item tower uses (consistent scale on both
-    # towers - docs/data-mapping.md section 15). `0.0` when there is no
-    # `price_profile` at all (an old call site that didn't pass
-    # `price_context`) - distinguishable from a real $0-normalized value
-    # via `price_tier_id`'s dedicated "unknown" embedding bucket in that
-    # case (every REAL profile, even a catalog-prior fallback, gets a
-    # real budget/mid/premium tier - only a missing `price_profile`
-    # itself maps to "unknown"), so no separate has-flag is needed here.
-    "normalized_typical_price",
 ]
+# STEP 6: the user's typical purchase price, normalized by the SAME catalog
+# `max_price` the item tower uses (consistent scale on both towers - docs/
+# data-mapping.md section 15). `0.0` when there is no `price_profile` at
+# all (an old call site that didn't pass `price_context`) - distinguishable
+# from a real $0-normalized value via `price_tier_id`'s dedicated "unknown"
+# embedding bucket in that case (every REAL profile, even a catalog-prior
+# fallback, gets a real budget/mid/premium tier - only a missing
+# `price_profile` itself maps to "unknown"), so no separate has-flag is
+# needed here.
+USER_NUMERIC_FEATURE_NAMES_PRICE_EXTRA = ["normalized_typical_price"]
+USER_NUMERIC_FEATURE_NAMES = USER_NUMERIC_FEATURE_NAMES_BASE + USER_NUMERIC_FEATURE_NAMES_PRICE_EXTRA
 
 
 @dataclass
@@ -91,14 +94,23 @@ class TwoTowerFeatureEncoder:
     # in `features.price` - defaulted so existing callers/tests
     # constructing a TwoTowerFeatureEncoder directly don't need updating.
     price_tier_vocab: Vocabulary = field(default_factory=lambda: Vocabulary.fit(PRICE_TIERS))
+    # STEP 8 (docs/data-mapping.md section 17): controls whether the STEP 6
+    # price-aware inputs (item category_relative_price/is_discounted,
+    # user normalized_typical_price, the shared price_tier_id categorical
+    # input on both towers) are part of the encoded representation at all.
+    # `True` (default) reproduces STEP 6/7 exactly, byte-for-byte - this
+    # flag exists ONLY to let the STEP 8 controlled ablation faithfully
+    # rebuild the pre-STEP-6 architecture (`False`) side by side with the
+    # current one, never to change default behavior for any other caller.
+    include_price_features: bool = True
 
     @property
     def item_numeric_dim(self) -> int:
-        return len(ITEM_NUMERIC_FEATURE_NAMES)
+        return len(ITEM_NUMERIC_FEATURE_NAMES) if self.include_price_features else len(ITEM_NUMERIC_FEATURE_NAMES_BASE)
 
     @property
     def user_numeric_dim(self) -> int:
-        return len(USER_NUMERIC_FEATURE_NAMES)
+        return len(USER_NUMERIC_FEATURE_NAMES) if self.include_price_features else len(USER_NUMERIC_FEATURE_NAMES_BASE)
 
     @property
     def category_affinity_dim(self) -> int:
@@ -118,6 +130,7 @@ class TwoTowerFeatureEncoder:
         age_groups: list[str],
         prices: list[float],
         embedding_dim: int,
+        include_price_features: bool = True,
     ) -> "TwoTowerFeatureEncoder":
         return cls(
             embedding_dim=embedding_dim,
@@ -125,32 +138,33 @@ class TwoTowerFeatureEncoder:
             brand_vocab=Vocabulary.fit(brand_names),
             age_group_vocab=Vocabulary.fit(age_groups),
             max_price=max(prices) if prices else 1.0,
+            include_price_features=include_price_features,
         )
 
     # --- item encoding -------------------------------------------------------
 
     def encode_item(self, features: ProductFeatures, semantic_embedding: np.ndarray) -> dict[str, np.ndarray]:
-        numeric = np.array(
-            [
-                min(features.effective_price / self.max_price, 1.0) if self.max_price > 0 else 0.0,
-                (features.discount_percentage or 0.0) / 100.0,
-                np.log1p(features.purchase_count),
-                np.log1p(features.cart_add_count),
-                np.log1p(features.review_count),
-                features.average_rating if features.average_rating is not None else 0.0,
-                1.0 if features.average_rating is not None else 0.0,
-                features.category_relative_price,
-                1.0 if features.is_discounted else 0.0,
-            ],
-            dtype=np.float32,
-        )
-        return {
+        numeric_values = [
+            min(features.effective_price / self.max_price, 1.0) if self.max_price > 0 else 0.0,
+            (features.discount_percentage or 0.0) / 100.0,
+            np.log1p(features.purchase_count),
+            np.log1p(features.cart_add_count),
+            np.log1p(features.review_count),
+            features.average_rating if features.average_rating is not None else 0.0,
+            1.0 if features.average_rating is not None else 0.0,
+        ]
+        if self.include_price_features:
+            numeric_values += [features.category_relative_price, 1.0 if features.is_discounted else 0.0]
+
+        result = {
             "semantic_embedding": semantic_embedding.astype(np.float32),
             "category_id": np.int32(self.category_vocab.encode(features.category_name)),
             "brand_id": np.int32(self.brand_vocab.encode(features.brand)),
-            "price_tier_id": np.int32(self.price_tier_vocab.encode(features.price_tier)),
-            "numeric": numeric,
+            "numeric": np.array(numeric_values, dtype=np.float32),
         }
+        if self.include_price_features:
+            result["price_tier_id"] = np.int32(self.price_tier_vocab.encode(features.price_tier))
+        return result
 
     def encode_item_batch(
         self, product_ids: list[int], product_features: dict[int, ProductFeatures], product_embeddings: dict[int, np.ndarray]
@@ -178,34 +192,32 @@ class TwoTowerFeatureEncoder:
             if idx > 0:
                 brand_affinity[idx - 1] = weight
 
-        normalized_typical_price = 0.0
-        if features.price_profile is not None and self.max_price > 0:
-            normalized_typical_price = min(features.price_profile.typical_price / self.max_price, 1.0)
-        price_tier = features.price_profile.price_tier if features.price_profile is not None else None
-
-        numeric = np.array(
-            [
-                np.log1p(features.purchase_count),
-                np.log1p(features.cart_item_count),
-                np.log1p(features.search_count),
-                np.log1p(features.total_engagement_events),
-                1.0 if features.has_chatbot_context else 0.0,
-                1.0 if features.has_preferred_category else 0.0,
-                1.0 if features.has_age_group else 0.0,
-                1.0 if features.semantic_embedding is not None else 0.0,
-                normalized_typical_price,
-            ],
-            dtype=np.float32,
-        )
-        return {
+        numeric_values = [
+            np.log1p(features.purchase_count),
+            np.log1p(features.cart_item_count),
+            np.log1p(features.search_count),
+            np.log1p(features.total_engagement_events),
+            1.0 if features.has_chatbot_context else 0.0,
+            1.0 if features.has_preferred_category else 0.0,
+            1.0 if features.has_age_group else 0.0,
+            1.0 if features.semantic_embedding is not None else 0.0,
+        ]
+        result = {
             "semantic_embedding": semantic,
             "preferred_category_id": np.int32(self.category_vocab.encode(features.preferred_category)),
             "age_group_id": np.int32(self.age_group_vocab.encode(features.age_group)),
-            "price_tier_id": np.int32(self.price_tier_vocab.encode(price_tier)),
             "category_affinity": category_affinity,
             "brand_affinity": brand_affinity,
-            "numeric": numeric,
         }
+        if self.include_price_features:
+            normalized_typical_price = 0.0
+            if features.price_profile is not None and self.max_price > 0:
+                normalized_typical_price = min(features.price_profile.typical_price / self.max_price, 1.0)
+            price_tier = features.price_profile.price_tier if features.price_profile is not None else None
+            numeric_values.append(normalized_typical_price)
+            result["price_tier_id"] = np.int32(self.price_tier_vocab.encode(price_tier))
+        result["numeric"] = np.array(numeric_values, dtype=np.float32)
+        return result
 
     def encode_user_batch(self, feature_list: list[UserFeatures]) -> dict[str, np.ndarray]:
         rows = [self.encode_user(f) for f in feature_list]
@@ -227,6 +239,7 @@ class TwoTowerFeatureEncoder:
             "brand_vocab": self.brand_vocab.to_dict(),
             "age_group_vocab": self.age_group_vocab.to_dict(),
             "price_tier_vocab": self.price_tier_vocab.to_dict(),
+            "include_price_features": self.include_price_features,
         }
 
     @classmethod
@@ -250,6 +263,7 @@ class TwoTowerFeatureEncoder:
             brand_vocab=Vocabulary.from_dict(data["brand_vocab"]),
             age_group_vocab=Vocabulary.from_dict(data["age_group_vocab"]),
             price_tier_vocab=price_tier_vocab,
+            include_price_features=data.get("include_price_features", True),
         )
 
     def save(self, path: str | Path) -> None:

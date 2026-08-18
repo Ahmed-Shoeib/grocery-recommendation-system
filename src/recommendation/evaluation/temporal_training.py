@@ -85,11 +85,14 @@ from recommendation.features.product_features import ProductFeatures
 from recommendation.features.user_features import UserFeatures, build_user_features
 from recommendation.ranking.examples import RankingExample
 from recommendation.ranking.features import build_ranking_feature_vector
+from recommendation.ranking.model import build_ranker_model
 from recommendation.retrieval.index.base import SearchResult, VectorIndex
+from recommendation.retrieval.index.factory import build_vector_index, candidate_pool_size
 from recommendation.retrieval.two_tower.evaluation import rank_all_items
 from recommendation.retrieval.two_tower.examples import TrainingExample
 from recommendation.retrieval.two_tower.feature_encoding import TwoTowerFeatureEncoder
-from recommendation.utils.config import FeatureConfig, RankingConfig
+from recommendation.retrieval.two_tower.model import TwoTowerModel, build_item_tower, build_user_tower
+from recommendation.utils.config import FeatureConfig, RankingConfig, RetrievalConfig, TwoTowerConfig
 
 
 @dataclass
@@ -254,6 +257,7 @@ def build_temporal_ranking_dataset(
     vector_index: VectorIndex,
     pool_size: int,
     ranking_config: RankingConfig,
+    include_price_features: bool = True,
 ) -> tuple[list[RankingExample], list[RankingExample]]:
     """Returns `(train_ranking_examples, val_loss_ranking_examples)`.
 
@@ -264,11 +268,17 @@ def build_temporal_ranking_dataset(
     [user_id]` - every product this user EVER purchases, past or future
     relative to this example's cutoff - so a future purchase can never
     become a mislabeled hard negative (module docstring).
+
+    `include_price_features` (STEP 8, docs/data-mapping.md section 17):
+    forwarded unchanged to `build_ranking_feature_vector` - `True`
+    (default) reproduces STEP 6/7 exactly; `False` builds the pre-STEP-6
+    23-feature vector for the controlled ablation's BASE condition.
     """
 
     def _feature_row(user_features: UserFeatures, pid: int, score: float, rank: int) -> np.ndarray:
         return build_ranking_feature_vector(
-            user_features, product_features[pid], product_embeddings.get(pid), score, rank, pool_size, tt_encoder.max_price
+            user_features, product_features[pid], product_embeddings.get(pid), score, rank, pool_size, tt_encoder.max_price,
+            include_price_features=include_price_features,
         )
 
     train_out: list[RankingExample] = []
@@ -381,4 +391,224 @@ def evaluate_primary_pipeline(
         mean_distinct_categories=float(np.mean(distinct_categories)) if distinct_categories else 0.0,
         catalog_coverage=coverage,
         mean_fill_rate=float(np.mean(fill_rates)) if fill_rates else 0.0,
+    )
+
+
+# --- shared train-one-condition orchestration (STEP 8 controlled ablation) -
+
+def _set_seeds(seed: int) -> None:
+    import random
+
+    random.seed(seed)
+    np.random.seed(seed)
+    tf.random.set_seed(seed)
+
+
+def _fit_two_tower_encoder(
+    products: list[Product], users_adapter: UserAdapter, embedding_dim: int, include_price_features: bool
+) -> TwoTowerFeatureEncoder:
+    observed_age_groups = sorted(
+        {p.age_group for uid in users_adapter.list_user_ids() if (p := users_adapter.get_user_profile(uid)) and p.age_group}
+    )
+    return TwoTowerFeatureEncoder.fit(
+        category_names=[p.category_name for p in products if p.category_name],
+        brand_names=[p.brand for p in products if p.brand],
+        age_groups=observed_age_groups,
+        prices=[p.price for p in products],
+        embedding_dim=embedding_dim,
+        include_price_features=include_price_features,
+    )
+
+
+def _examples_to_arrays(
+    examples: list[TrainingExample],
+    encoder: TwoTowerFeatureEncoder,
+    product_features: dict[int, ProductFeatures],
+    product_embeddings: dict[int, np.ndarray],
+) -> tuple[dict[str, np.ndarray], dict[str, np.ndarray]]:
+    user_batch = encoder.encode_user_batch([e.user_features for e in examples])
+    item_batch = encoder.encode_item_batch([e.product_id for e in examples], product_features, product_embeddings)
+    return user_batch, item_batch
+
+
+@dataclass
+class TrainedCondition:
+    """Everything one BASE/RECENCY+PRICE ablation condition (docs/data-
+    mapping.md section 17) needs for evaluation - trained fresh by
+    `train_temporal_condition`, or assembled from already-loaded STEP 7
+    artifacts by the ablation script when reuse is legitimate (identical
+    data/split/seed/config/procedure - see that module's docstring).
+    """
+
+    label: str
+    encoder: TwoTowerFeatureEncoder
+    user_tower: tf.keras.Model
+    item_tower: tf.keras.Model
+    ranker_model: tf.keras.Model
+    item_ids: list[int]
+    item_embeddings: np.ndarray
+    vector_index: VectorIndex
+    pool_size: int
+    tt_history: dict
+    ranker_history: dict
+    num_tt_train_examples: int
+    num_tt_val_loss_examples: int
+    num_ranker_train_examples: int
+    num_ranker_train_positive: int
+    num_ranker_train_negative: int
+    val_retrieval_report: TemporalRetrievalReport
+    test_retrieval_report: TemporalRetrievalReport
+    # The exact point-in-time eval cases this condition's `user_features`
+    # were built from - needed by the caller for the PRIMARY full-pipeline
+    # evaluation (`evaluate_primary_pipeline`). Built from the SAME
+    # `splits`/target_ids for every condition (docs/data-mapping.md
+    # section 17's "same evaluation population" requirement) - only the
+    # `user_features` inside each case differ (recency/price config).
+    val_cases: list[TemporalEvalCase]
+    test_cases: list[TemporalEvalCase]
+
+
+def train_temporal_condition(
+    label: str,
+    events_by_user: dict[int, list[UserInteraction]],
+    splits: dict[int, TemporalUserSplit],
+    users_adapter: UserAdapter,
+    reviews_adapter: ReviewAdapter,
+    products: list[Product],
+    product_lookup: dict[int, Product],
+    product_features: dict[int, ProductFeatures],
+    product_embeddings: dict[int, np.ndarray],
+    feature_config: FeatureConfig,
+    price_context: PriceCatalogContext | None,
+    include_price_features: bool,
+    two_tower_config: TwoTowerConfig,
+    ranking_config: RankingConfig,
+    retrieval_config: RetrievalConfig,
+    embedding_dim: int,
+    default_recommendation_count: int,
+    k_values: list[int],
+) -> TrainedCondition:
+    """Trains ONE full condition (Two-Tower from scratch, retrieval index,
+    ranker from scratch) against the SAME `events_by_user`/`splits`/
+    `product_*` a caller supplies - every controllable variable OTHER than
+    `feature_config`/`price_context`/`include_price_features` must be
+    identical between two calls for a fair ablation (docs/data-mapping.md
+    section 17's fairness requirements) - this function does not enforce
+    that itself, the CALLER (`scripts/run_ablation.py`) is responsible for
+    passing identical `two_tower_config`/`ranking_config`/`retrieval_config`/
+    seeds across conditions.
+
+    `price_context=None` for a condition that should derive NO price
+    preference information from purchase history at all (BASE) - not just
+    an encoder that ignores it (see `features.price`/`build_user_features`'s
+    own opt-in-via-`price_context` design, reused unchanged here).
+    """
+    _set_seeds(two_tower_config.random_seed)
+    train_examples, val_loss_examples, val_cases, test_cases = build_temporal_two_tower_examples(
+        events_by_user, splits, users_adapter, reviews_adapter, product_lookup, product_embeddings, feature_config, price_context
+    )
+    if not train_examples:
+        raise ValueError(f"[{label}] no temporal training examples constructed")
+
+    encoder = _fit_two_tower_encoder(products, users_adapter, embedding_dim, include_price_features)
+
+    train_user_batch, train_item_batch = _examples_to_arrays(train_examples, encoder, product_features, product_embeddings)
+    val_user_batch, val_item_batch = (
+        _examples_to_arrays(val_loss_examples, encoder, product_features, product_embeddings) if val_loss_examples else (None, None)
+    )
+
+    effective_batch_size = min(two_tower_config.batch_size, len(train_examples))
+    train_ds = (
+        tf.data.Dataset.from_tensor_slices((train_user_batch, train_item_batch))
+        .shuffle(buffer_size=len(train_examples), seed=two_tower_config.random_seed)
+        .batch(effective_batch_size, drop_remainder=True)
+    )
+    val_ds = None
+    if val_loss_examples:
+        val_batch_size = min(two_tower_config.batch_size, len(val_loss_examples))
+        val_ds = tf.data.Dataset.from_tensor_slices((val_user_batch, val_item_batch)).batch(val_batch_size, drop_remainder=True)
+
+    user_tower = build_user_tower(encoder, two_tower_config)
+    item_tower = build_item_tower(encoder, two_tower_config)
+    tt_model = TwoTowerModel(user_tower=user_tower, item_tower=item_tower, temperature=two_tower_config.temperature)
+    tt_model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=two_tower_config.learning_rate))
+
+    callbacks = []
+    if val_ds is not None:
+        callbacks.append(
+            tf.keras.callbacks.EarlyStopping(monitor="val_loss", patience=two_tower_config.early_stopping_patience, restore_best_weights=True)
+        )
+    fit_kwargs = {"epochs": two_tower_config.epochs, "verbose": 0, "callbacks": callbacks}
+    if val_ds is not None:
+        fit_kwargs["validation_data"] = val_ds
+    tt_history = tt_model.fit(train_ds, **fit_kwargs)
+
+    item_ids = [p.id for p in products]
+    item_batch_full = encoder.encode_item_batch(item_ids, product_features, product_embeddings)
+    item_embeddings = np.asarray(item_tower.predict(item_batch_full, verbose=0))
+
+    val_retrieval_report = evaluate_temporal_retrieval(val_cases, f"{label}/val", user_tower, item_embeddings, item_ids, encoder, k_values)
+    test_retrieval_report = evaluate_temporal_retrieval(test_cases, f"{label}/test", user_tower, item_embeddings, item_ids, encoder, k_values)
+
+    vector_index = build_vector_index(retrieval_config)
+    vector_index.build(item_ids, item_embeddings)
+
+    _set_seeds(ranking_config.random_seed)
+    all_purchased_by_user = all_purchased_product_ids_by_user(events_by_user)
+    pool_size = candidate_pool_size(retrieval_config, limit=default_recommendation_count, catalog_size=len(item_ids))
+
+    rk_train_examples, rk_val_loss_examples = build_temporal_ranking_dataset(
+        train_examples, val_cases, all_purchased_by_user, product_features, product_embeddings,
+        encoder, user_tower, vector_index, pool_size, ranking_config, include_price_features=include_price_features,
+    )
+    if not rk_train_examples:
+        raise ValueError(f"[{label}] no ranker training examples constructed")
+
+    X_train = np.stack([e.features for e in rk_train_examples])
+    y_train = np.array([e.label for e in rk_train_examples], dtype=np.float32)
+    num_pos = int(y_train.sum())
+    num_neg = len(rk_train_examples) - num_pos
+
+    X_val = y_val = None
+    if rk_val_loss_examples:
+        X_val = np.stack([e.features for e in rk_val_loss_examples])
+        y_val = np.array([e.label for e in rk_val_loss_examples], dtype=np.float32)
+
+    ranker_model = build_ranker_model(input_dim=X_train.shape[1], config=ranking_config)
+    ranker_model.compile(
+        optimizer=tf.keras.optimizers.Adam(learning_rate=ranking_config.learning_rate),
+        loss="binary_crossentropy",
+        metrics=[tf.keras.metrics.BinaryAccuracy(name="accuracy"), tf.keras.metrics.AUC(name="auc")],
+    )
+    rk_callbacks = []
+    rk_fit_kwargs = {"epochs": ranking_config.epochs, "batch_size": min(ranking_config.batch_size, len(X_train)), "verbose": 0}
+    if X_val is not None and len(X_val) > 0:
+        rk_callbacks.append(
+            tf.keras.callbacks.EarlyStopping(monitor="val_loss", patience=ranking_config.early_stopping_patience, restore_best_weights=True)
+        )
+        rk_fit_kwargs["validation_data"] = (X_val, y_val)
+    rk_fit_kwargs["callbacks"] = rk_callbacks
+    ranker_history = ranker_model.fit(X_train, y_train, **rk_fit_kwargs)
+
+    return TrainedCondition(
+        label=label,
+        encoder=encoder,
+        user_tower=user_tower,
+        item_tower=item_tower,
+        ranker_model=ranker_model,
+        item_ids=item_ids,
+        item_embeddings=item_embeddings,
+        vector_index=vector_index,
+        pool_size=pool_size,
+        tt_history=tt_history.history,
+        ranker_history=ranker_history.history,
+        num_tt_train_examples=len(train_examples),
+        num_tt_val_loss_examples=len(val_loss_examples),
+        num_ranker_train_examples=len(rk_train_examples),
+        num_ranker_train_positive=num_pos,
+        num_ranker_train_negative=num_neg,
+        val_retrieval_report=val_retrieval_report,
+        test_retrieval_report=test_retrieval_report,
+        val_cases=val_cases,
+        test_cases=test_cases,
     )

@@ -867,6 +867,7 @@ genuinely temporal held-out split instead of this content-based heuristic.
 | §14 Recency weighting (`features.recency`, `effective_weight`, `_signal_embedding_component`) | STEP 5 recency phase |
 | §15 Price-aware derived features (`features.price`, `price_tier_id`/`PriceCatalogContext`/`UserPriceProfile`) | STEP 6 price phase |
 | §16 From-scratch SQLite training + temporal evaluation (`evaluation.temporal_training`, `models/sqlite_baseline/`, Docker/ScaNN verification) | STEP 7 training phase |
+| §17 Controlled two-way ablation - BASE vs. RECENCY+PRICE (`include_price_features`, `scripts/run_ablation.py`, `models/ablation/base/`) | STEP 8 ablation phase |
 
 ## 14. Recency weighting (STEP 5)
 
@@ -1282,4 +1283,93 @@ when wrapping a ScaNN index; and the full trained pipeline
 recommendations end-to-end with ScaNN as the retrieval backend. Skipped
 (not failed) whenever `scann` isn't importable or the artifacts aren't
 present - inert on native Windows dev.
+
+## 17. Controlled two-way ablation - BASE vs. RECENCY+PRICE (STEP 8)
+
+**Question answered**: does STEP 5 (recency) + STEP 6 (price-aware
+personalization) TOGETHER improve the controlled offline future-purchase
+evaluation over a faithful pre-STEP-6 baseline? This is a two-way
+comparison ONLY - it does not and cannot isolate recency's contribution
+from price's. See "no causality claim" below.
+
+**`include_price_features` flag** (`TwoTowerFeatureEncoder`,
+`build_ranking_feature_vector`, both default `True`): the mechanism that
+makes a faithful pre-STEP-6 BASE condition possible without forking the
+pipeline or deleting STEP 6. `True` reproduces STEP 6/7 byte-for-byte
+(verified: the full pre-existing test suite passes unchanged with the
+flag added); `False` removes the STEP-6-INTRODUCED price inputs
+entirely - not zeroed, ABSENT - from both towers (no `price_tier_id`
+input at all) and the ranker vector (23 features, not 29 with zeros)
+while PRESERVING the pre-existing basic product price/discount fields
+(`normalized_price`/`discount_fraction`/`item_normalized_price`/
+`item_discount_fraction`) that existed before STEP 6 - the baseline is
+not artificially crippled. A real bug was caught while building this:
+`serving.pipeline._personalized_candidates` unconditionally built
+29-feature ranking vectors regardless of which ranker it was scoring,
+which would have crashed a BASE ranker (23 features) with a shape
+mismatch - fixed by deriving `include_price_features` from the SAME
+`tt_encoder.include_price_features` already passed in (a Two-Tower/
+ranker pair for one condition is always trained together with the same
+flag, so this can never drift out of sync) - see
+`tests/test_step8_ablation_dimensions
+.py::test_generate_recommendations_uses_matching_feature_dim_for_base_ranker`.
+
+**BASE condition**: `features.recency` disabled
+(`RecencyConfig(enabled=False)`) AND `price_context=None` passed to
+every `build_user_features` call (so `UserFeatures.price_profile` is
+`None` for every user - no price preference derived from purchase
+history AT ALL, not just hidden from the model) AND
+`include_price_features=False` on the encoder/ranker. Dimensions:
+item_numeric=7, user_numeric=8, ranker=23 - the exact pre-STEP-6 shapes.
+
+**RECENCY+PRICE condition**: the unmodified STEP 7 configuration.
+**Reused, not retrained** - `scripts/run_ablation.py` verifies the
+existing `models/sqlite_baseline/` artifacts' metadata (dataset
+fingerprint, `two_tower`/`ranking` random seeds, recency config,
+dimensions) are provably identical to what this script would otherwise
+produce before reusing them (docs/data-mapping.md section 16's own
+metadata convention made this verification possible); training
+procedure/code changed only via the backward-compatible
+`include_price_features` default, confirmed unchanged by the full test
+suite passing before and after. Falls back to retraining from scratch if
+verification fails.
+
+**Fairness**: BASE and RECENCY+PRICE share the identical database
+fingerprint, `build_temporal_splits` output, `two_tower`/`ranking`/
+`retrieval` config (seeds, epochs, batch size, optimizer, learning rate,
+negatives-per-positive, candidate pool sizing), eligibility rules, and
+K values - `scripts/run_ablation.py` asserts the two conditions' val/test
+`TemporalEvalCase` populations are LITERALLY identical
+((user_id, cutoff, target_ids) tuples, in order) before reporting any
+delta, aborting otherwise. The only intentional difference is recency +
+price. Both conditions use FAISS (native Windows dev; ScaNN was already
+independently verified in Docker/Linux for the RECENCY+PRICE artifacts in
+STEP 7 - re-verifying it here would test ANN-backend equivalence, not
+this ablation's actual variable, so it was not repeated).
+
+**Results (this synthetic dataset)**: RECENCY+PRICE improved every
+Precision/Recall/HitRate/NDCG@{5,10,20}/MRR metric on BOTH val and test,
+by a large and consistent margin (test Recall@20: 0.088 -> 0.402; test
+NDCG@20: 0.048 -> 0.299; test MRR: 0.036 -> 0.268). Paired test-split
+diagnostics (Hit@10): 63 users newly hit by RECENCY+PRICE that BASE
+missed, vs. only 5 the reverse way, 12 both hit, 124 both miss - RECENCY+
+PRICE is winning by genuinely fixing cases, not just reshuffling which
+users it gets right. List quality (catalog coverage, mean top-20 category
+diversity, fill rate) stayed comparable between conditions - no
+diversity collapse. Latency stayed comparable (~245ms vs. ~248ms mean,
+same environment) - no serving-time regression.
+
+**No causality claim**: this experiment changes recency AND price
+together. The valid conclusion is "recency + price-aware modeling
+together improved the system by the amounts above" - NOT "recency caused
+X" or "price caused Y" independently. An isolated ablation (recency-only,
+price-only) would require two additional controlled runs and is
+explicitly out of this phase's scope.
+
+**Artifacts**: BASE written to the isolated `models/ablation/base/`
+(gitignored, same convention as `models/sqlite_baseline/`). RECENCY+PRICE
+was reused in place from `models/sqlite_baseline/` rather than duplicated
+into `models/ablation/recency_price/` - documented in the run's own
+console output rather than copying multi-hundred-MB artifacts
+unnecessarily.
 
