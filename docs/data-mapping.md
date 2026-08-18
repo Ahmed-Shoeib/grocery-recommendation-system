@@ -866,6 +866,7 @@ genuinely temporal held-out split instead of this content-based heuristic.
 | §12 Leakage-limitation mitigation | Phase 3 (guard) / Phase 4 (consumer) / Phase 6 (extended to ranking negatives) / User_events contract change (extended to clicks) |
 | §14 Recency weighting (`features.recency`, `effective_weight`, `_signal_embedding_component`) | STEP 5 recency phase |
 | §15 Price-aware derived features (`features.price`, `price_tier_id`/`PriceCatalogContext`/`UserPriceProfile`) | STEP 6 price phase |
+| §16 From-scratch SQLite training + temporal evaluation (`evaluation.temporal_training`, `models/sqlite_baseline/`, Docker/ScaNN verification) | STEP 7 training phase |
 
 ## 14. Recency weighting (STEP 5)
 
@@ -1188,4 +1189,97 @@ willingness-to-pay data - the price tiers/typical-price estimates this
 phase produces are internally consistent and mechanically correct, but
 (like every other V1 offline result, §8) they demonstrate PIPELINE
 CORRECTNESS, not a real-world-calibrated price-sensitivity signal.
+
+## 16. From-scratch SQLite training + temporal evaluation (STEP 7)
+
+**Why a new module was needed.** The pre-existing Two-Tower/ranker
+example builders (`retrieval.two_tower.examples`, `ranking.examples`) are
+built around `UserSplit` (`retrieval.two_tower.splitting`) - a random,
+non-temporal per-product leave-one-out holdout with no "before"/"after."
+They cannot be reused as-is for a temporally-consistent TRAINING
+procedure: every point-in-time user representation used as a training
+input must be built from history strictly before that example's own
+target time, or the model would see future information during training,
+not just during evaluation (which §8.1 already guarded). This phase adds
+`evaluation.temporal_training` (`build_temporal_two_tower_examples`,
+`build_temporal_ranking_dataset`, `evaluate_temporal_retrieval`,
+`evaluate_primary_pipeline`) - net-new example-CONSTRUCTION glue only.
+Every lower-level piece it calls is reused UNCHANGED: `build_temporal_splits`/
+`TemporalUserSplit` (§8.1), `build_point_in_time_engagement_profile` (§8.1),
+`build_user_features(reference_time=..., price_context=...)` (§14/§15),
+`generate_recommendations` (§5/§9, the full serving pipeline).
+
+**Per-example point-in-time cutoffs, not one shared per-user cutoff.**
+For a user with `val_cutoff`/`test_cutoff`, every PURCHASE strictly before
+`val_cutoff` becomes ONE training example whose truncation cutoff is THAT
+PURCHASE'S OWN `action_time` - not `val_cutoff` itself. An earlier
+training purchase therefore never sees a later training purchase as
+history. This also means no product-id exclusion (`exclude_product_ids`)
+is needed for temporal training examples at all: strict time truncation
+already excludes exactly the one event being predicted while correctly
+KEEPING a genuinely earlier purchase of the same product as legitimate
+history (the repeat-purchase policy §8.1 already established) - time
+truncation subsumes and is more precise than the old product-id-exclusion
+mechanism for this purpose. A user with only 1 purchase
+(`TemporalEligibilityTier.INSUFFICIENT_DEPTH`, `val_cutoff is None`)
+contributes that single purchase to training unconditionally (nothing is
+held out for such a user in the first place); a user with 0 purchases
+contributes nothing.
+
+**Negative sampling - the leakage risk this phase closes.** A naive port
+of the old ranker negative-sampling strategy (exclude only a user's
+held-out val/test ids) would let a product the user simply HASN'T bought
+yet (as of a training example's cutoff) - but WILL buy later - be sampled
+as a "the user doesn't want this" hard negative, contradicting the
+temporal protocol's own ground truth. `all_purchased_product_ids_by_user`
+computes, per user, the full-history purchase-id set (past AND future
+relative to any single cutoff) and every temporal ranker negative is
+sampled excluding that whole set - never just the held-out ids - so a
+future purchase can never become a mislabeled negative. Two-Tower
+training itself needs no explicit negatives (in-batch softmax, unchanged
+from §8.1/Phase 4).
+
+**Primary evaluation runs the FULL serving pipeline.** Unlike the
+Two-Tower-only brute-force Recall/HitRate check kept for training-time
+sanity (`evaluate_temporal_retrieval`, mirroring the pre-existing
+`retrieval.two_tower.evaluation.evaluate_split` but multi-target), the
+PRIMARY Precision/Recall/HitRate/NDCG/MRR numbers this phase reports come
+from `evaluate_primary_pipeline`, which calls
+`serving.pipeline.generate_recommendations` once per evaluation case -
+the exact hard-eligibility -> retrieval -> ranker -> re-ranking -> final-
+validation -> Top-N architecture (§5/§9) - so the reported numbers
+reflect what would actually be served, not just retrieval-embedding
+quality in isolation.
+
+**Artifacts.** `models/sqlite_baseline/{two_tower,ranker,vector_index}/`
+- an isolated directory, never touching the pre-existing
+`models/two_tower`/`models/ranker` (old 7/8/23-dimension synthetic V1
+artifacts). Metadata embedded in each `metadata.json` includes the data
+source path, a truncated sha256 dataset fingerprint, the random seed,
+feature dimensions, the recency/price config in effect, and a metric
+summary - enough to identify exactly what produced a given artifact
+without needing to re-derive it from git history. `models/*` is
+gitignored except `.gitkeep` (pre-existing repository convention,
+unchanged) - these artifacts are never committed; they are regenerated
+locally via `scripts/train_sqlite_pipeline.py`.
+
+**Docker/Linux ScaNN verification.** `tests/test_step7_scann_sqlite_integration.py`
+loads the trained `models/sqlite_baseline` artifacts (never retrains) and
+verifies, for real, inside the Docker/Linux image this project's ScaNN
+backend requires (§10): ScaNN actually imports; a `ScannVectorIndex` built
+from the STEP 7 item embeddings holds the full 1,200-item catalog (hard
+pre-retrieval eligibility is a QUERY-TIME wrapper -
+`retrieval.index.eligibility_filter.EligibilityRestrictedIndex` - around
+an already-built index, per that module's own docstring; it never
+shrinks the index itself); product-id mapping is correct (self-query ->
+self-match, sampled across the real catalog, not just a handful of
+synthetic ids); no duplicate ids; ScaNN and FAISS agree on exact-search
+neighbor sets/scores for a random sample of the real 1,200-item
+embeddings (both are configured for EXACT, unquantized search); hard
+pre-retrieval eligibility still excludes inactive/out-of-stock products
+when wrapping a ScaNN index; and the full trained pipeline
+(`generate_recommendations`) produces valid, duplicate-free
+recommendations end-to-end with ScaNN as the retrieval backend. Skipped
+(not failed) whenever `scann` isn't importable or the artifacts aren't
+present - inert on native Windows dev.
 
