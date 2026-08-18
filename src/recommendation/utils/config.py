@@ -34,11 +34,25 @@ class PathsConfig(BaseModel):
     data_synthetic: str = "data/synthetic"
     models_dir: str = "models"
     # Backend-shaped synthetic integration/experimentation dataset (see
-    # scripts/generate_backend_shaped_sqlite.py) - read-only, never the
-    # live serving data source in V1. Default consumed by
-    # adapters.sqlite_factory.build_sqlite_adapters when no explicit path
-    # is passed.
+    # scripts/generate_backend_shaped_sqlite.py) - read-only. Default
+    # consumed by adapters.sqlite_factory.build_sqlite_adapters when no
+    # explicit path is passed.
     data_sqlite: str = "data/sqlite/backend_shaped_synthetic.db"
+    # STEP 9 (docs/data-mapping.md section 18): which data source + trained
+    # artifact set `api.dependencies.build_recommendation_service` uses for
+    # LIVE serving. "sqlite" -> data_sqlite via build_sqlite_adapters,
+    # artifacts from `{models_dir}/sqlite_baseline/` (the approved STEP 7/8
+    # RECENCY+PRICE pipeline). "synthetic" -> the original synthetic V1
+    # generator, artifacts from `{models_dir}/` directly - kept only for
+    # backward compatibility (its artifacts predate STEP 6's dimension
+    # change and are therefore currently dimension-incompatible; startup
+    # validation - `serving.startup_validation.validate_ranker_artifacts` -
+    # rejects them loudly rather than serving silently wrong results, see
+    # that module's docstring). Training scripts
+    # (scripts/train_two_tower.py, train_ranker.py, train_sqlite_pipeline.py)
+    # are unaffected by this flag - they take their adapter bundle as an
+    # explicit argument, never read this field.
+    data_source: Literal["synthetic", "sqlite"] = "sqlite"
 
 
 class SyntheticDataConfig(BaseModel):
@@ -258,7 +272,18 @@ class ApiConfig(BaseModel):
 
 
 class DashboardConfig(BaseModel):
+    """STEP 9 (docs/data-mapping.md section 18): Streamlit is now a plain
+    HTTP client of FastAPI - `api_base_url` is the ONE place that address
+    is configured (never hard-coded per call site). The native-dev default
+    below (`configs/base.yaml`) targets a locally-running
+    `scripts/run_api.py`; `configs/docker.yaml` overrides it to the
+    Compose service hostname (`http://api:8000`) since "localhost" inside
+    the dashboard container would otherwise resolve to the dashboard
+    container itself, not the separate api container.
+    """
+
     api_base_url: str = "http://localhost:8000"
+    request_timeout_seconds: float = 10.0
 
 
 class AppConfig(BaseModel):
@@ -289,6 +314,8 @@ _ENV_OVERRIDES: dict[str, tuple[tuple[str, ...], Callable[[str], object]]] = {
     "RECS_API_PORT": (("api", "port"), int),
     "RECS_API_DEFAULT_TOP_N": (("api", "default_recommendation_count"), int),
     "RECS_API_MAX_TOP_N": (("api", "max_recommendation_count"), int),
+    "RECS_DATA_SOURCE": (("paths", "data_source"), str),
+    "RECS_DASHBOARD_API_BASE_URL": (("dashboard", "api_base_url"), str),
 }
 
 

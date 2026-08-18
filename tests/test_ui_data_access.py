@@ -29,8 +29,8 @@ from recommendation.ranking.model import build_ranker_model
 from recommendation.retrieval.index.faiss_index import FaissVectorIndex
 from recommendation.retrieval.two_tower.feature_encoding import TwoTowerFeatureEncoder
 from recommendation.retrieval.two_tower.model import build_user_tower
+from recommendation.serving.pipeline import generate_recommendations
 from recommendation.ui.data_access import (
-    category_distribution,
     format_cart_items,
     format_chatbot_context,
     format_clicks,
@@ -39,8 +39,6 @@ from recommendation.ui.data_access import (
     format_searches,
     list_users,
     load_user_detail,
-    run_recommendations,
-    source_distribution,
 )
 from recommendation.utils.config import AppConfig, ColdStartConfig, RankingConfig, RetrievalConfig, TwoTowerConfig
 
@@ -295,32 +293,29 @@ def test_format_chatbot_context_none_when_absent(service):
 
 
 # --- recommendations -----------------------------------------------------
+# STEP 9 (docs/data-mapping.md section 18): `ui.data_access.run_recommendations`
+# was removed - the live recommendation call now goes through
+# `api.routes.get_recommendations` -> `RecommendationService.recommend` ->
+# `serving.pipeline.recommend` directly. These tests build a
+# `RecommendationResult` via `generate_recommendations` (the same function
+# the pipeline itself calls) to keep exercising `format_recommendation_table`,
+# which IS still a `ui.data_access` responsibility (used server-side by the
+# API route).
 
-def test_run_recommendations_returns_result_for_known_user(service):
-    detail = load_user_detail(service, 1)
-    result = run_recommendations(service, detail, top_n=3)
-    assert len(result.product_ids) <= 3
-    assert result.user_id == 1
+
+def _recommend(service, detail, top_n):
+    return generate_recommendations(
+        detail.features, service.product_features, service.product_embeddings, service.all_item_ids,
+        service.tt_encoder, service.user_tower, service.ranker_model, service.vector_index, service.config, top_n,
+    )
 
 
 def test_format_recommendation_table_joins_catalog_info(service):
     detail = load_user_detail(service, 1)
-    result = run_recommendations(service, detail, top_n=3)
+    result = _recommend(service, detail, top_n=3)
     rows = format_recommendation_table(result, service.product_lookup)
     assert len(rows) == len(result.product_ids)
     for row in rows:
         assert row["name"].startswith("Product")
         assert row["category"] is not None
         assert "rank" in row and "score" in row and "source" in row
-
-
-def test_category_distribution_counts_by_category(service):
-    counts = category_distribution([100, 101, 102], service.product_lookup)
-    assert sum(counts.values()) == 3
-
-
-def test_source_distribution_counts_by_source(service):
-    detail = load_user_detail(service, 1)
-    result = run_recommendations(service, detail, top_n=5)
-    counts = source_distribution(result)
-    assert sum(counts.values()) == len(result.product_ids)

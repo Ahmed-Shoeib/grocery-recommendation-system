@@ -1,10 +1,26 @@
-"""Pure data-access and formatting helpers for the dashboard - no
-Streamlit import anywhere in this module, so every function here is
-unit-testable without a Streamlit runtime. `dashboard.py` calls these
-and only handles rendering (`st.*` calls); this module never calls the
-Two-Tower/ranker itself except via `serving.pipeline.generate
-_recommendations` (through `run_recommendations`) - no recommendation
-logic is reimplemented here, only read/formatted.
+"""Pure data-access and formatting helpers - no Streamlit import anywhere
+in this module, so every function here is unit-testable without a
+Streamlit runtime.
+
+STEP 9 (docs/data-mapping.md section 18): these functions now run
+SERVER-SIDE only, called from `api.routes`'s STEP 9 endpoints
+(`GET /v1/users`, `GET /v1/users/{id}/profile`) - the Streamlit dashboard
+no longer imports this module or `RecommendationService` at all; it goes
+through `ui.api_client.RecommendationApiClient` (HTTP) instead. This
+module still never reimplements recommendation/ranking/feature-
+engineering logic - it only reads already-computed `RecommendationService`
+state and formats it.
+
+`run_recommendations`/`category_distribution`/`source_distribution` (the
+dashboard-only helpers this module used to expose) were removed: the live
+recommendation call now goes through `api.routes.get_recommendations`
+directly (which - as a side effect - fixes a pre-existing inconsistency
+where the dashboard's OWN `UserFeatures` never had `reference_time` set,
+so its recommendations were built WITHOUT recency weighting even though
+the real API path always has); the two distribution helpers are trivial
+enough (`Counter` over already-returned response fields) that the
+dashboard now computes them client-side from the API response directly,
+with no server involvement needed.
 """
 
 from __future__ import annotations
@@ -17,7 +33,7 @@ from recommendation.data.schemas.engagement import EngagementProfile
 from recommendation.data.schemas.product import Product
 from recommendation.features.user_features import UserFeatures, build_user_features
 from recommendation.serving.cold_start import HistoryTier, determine_history_tier
-from recommendation.serving.pipeline import RecommendationResult, generate_recommendations
+from recommendation.serving.pipeline import RecommendationResult
 
 
 @dataclass
@@ -76,21 +92,6 @@ def load_user_detail(service: RecommendationService, user_id: int) -> UserDetail
         engagement=engagement,
         features=features,
         tier=tier,
-    )
-
-
-def run_recommendations(service: RecommendationService, detail: UserDetail, top_n: int) -> RecommendationResult:
-    return generate_recommendations(
-        detail.features,
-        service.product_features,
-        service.product_embeddings,
-        service.all_item_ids,
-        service.tt_encoder,
-        service.user_tower,
-        service.ranker_model,
-        service.vector_index,
-        service.config,
-        top_n,
     )
 
 
@@ -181,19 +182,3 @@ def format_recommendation_table(result: RecommendationResult, product_lookup: di
             }
         )
     return rows
-
-
-def category_distribution(product_ids: list[int], product_lookup: dict[int, Product]) -> dict[str, int]:
-    counts: dict[str, int] = {}
-    for pid in product_ids:
-        product = product_lookup.get(pid)
-        category = product.category_name if product and product.category_name else "(uncategorized)"
-        counts[category] = counts.get(category, 0) + 1
-    return counts
-
-
-def source_distribution(result: RecommendationResult) -> dict[str, int]:
-    counts: dict[str, int] = {}
-    for source in result.sources:
-        counts[source] = counts.get(source, 0) + 1
-    return counts

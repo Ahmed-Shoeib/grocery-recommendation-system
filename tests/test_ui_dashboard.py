@@ -1,177 +1,120 @@
 """End-to-end smoke tests for the Streamlit dashboard itself, using
 Streamlit's `AppTest` to actually execute `dashboard.py` (not just its
-helper functions). Injects a small/fake `RecommendationService` via
-`st.session_state["_service_override"]` - `ui.service_loader.load_service`'s
-dependency-injection seam - so this never triggers real model loading.
+helper functions).
+
+STEP 9 (docs/data-mapping.md section 18): `dashboard.py` is now a pure
+`ui.api_client.RecommendationApiClient` HTTP client - it no longer builds
+a `RecommendationService` or touches models/adapters at all. These tests
+inject a `_FakeApiClient` (same method signatures as the real client,
+returning real `api.schemas` Pydantic response objects, no HTTP) via
+`st.session_state["_api_client_override"]` - `ui.service_loader
+.load_api_client`'s dependency-injection seam - so no real network call
+or running FastAPI process is ever required.
 """
 
+from datetime import datetime, timezone
 from pathlib import Path
 
-import numpy as np
 import pytest
 from streamlit.testing.v1 import AppTest
 
-from recommendation.api.dependencies import RecommendationService
-from recommendation.data.adapters.base import (
-    AdapterBundle,
-    CartAdapter,
-    ChatbotContextAdapter,
-    ClickAdapter,
-    ProductCatalogAdapter,
-    PurchaseAdapter,
-    ReviewAdapter,
-    SearchAdapter,
-    UserAdapter,
+from recommendation.api.schemas import (
+    OfflineMetricsResponse,
+    OfflineMetricsSplitReport,
+    RecommendationItem,
+    RecommendationMeta,
+    RecommendationResponse,
+    UserListItem,
+    UserListResponse,
+    UserProfileResponse,
 )
-from recommendation.data.schemas.engagement import EngagementProfile, PurchaseRecord
-from recommendation.data.schemas.product import Product
-from recommendation.data.schemas.user import UserProfile
-from recommendation.features.product_features import build_product_features
-from recommendation.ranking.features import RANKING_FEATURE_NAMES
-from recommendation.ranking.model import build_ranker_model
-from recommendation.retrieval.index.faiss_index import FaissVectorIndex
-from recommendation.retrieval.two_tower.feature_encoding import TwoTowerFeatureEncoder
-from recommendation.retrieval.two_tower.model import build_user_tower
-from recommendation.utils.config import AppConfig, ColdStartConfig, RankingConfig, RetrievalConfig, TwoTowerConfig
+from recommendation.ui.api_client import ApiResponseError, ApiUnavailableError
 
-_EMBEDDING_DIM = 8
-_OUTPUT_DIM = 8
 _DASHBOARD_PATH = str(Path(__file__).resolve().parents[1] / "src" / "recommendation" / "ui" / "dashboard.py")
 
-
-class _FakeProducts(ProductCatalogAdapter):
-    def __init__(self, products):
-        self._products = products
-        self._by_id = {p.id: p for p in products}
-
-    def list_products(self):
-        return self._products
-
-    def get_product(self, product_id):
-        return self._by_id.get(product_id)
-
-
-class _FakeUsers(UserAdapter):
-    def __init__(self, profiles):
-        self._profiles = profiles
-
-    def get_user_profile(self, user_id):
-        return self._profiles.get(user_id)
-
-    def list_user_ids(self):
-        return list(self._profiles.keys())
-
-
-class _FakePurchases(PurchaseAdapter):
-    def __init__(self, by_user):
-        self._by_user = by_user
-
-    def get_purchases(self, user_id):
-        return self._by_user.get(user_id, [])
-
-    def list_all_purchases(self):
-        return [p for records in self._by_user.values() for p in records]
+_PROFILES = {
+    1: UserProfileResponse(
+        user_id=1, preferred_category="Cat1", age_group="25-34", tier="strong",
+        total_engagement_events=3, distinct_products_purchased=3, click_count=0, purchase_count=3,
+        cart_item_count=0, search_count=0, has_chatbot_context=False,
+        category_affinity={"Cat1": 1.0}, brand_affinity={},
+        clicks=[], purchases=[{"product_id": 100, "product_name": "Product 100", "quantity": 1, "unit_price": 1.0, "order_id": 0, "order_status": "DELIVERED"}],
+        cart_items=[], searches=[], chatbot=None,
+    ),
+    2: UserProfileResponse(
+        user_id=2, preferred_category=None, age_group=None, tier="sparse",
+        total_engagement_events=1, distinct_products_purchased=1, click_count=0, purchase_count=1,
+        cart_item_count=0, search_count=0, has_chatbot_context=False,
+        category_affinity={}, brand_affinity={}, clicks=[], purchases=[], cart_items=[], searches=[], chatbot=None,
+    ),
+    3: UserProfileResponse(
+        user_id=3, preferred_category="Cat0", age_group=None, tier="no_history",
+        total_engagement_events=0, distinct_products_purchased=0, click_count=0, purchase_count=0,
+        cart_item_count=0, search_count=0, has_chatbot_context=False,
+        category_affinity={}, brand_affinity={}, clicks=[], purchases=[], cart_items=[], searches=[], chatbot=None,
+    ),
+}
 
 
-class _FakeCart(CartAdapter):
-    def get_cart_items(self, user_id):
-        return []
-
-    def list_all_cart_items(self):
-        return []
-
-
-class _FakeClicks(ClickAdapter):
-    def get_clicks(self, user_id):
-        return []
-
-    def list_all_clicks(self):
-        return []
-
-
-class _FakeReviews(ReviewAdapter):
-    def get_reviews(self, user_id):
-        return []
-
-    def list_all_reviews(self):
-        return []
-
-
-class _FakeSearch(SearchAdapter):
-    def get_search_history(self, user_id):
-        return []
-
-
-class _FakeChatbot(ChatbotContextAdapter):
-    def get_chatbot_context(self, user_id):
-        return None
-
-
-def _product(pid: int, category: str) -> Product:
-    # stock_quantity must be explicit and > 0 - it defaults to 0 on the
-    # `Product` schema, which would make every fake product ineligible
-    # under Phase 11's hard pre-retrieval eligibility gate (is_active
-    # already defaults to True, so it doesn't need to be set here).
-    return Product(id=pid, category_id=pid, slug=f"p{pid}", name=f"Product {pid}", price=5.0 + pid, category_name=category, stock_quantity=10)
-
-
-def _build_service() -> RecommendationService:
-    products = [_product(100 + i, f"Cat{i % 3}") for i in range(8)]
-    all_ids = [p.id for p in products]
-    product_lookup = {p.id: p for p in products}
-    product_features = build_product_features(products, [], [], [])
-
-    rng = np.random.default_rng(0)
-    product_embeddings = {pid: rng.normal(size=_EMBEDDING_DIM).astype(np.float32) for pid in all_ids}
-
-    tt_encoder = TwoTowerFeatureEncoder.fit(
-        category_names=[p.category_name for p in products], brand_names=[], age_groups=[],
-        prices=[p.price for p in products], embedding_dim=_EMBEDDING_DIM,
+def _recommendation_response(user_id: int, tier: str, top_n: int) -> RecommendationResponse:
+    items = [
+        RecommendationItem(
+            product_id=100 + i, rank=i + 1, score=1.0 - i * 0.1,
+            source="personalized" if tier != "no_history" else "global_popularity",
+            product_name=f"Product {100 + i}", category=f"Cat{i % 3}", brand=None, price=5.0 + i,
+            is_active=True, stock_quantity=10,
+        )
+        for i in range(min(top_n, 4))
+    ]
+    meta = RecommendationMeta(
+        user_id=user_id, tier=tier, requested_top_n=top_n, returned_count=len(items), fill_rate=len(items) / top_n,
+        pool_size=8, num_excluded_pre_retrieval=0, num_excluded_by_eligibility=0, api_version="v1",
+        model_version="test_v1", generated_at=datetime.now(timezone.utc), latency_ms=5.0,
     )
-    tt_config = TwoTowerConfig(projection_dims=[16, _OUTPUT_DIM], output_dim=_OUTPUT_DIM, category_embedding_dim=4, brand_embedding_dim=4, age_group_embedding_dim=2)
-    user_tower = build_user_tower(tt_encoder, tt_config)
+    return RecommendationResponse(meta=meta, items=items)
 
-    item_embeddings = rng.normal(size=(len(all_ids), _OUTPUT_DIM)).astype(np.float32)
-    item_embeddings /= np.linalg.norm(item_embeddings, axis=1, keepdims=True)
-    vector_index = FaissVectorIndex()
-    vector_index.build(all_ids, item_embeddings)
-    ranker_model = build_ranker_model(input_dim=len(RANKING_FEATURE_NAMES), config=RankingConfig(hidden_units=[8]))
 
-    profiles = {
-        1: UserProfile(user_id=1, preferred_category="Cat1", age_group="25-34"),  # strong
-        2: UserProfile(user_id=2),  # sparse
-        3: UserProfile(user_id=3, preferred_category="Cat0"),  # no_history
-    }
-    purchases = {
-        1: [PurchaseRecord(user_id=1, product_id=pid, order_id=i, quantity=1, unit_price=1.0) for i, pid in enumerate([100, 101, 102])],
-        2: [PurchaseRecord(user_id=2, product_id=100, order_id=0, quantity=1, unit_price=1.0)],
-    }
-    bundle = AdapterBundle(
-        products=_FakeProducts(products), users=_FakeUsers(profiles), purchases=_FakePurchases(purchases),
-        cart=_FakeCart(), clicks=_FakeClicks(), reviews=_FakeReviews(), search=_FakeSearch(), chatbot=_FakeChatbot(),
-    )
-    config = AppConfig(
-        cold_start=ColdStartConfig(strong_history_min_signals=3, sparse_history_min_signals=1),
-        retrieval=RetrievalConfig(backend="faiss", candidate_pool_multiplier=5, min_candidate_pool=len(all_ids)),
-    )
-    engagement_profiles = {
-        1: EngagementProfile(user_id=1, profile=profiles[1], purchases=purchases[1]),
-        2: EngagementProfile(user_id=2, profile=profiles[2], purchases=purchases[2]),
-        3: EngagementProfile(user_id=3, profile=profiles[3]),
-    }
+class _FakeApiClient:
+    """Same method signatures as `ui.api_client.RecommendationApiClient`,
+    backed by in-memory fixtures instead of real HTTP calls.
+    """
 
-    return RecommendationService(
-        product_lookup=product_lookup, product_features=product_features, product_embeddings=product_embeddings,
-        text_embeddings={}, all_item_ids=all_ids, tt_encoder=tt_encoder, user_tower=user_tower, ranker_model=ranker_model,
-        vector_index=vector_index, bundle=bundle, config=config, ranker_model_version="test_v1", two_tower_model_version="test_v1",
-        engagement_profiles=engagement_profiles,
-    )
+    def __init__(self, fail_recommendations: Exception | None = None, fail_users: Exception | None = None) -> None:
+        self._fail_recommendations = fail_recommendations
+        self._fail_users = fail_users
+
+    def list_users(self) -> UserListResponse:
+        if self._fail_users is not None:
+            raise self._fail_users
+        return UserListResponse(
+            users=[
+                UserListItem(user_id=1, preferred_category="Cat1", age_group="25-34"),
+                UserListItem(user_id=2, preferred_category=None, age_group=None),
+                UserListItem(user_id=3, preferred_category="Cat0", age_group=None),
+            ]
+        )
+
+    def get_user_profile(self, user_id: int) -> UserProfileResponse:
+        return _PROFILES[user_id]
+
+    def get_recommendations(self, user_id: int, limit: int | None = None) -> RecommendationResponse:
+        if self._fail_recommendations is not None:
+            raise self._fail_recommendations
+        return _recommendation_response(user_id, _PROFILES[user_id].tier, limit or 10)
+
+    def get_offline_metrics(self, top_n: int) -> OfflineMetricsResponse:
+        split = OfflineMetricsSplitReport(
+            split_name="val", num_cases=2, ndcg_at_k={5: 0.5}, precision_at_k={5: 0.4}, recall_at_k={5: 0.3},
+            hit_rate_at_k={5: 0.6}, mrr=0.5, catalog_coverage=0.8, mean_distinct_categories=2.0,
+            duplicate_rate=0.0, fill_rate=1.0, tier_counts={"strong": 1, "sparse": 1},
+        )
+        return OfflineMetricsResponse(num_eval_users=2, val_report=split, test_report=split)
 
 
 @pytest.fixture
 def app() -> AppTest:
     at = AppTest.from_file(_DASHBOARD_PATH, default_timeout=60)
-    at.session_state["_service_override"] = _build_service()
+    at.session_state["_api_client_override"] = _FakeApiClient()
     return at
 
 
@@ -183,7 +126,6 @@ def test_dashboard_renders_without_exception(app):
 def test_dashboard_shows_user_table_and_recommendations(app):
     app.run()
     assert not app.exception
-    # Section headers rendered via st.subheader.
     subheaders = [s.value for s in app.subheader]
     assert any("Users" in s for s in subheaders)
     assert any("Final recommendations" in s for s in subheaders)
@@ -209,33 +151,31 @@ def test_dashboard_top_n_slider_changes_recommendation_count(app):
     assert not app.exception
 
 
-def test_dashboard_handles_pipeline_failure_gracefully():
-    """Phase 10 reliability: a failure inside the pipeline itself (e.g.
-    VectorIndex search) - not just a service-load failure - must also be
-    caught and shown as a clean error, not crash the whole page.
+def test_dashboard_handles_recommendation_api_failure_gracefully():
+    """A failure surfaced by the API itself (non-200) while generating
+    recommendations must be caught and shown as a clean message, not
+    crash the whole page - and must NEVER fall back to direct model
+    access (docs/data-mapping.md section 18's explicit "DO NOT DO" item).
     """
     at = AppTest.from_file(_DASHBOARD_PATH, default_timeout=60)
-    service = _build_service()
-
-    def _raise(*args, **kwargs):
-        raise RuntimeError("simulated VectorIndex failure")
-
-    service.vector_index.search = _raise
-    at.session_state["_service_override"] = service
+    at.session_state["_api_client_override"] = _FakeApiClient(
+        fail_recommendations=ApiResponseError(500, "simulated pipeline failure")
+    )
     at.run()
     assert not at.exception
     errors = [e.value for e in at.error]
-    assert any("Failed to generate recommendations" in e for e in errors)
+    assert any("generating recommendations" in e for e in errors)
 
 
-def test_dashboard_handles_service_load_failure_gracefully():
+def test_dashboard_handles_api_unavailable_gracefully():
+    """If FastAPI is not reachable at all, the dashboard must show a
+    clean message (never a raw traceback, never a silent fallback).
+    """
     at = AppTest.from_file(_DASHBOARD_PATH, default_timeout=60)
-    # ui.service_loader.load_service raises whatever exception instance is
-    # placed in "_service_override" - the deterministic way to exercise
-    # dashboard.py's "service failed to load" branch without needing a
-    # real missing-model-artifacts environment to reproduce it.
-    at.session_state["_service_override"] = RuntimeError("simulated load failure")
+    at.session_state["_api_client_override"] = _FakeApiClient(
+        fail_users=ApiUnavailableError("could not reach the recommendation API at http://localhost:8000")
+    )
     at.run()
-    assert not at.exception  # the dashboard must catch this itself, not crash
+    assert not at.exception
     errors = [e.value for e in at.error]
-    assert any("Failed to load" in e for e in errors)
+    assert any("Cannot reach the recommendation API" in e for e in errors)

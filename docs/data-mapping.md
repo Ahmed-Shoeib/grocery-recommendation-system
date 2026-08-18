@@ -860,7 +860,7 @@ genuinely temporal held-out split instead of this content-based heuristic.
 | §6 Popularity | Phase 2 (data) / Phase 7 (fallback ranking) |
 | §8 Offline evaluation | Phase 4 (Recall/HitRate) / Phase 5 (latency) / Phase 6 (Precision/NDCG/MRR) / Phase 7 (coverage/diversity/duplicate/fill-rate/cold-start/pipeline latency) / Phase 8 (HTTP end-to-end latency) |
 | §8.1 Temporal future-purchase evaluation protocol (`evaluation.temporal_future_purchase`, SQLite temporal splits, point-in-time truncation, leakage audit) | Offline evaluation redesign phase (evaluation/splitting infrastructure only - no retraining, no index rebuild) |
-| §9 Surface context hook / dashboard architecture | Phase 7 (pipeline parameter, not yet exposed via API) / Phase 9 (dashboard reuses RecommendationService in-process, not via HTTP) |
+| §9 Surface context hook / dashboard architecture | Phase 7 (pipeline parameter, not yet exposed via API) / Phase 9 (dashboard reused RecommendationService in-process, not via HTTP) / STEP 9 (dashboard rewired to a pure FastAPI HTTP client - see §18) |
 | §10 VectorIndex backends | Phase 5 (ScaNN primary/Docker + FAISS Windows dev fallback) |
 | §11 Neural ranking (VectorIndex candidates, richer cross features, baseline comparison) | Phase 6 |
 | §12 Leakage-limitation mitigation | Phase 3 (guard) / Phase 4 (consumer) / Phase 6 (extended to ranking negatives) / User_events contract change (extended to clicks) |
@@ -868,6 +868,7 @@ genuinely temporal held-out split instead of this content-based heuristic.
 | §15 Price-aware derived features (`features.price`, `price_tier_id`/`PriceCatalogContext`/`UserPriceProfile`) | STEP 6 price phase |
 | §16 From-scratch SQLite training + temporal evaluation (`evaluation.temporal_training`, `models/sqlite_baseline/`, Docker/ScaNN verification) | STEP 7 training phase |
 | §17 Controlled two-way ablation - BASE vs. RECENCY+PRICE (`include_price_features`, `scripts/run_ablation.py`, `models/ablation/base/`) | STEP 8 ablation phase |
+| §18 One serving path: Streamlit as a pure FastAPI HTTP client (`api.dependencies.build_recommendation_service` SQLite wiring fix, `ui.api_client.RecommendationApiClient`, `paths.data_source`/`dashboard.api_base_url` config) | STEP 9 serving-architecture phase |
 
 ## 14. Recency weighting (STEP 5)
 
@@ -1372,4 +1373,210 @@ was reused in place from `models/sqlite_baseline/` rather than duplicated
 into `models/ablation/recency_price/` - documented in the run's own
 console output rather than copying multi-hundred-MB artifacts
 unnecessarily.
+
+## 18. One serving path: Streamlit as a pure FastAPI HTTP client (STEP 9)
+
+**Problem this closes**: through STEP 8, FastAPI (`api.dependencies
+.build_recommendation_service`) and Streamlit (`ui.service_loader
+.load_service`) each independently constructed their own
+`RecommendationService` in-process. Inspecting the actual code (not just
+docs) surfaced that FastAPI's copy was still wired to the pre-STEP-6
+synthetic V1 generator and `models/two_tower`/`models/ranker` - the
+7/8/23-dimension artifacts, dimensionally incompatible with every STEP
+6-8 change - while Streamlit had quietly been the only thing exercising
+the STEP 7/8 SQLite RECENCY+PRICE path (via its own `RecommendationService`).
+Two independent construction sites for the same object is itself the
+underlying defect this phase removes, not merely a preference for fewer
+processes.
+
+**Before**:
+
+```
+Streamlit ──(in-process)──> RecommendationService ──> Pipeline
+FastAPI   ──(in-process)──> RecommendationService ──> Pipeline
+             (two SEPARATE instances, and - until this phase's
+              api.dependencies fix below - two DIFFERENT artifact/
+              dataset configurations)
+```
+
+**After**:
+
+```
+Streamlit ──HTTP──> FastAPI ──(in-process)──> RecommendationService ──> Pipeline ──> SQLite (backend_shaped_synthetic.db)
+```
+
+FastAPI is now the only process that ever constructs a
+`RecommendationService`, loads Two-Tower/ranker artifacts, builds the
+VectorIndex, or touches an adapter/SQLite connection. Streamlit owns UI
+state and one `ui.api_client.RecommendationApiClient` instance; it has no
+model-loading, ranking, feature-engineering, or eligibility logic of any
+kind, and imports none of `api.dependencies`, `serving.*`,
+`retrieval.*`, or `ranking.*`.
+
+**`api.dependencies.build_recommendation_service` fix** (the actual
+correctness bug, not new functionality): now branches on the new
+`config.paths.data_source: Literal["synthetic", "sqlite"]` setting
+(default `"sqlite"` - `configs/base.yaml`/`configs/docker.yaml`, override
+via `RECS_DATA_SOURCE`). `"sqlite"` builds `data.adapters.sqlite_factory
+.build_sqlite_adapters()` and loads artifacts from
+`{models_dir}/sqlite_baseline/{two_tower,ranker}` (the STEP 7/8 approved
+RECENCY+PRICE artifacts: item_numeric=9, user_numeric=9, ranker=29
+features) with its own dedicated embedding cache
+(`data/processed/product_embeddings_sqlite.npz`, content-hash validated,
+never conflated with the 50-product synthetic V1 cache - a local
+`config.model_copy(update={...})` override scoped to this one code path,
+not a shared-module change). `"synthetic"` reproduces the old
+`generate_synthetic_dataset` + `models/two_tower`/`models/ranker` path,
+kept only for backward compatibility. Artifacts are validated and loaded
+*before* adapter/dataset construction, so a missing/incompatible artifact
+fails in milliseconds, not after several seconds of otherwise-wasted
+startup. **No new validation code was needed**: the existing
+`serving.startup_validation.validate_ranker_artifacts` (compares the
+artifacts' saved `feature_names` against the currently-running code's
+`RANKING_FEATURE_NAMES`) already rejects a `data_source="synthetic"`
+selection pointed at pre-STEP-6 artifacts with a clear startup error -
+exactly the "reject incompatible old artifacts" requirement, reused
+unchanged.
+
+**Serving-time recency reference_time**: unchanged, and already correct
+before this phase - `serving.pipeline.recommend()` (STEP 5) establishes
+`reference_time = datetime.now()` **once** per request, at the serving
+layer, and passes it explicitly into `build_user_features()`. No
+`datetime.now()` call was reintroduced anywhere inside the recency
+feature functions themselves. `datetime.now()` (naive, no `tzinfo`) is
+the deliberate, CONSISTENT choice: every SQLite-sourced timestamp in this
+project is parsed via `datetime.fromisoformat()` without a timezone
+(`data.adapters.sqlite_*`), so comparing a naive "now" against naive
+event timestamps is correct; introducing `datetime.now(timezone.utc)`
+here would silently break every age-in-days computation by mixing aware
+and naive datetimes. (The API's own `RecommendationMeta.generated_at`
+field is a separate, purely informational HTTP-response timestamp and
+correctly uses `datetime.now(timezone.utc)` - a wire-contract
+convention, unrelated to the recency math.)
+
+**API contract - preserved, extended in a backward-compatible way**:
+`GET /v1/users/{user_id}/recommendations` is unchanged in shape and is
+still the *only* endpoint that generates recommendations.
+`RecommendationItem` gained application-level display fields
+(`product_name`, `category`, `brand`, `price`, `is_active`,
+`stock_quantity`, all joined server-side from the catalog by the route
+handler via `ui.data_access.format_recommendation_table`, unchanged
+function) so a client never needs its own catalog access - existing
+clients reading only `product_id`/`rank`/`score`/`source` are unaffected.
+No internal model tensor, embedding, or feature vector is ever exposed.
+
+**Three new, small, read-only endpoints** (`api.routes`), added because
+the dashboard needs *some* way to reach user/catalog browsing data now
+that it can no longer call `bundle.users`/`ui.data_access` directly -
+each is a thin wrapper around an existing, unchanged internal function,
+not a new dashboard-specific backend:
+
+- `GET /v1/users` -> `ui.data_access.list_users`, wrapped as
+  `UserListResponse`.
+- `GET /v1/users/{user_id}/profile` -> `ui.data_access.load_user_detail`
+  + its `format_clicks`/`format_purchases`/`format_cart_items`/
+  `format_searches`/`format_chatbot_context` helpers, wrapped as
+  `UserProfileResponse`. 404 on an unknown user_id (distinct from the
+  recommendations endpoint's `UnknownUserError` path, but the same HTTP
+  outcome).
+- `GET /v1/metrics/offline?top_n=N` -> `ui.metrics.compute_offline_metrics`
+  (STEP 7/8's own leave-one-out offline evaluation, unchanged), wrapped
+  as `OfflineMetricsResponse`. Expensive; not for high-frequency polling,
+  same as the pre-STEP-9 dashboard's on-demand "Compute offline metrics"
+  button.
+
+Not every dashboard operation became an endpoint: the per-candidate
+`excluded_reasons` debug expander the old in-process dashboard rendered
+was dropped rather than given its own endpoint - a per-request internal
+diagnostic, not something worth a permanent wire-contract addition for a
+POC debug view.
+
+**`ui.data_access`**: its functions (`list_users`, `load_user_detail`,
+the `format_*` helpers) are unchanged in implementation, but now run
+**server-side only**, called from the three routes above. Removing this
+module's old dashboard-only wrapper, `run_recommendations` (which called
+`generate_recommendations` directly, bypassing the HTTP boundary), also
+fixed a latent inconsistency: that wrapper's `build_user_features()` call
+never passed `reference_time`, so the pre-STEP-9 dashboard's
+recommendations were silently generated *without* recency weighting even
+though the real API path always applied it - one more reason a single
+serving path is the correct fix, not just an architectural preference.
+`category_distribution`/`source_distribution` were also removed (trivial
+`Counter`s over response fields the dashboard now computes client-side
+from the API response directly).
+
+**`ui.api_client.RecommendationApiClient`**: constructs HTTP requests via
+`requests` (already a project dependency, no new one added), calls
+FastAPI, and parses responses into the *same* `api.schemas` Pydantic
+models FastAPI returns - one wire-contract definition, reused, not
+duplicated. Raises a typed exception for every failure mode:
+`ApiUnavailableError` (connection refused/DNS failure),
+`ApiTimeoutError`, `ApiResponseError` (any other non-2xx, carries
+`status_code`/`message`), `UnknownUserError` (404 on a recommendation or
+profile request), `MalformedResponseError` (2xx body that doesn't match
+the expected schema, including non-JSON bodies). Every HTTP call passes
+an explicit, finite timeout (`DashboardConfig.request_timeout_seconds`,
+default 10.0s). Contains no recommendation/ranking/feature-engineering/
+eligibility/model-loading logic - verified by
+`tests/test_ui_api_client.py::test_api_client_module_does_not_import_recommendation_service_or_model_code`
+(runs a fresh subprocess that imports only `ui.api_client` and asserts
+`api.dependencies`/`serving.pipeline`/TensorFlow never entered
+`sys.modules`).
+
+**A real bug this uncovered, and its fix** (small, necessary wiring,
+documented per the "stop and report" rule rather than silently patched):
+`recommendation.api.__init__.py` used to eagerly
+`from recommendation.api.app import create_app` as a re-export
+convenience. Because Python always executes a package's `__init__.py`
+before any of its submodules, this meant importing `recommendation.api
+.schemas` alone - all `ui.api_client` needs - transitively imported
+`api.app` -> `api.dependencies` -> TensorFlow and the entire Two-Tower/
+ranker/adapter stack into the Streamlit process, silently defeating the
+"Streamlit owns none of that" goal of this phase. Fixed by removing the
+re-export (grepped first: zero call sites used
+`from recommendation.api import create_app`; every real caller already
+imports it from `recommendation.api.app` directly) - not a broader
+refactor, just removing the one eager import causing the leak.
+
+**Config**: `PathsConfig.data_source` (`"sqlite"` | `"synthetic"`, env
+`RECS_DATA_SOURCE`) selects FastAPI's adapter+artifact pairing (see
+above). `DashboardConfig.api_base_url` (env
+`RECS_DASHBOARD_API_BASE_URL`) and `DashboardConfig
+.request_timeout_seconds` are the dashboard's only two settings, read
+once by `ui.service_loader.load_api_client`. `configs/base.yaml` (native
+dev) sets `http://localhost:8000`; `configs/docker.yaml` sets
+`http://api:8000` - Docker Compose's service-name DNS, since
+`localhost` inside the Streamlit container would resolve to the
+Streamlit container itself, not the API container. This is a
+config-only change: no Dockerfile, no image rebuild, no new service was
+needed for STEP 9 - both containers already exist in the compose
+topology from Phase 8/STEP 7's Docker verification; only the value
+`dashboard.api_base_url` resolves to differs per environment, exactly
+like `retrieval.backend` (FAISS vs. ScaNN) already did before this
+phase.
+
+**Live integration verification** (not mocks): FastAPI was started
+against the real `models/sqlite_baseline/` artifacts and the real
+`data/sqlite/backend_shaped_synthetic.db`
+(`config.paths.data_source: "sqlite"`, the default), confirmed ready via
+`GET /v1/ready` (`catalog_loaded`/`two_tower_loaded`/`ranker_loaded`/
+`vector_index_loaded` all `true`, `model_version: sqlite_baseline_ranker_v1`).
+A real `RecommendationApiClient` (no mocking) then called
+`GET /v1/users/{id}/recommendations` for one user of each cold-start
+tier, found by scanning `GET /v1/users/{id}/profile`: user 2 (STRONG),
+user 1 (SPARSE), user 24 (NO_HISTORY). All three returned HTTP 200, 10/10
+requested items, zero duplicate `product_id`s, zero ineligible
+(inactive/out-of-stock) products leaked into results, and
+tier-appropriate `source` values (`personalized` for STRONG/SPARSE,
+`preferred_category` for NO_HISTORY) - see the STEP 9 final report for
+the full per-user output. The server was then stopped; no training,
+retraining, or artifact regeneration occurred at any point.
+
+**Explicitly out of scope for this phase** (per the STEP 9 brief): the
+ERD/SQLite schema, `backend_shaped_synthetic.db`, all model
+architectures/features/hyperparameters (recency half-life, price tiers,
+Two-Tower, ranker, negative sampling, temporal split, eligibility rules,
+re-ranking), and the STEP 7/8 evaluation protocols are all unchanged.
+The obsolete `ecommerce.db` was not investigated, restored, or
+referenced.
 

@@ -5,6 +5,18 @@ result onto the versioned `api.schemas` wire contract. Eligibility
 filtering (hard pre-retrieval gate + final lightweight validation)
 happens entirely inside the pipeline - nothing here re-filters or
 reorders results.
+
+STEP 9 (docs/data-mapping.md section 18) additions:
+`/users/{id}/recommendations`'s items are now enriched with display
+fields (`ui.data_access.format_recommendation_table`, unchanged, just
+called from here instead of from `dashboard.py` directly) so a client
+never needs its own separate catalog access. `/users`, `/users/{id}
+/profile`, `/metrics/offline` are small, generally-useful read-only
+endpoints - NOT recommendation generation - added so the Streamlit
+dashboard (now a pure HTTP client) can still browse users/engagement
+data/offline diagnostics without instantiating a `RecommendationService`
+itself; they reuse `ui.data_access`/`ui.metrics` unchanged, no new
+business logic.
 """
 
 from __future__ import annotations
@@ -19,11 +31,27 @@ from recommendation.api.dependencies import RecommendationService
 from recommendation.api.errors import UnknownUserError
 from recommendation.api.schemas import (
     HealthResponse,
+    OfflineMetricsResponse,
+    OfflineMetricsSplitReport,
     ReadinessResponse,
     RecommendationItem,
     RecommendationMeta,
     RecommendationResponse,
+    UserListItem,
+    UserListResponse,
+    UserProfileResponse,
 )
+from recommendation.ui.data_access import (
+    format_cart_items,
+    format_chatbot_context,
+    format_clicks,
+    format_purchases,
+    format_recommendation_table,
+    format_searches,
+    list_users,
+    load_user_detail,
+)
+from recommendation.ui.metrics import compute_offline_metrics
 from recommendation.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -86,9 +114,21 @@ async def get_recommendations(
         raise HTTPException(status_code=404, detail=f"user {user_id} not found") from exc
     latency_ms = (time.perf_counter() - start) * 1000
 
+    rows = format_recommendation_table(result, service.product_lookup)
     items = [
-        RecommendationItem(product_id=pid, rank=rank, score=score, source=source)
-        for rank, (pid, score, source) in enumerate(zip(result.product_ids, result.scores, result.sources), start=1)
+        RecommendationItem(
+            product_id=row["product_id"],
+            rank=row["rank"],
+            score=row["score"],
+            source=row["source"],
+            product_name=row["name"],
+            category=row["category"],
+            brand=row["brand"],
+            price=row["price"],
+            is_active=row["is_active"],
+            stock_quantity=row["stock_quantity"],
+        )
+        for row in rows
     ]
     meta = RecommendationMeta(
         user_id=user_id,
@@ -110,3 +150,85 @@ async def get_recommendations(
     # (observed latency at the API boundary) rather than repeating them.
     logger.info("request completed user_id=%s latency_ms=%.2f", user_id, latency_ms)
     return RecommendationResponse(meta=meta, items=items)
+
+
+@router.get("/users", response_model=UserListResponse)
+async def get_users(service: RecommendationService = Depends(get_service)) -> UserListResponse:
+    """Read-only user browsing for the dashboard's user picker - reuses
+    `ui.data_access.list_users` unchanged, no recommendation logic.
+    """
+    rows = list_users(service)
+    return UserListResponse(
+        users=[UserListItem(user_id=r.user_id, preferred_category=r.preferred_category, age_group=r.age_group) for r in rows]
+    )
+
+
+@router.get("/users/{user_id}/profile", response_model=UserProfileResponse)
+async def get_user_profile(user_id: int, service: RecommendationService = Depends(get_service)) -> UserProfileResponse:
+    """Read-only engagement/feature snapshot for the dashboard's user
+    detail view - reuses `ui.data_access.load_user_detail` and its
+    `format_*` helpers unchanged, no recommendation logic. Distinct from
+    `UnknownUserError` (used by /recommendations): here a genuinely
+    unknown user_id is reported as a plain 404, no pipeline is invoked.
+    """
+    detail = load_user_detail(service, user_id)
+    if detail is None:
+        raise HTTPException(status_code=404, detail=f"user {user_id} not found")
+
+    product_lookup = service.product_lookup
+    features = detail.features
+    return UserProfileResponse(
+        user_id=detail.user_id,
+        preferred_category=detail.preferred_category,
+        age_group=detail.age_group,
+        tier=detail.tier.value,
+        total_engagement_events=features.total_engagement_events,
+        distinct_products_purchased=len(set(p.product_id for p in detail.engagement.purchases)),
+        click_count=len(detail.engagement.clicks),
+        purchase_count=len(detail.engagement.purchases),
+        cart_item_count=len(detail.engagement.cart_items),
+        search_count=len(detail.engagement.searches),
+        has_chatbot_context=detail.engagement.chatbot_context is not None,
+        category_affinity=dict(features.category_affinity),
+        brand_affinity=dict(features.brand_affinity),
+        clicks=format_clicks(detail.engagement, product_lookup),
+        purchases=format_purchases(detail.engagement, product_lookup),
+        cart_items=format_cart_items(detail.engagement, product_lookup),
+        searches=format_searches(detail.engagement, product_lookup),
+        chatbot=format_chatbot_context(detail.engagement, product_lookup),
+    )
+
+
+@router.get("/metrics/offline", response_model=OfflineMetricsResponse)
+async def get_offline_metrics(
+    top_n: int = Query(default=10, ge=1, description="Top-N used for the offline leave-one-out evaluation pass"),
+    service: RecommendationService = Depends(get_service),
+) -> OfflineMetricsResponse:
+    """Offline, synthetic/SQLite-dataset leave-one-out metrics only (see
+    `ui.metrics` module docstring) - reuses `ui.metrics.compute_offline_metrics`
+    unchanged. Expensive (runs a full evaluation pass); not for
+    high-frequency polling.
+    """
+    summary = compute_offline_metrics(service, top_n)
+
+    def _to_schema(report) -> OfflineMetricsSplitReport:
+        return OfflineMetricsSplitReport(
+            split_name=report.split_name,
+            num_cases=report.num_cases,
+            ndcg_at_k=report.ndcg_at_k,
+            precision_at_k=report.precision_at_k,
+            recall_at_k=report.recall_at_k,
+            hit_rate_at_k=report.hit_rate_at_k,
+            mrr=report.mrr,
+            catalog_coverage=report.catalog_coverage,
+            mean_distinct_categories=report.mean_distinct_categories,
+            duplicate_rate=report.duplicate_rate,
+            fill_rate=report.fill_rate,
+            tier_counts=report.tier_counts,
+        )
+
+    return OfflineMetricsResponse(
+        num_eval_users=summary.num_eval_users,
+        val_report=_to_schema(summary.val_report),
+        test_report=_to_schema(summary.test_report),
+    )

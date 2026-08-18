@@ -14,13 +14,13 @@ adds is the API-specific "does this user exist at all" check
 (the pipeline's own leave-one-out evaluation and the dashboard/other
 future callers may have different notions of "known user").
 
-Despite the module path, `RecommendationService`/`build_recommendation
-_service` are shared by the Phase 9 Streamlit dashboard too
-(`ui.service_loader`) - it reuses this exact class in-process (no HTTP
-hop to the API) rather than duplicating a second copy of "load the
-Two-Tower/ranker/VectorIndex once" wiring. Left here rather than moved
-to `serving` to avoid touching already-shipped Phase 8 call sites for a
-Phase 9 change.
+STEP 9 (docs/data-mapping.md section 18): FastAPI is now the ONLY process
+that constructs a `RecommendationService` - the Streamlit dashboard is a
+plain HTTP client of the API (`ui.api_client.RecommendationApiClient`,
+`ui.service_loader.load_api_client`) and no longer imports this module,
+loads model artifacts, or touches SQLite/synthetic adapters itself. This
+class stays here (not moved to `serving`) since `api.routes` is still its
+only real caller.
 """
 
 from __future__ import annotations
@@ -33,6 +33,7 @@ import tensorflow as tf
 from recommendation.api.errors import UnknownUserError
 from recommendation.data.adapters.base import AdapterBundle
 from recommendation.data.adapters.factory import build_synthetic_adapters
+from recommendation.data.adapters.sqlite_factory import build_sqlite_adapters
 from recommendation.data.schemas.engagement import EngagementProfile
 from recommendation.data.schemas.product import Product
 from recommendation.data.synthetic.dataset import generate_synthetic_dataset
@@ -123,21 +124,43 @@ class RecommendationService:
 
 
 def build_recommendation_service(config: AppConfig) -> RecommendationService:
-    """Real production wiring: generates the (synthetic V1) dataset,
-    loads the ALREADY-TRAINED Phase 4/6 artifacts (never retrains), and
-    builds the Phase 5 VectorIndex - mirrors `scripts/run_pipeline.py`.
+    """Real production wiring for LIVE serving - loads the ALREADY-TRAINED
+    artifacts (never retrains) and builds the Phase 5 VectorIndex.
+
+    STEP 9 (docs/data-mapping.md section 18): `config.paths.data_source`
+    selects BOTH the adapter bundle AND the matching trained-artifact
+    directory together, as one unit - "sqlite" (the current POC default)
+    uses `build_sqlite_adapters` + the approved STEP 7/8 RECENCY+PRICE
+    artifacts under `{models_dir}/sqlite_baseline/`; "synthetic" uses the
+    original synthetic V1 generator + `{models_dir}/` directly, kept only
+    for backward compatibility.
 
     Raises `serving.startup_validation.ArtifactValidationError` (a plain
     `RuntimeError`) on any missing/corrupt/incompatible artifact - by
     design, this must fail loudly here rather than let a mismatched
     ranker/Two-Tower/index combination silently serve wrong
-    recommendations (Phase 10). Artifacts are checked and loaded FIRST,
-    before dataset generation or Sentence Transformer loading, so a
-    missing/incompatible artifact fails in milliseconds rather than
-    after several seconds of otherwise-wasted startup work.
+    recommendations (Phase 10). This is also what correctly REJECTS the
+    old synthetic V1 artifacts now that STEP 6 changed feature dimensions
+    (7/8/23 -> 9/9/29): `validate_ranker_artifacts` compares the SAVED
+    `RANKING_FEATURE_NAMES` snapshot against the currently-running code's
+    list, so a `data_source="synthetic"` selection pointed at those
+    pre-STEP-6 artifacts fails startup immediately with a clear message,
+    rather than serving broken recommendations - no new validation logic
+    was needed for this, the existing check already covers it. Artifacts
+    are checked and loaded FIRST, before adapter/dataset construction or
+    Sentence Transformer loading, so a missing/incompatible artifact fails
+    in milliseconds rather than after several seconds of otherwise-wasted
+    startup work.
     """
-    two_tower_dir = resolve_path(config.paths.models_dir) / "two_tower"
-    ranker_dir = resolve_path(config.paths.models_dir) / "ranker"
+    if config.paths.data_source == "sqlite":
+        models_root = resolve_path(config.paths.models_dir) / "sqlite_baseline"
+    elif config.paths.data_source == "synthetic":
+        models_root = resolve_path(config.paths.models_dir)
+    else:
+        raise ValueError(f"unknown paths.data_source: {config.paths.data_source!r}")
+
+    two_tower_dir = models_root / "two_tower"
+    ranker_dir = models_root / "ranker"
     require_artifact_dir(two_tower_dir, "Two-Tower")
     require_artifact_dir(ranker_dir, "Ranker")
 
@@ -150,24 +173,37 @@ def build_recommendation_service(config: AppConfig) -> RecommendationService:
     vector_index.build(two_tower_artifacts.item_ids, two_tower_artifacts.item_embeddings)
     validate_vector_index_compatibility(vector_index.size, len(two_tower_artifacts.item_ids))
 
-    dataset = generate_synthetic_dataset(config)
-    issues = validate_dataset(dataset)
-    if issues:
-        raise RuntimeError(f"Dataset validation failed: {issues[:5]}")
-    bundle = build_synthetic_adapters(dataset, config.synthetic_data)
+    if config.paths.data_source == "sqlite":
+        bundle = build_sqlite_adapters()
+        # STEP 7's dedicated cache for the 1,200-product SQLite catalog
+        # (content-hash validated, never conflated with the 50-product
+        # synthetic V1 cache at the default `config.embedding.cache_path`
+        # - see docs/data-mapping.md section 16). A local config copy, not
+        # a shared-module change, keeps this override scoped to serving
+        # this one data source.
+        feature_config = config.model_copy(
+            update={"embedding": config.embedding.model_copy(update={"cache_path": "data/processed/product_embeddings_sqlite.npz"})}
+        )
+    else:
+        dataset = generate_synthetic_dataset(config)
+        issues = validate_dataset(dataset)
+        if issues:
+            raise RuntimeError(f"Dataset validation failed: {issues[:5]}")
+        bundle = build_synthetic_adapters(dataset, config.synthetic_data)
+        feature_config = config
 
     st_encoder = SentenceTransformerEncoder(
         config.embedding.sentence_transformer_model, device=config.embedding.device, batch_size=config.embedding.encode_batch_size
     )
-    feature_result = run_feature_pipeline(bundle, config, encoder=st_encoder)
+    feature_result = run_feature_pipeline(bundle, feature_config, encoder=st_encoder)
     text_embeddings = build_user_text_embeddings(list(feature_result.engagement_profiles.values()), st_encoder)
     products = bundle.products.list_products()
     product_lookup = {p.id: p for p in products}
     price_context = build_price_catalog_context(products)
 
     logger.info(
-        "Recommendation service built: %d products, %d users, retrieval backend=%s",
-        len(product_lookup), len(bundle.users.list_user_ids()), config.retrieval.backend,
+        "Recommendation service built: data_source=%s %d products, %d users, retrieval backend=%s",
+        config.paths.data_source, len(product_lookup), len(bundle.users.list_user_ids()), config.retrieval.backend,
     )
 
     return RecommendationService(

@@ -1,8 +1,11 @@
 # Docker/Linux configuration: identical to configs/base.yaml except
-# retrieval.backend, which selects ScaNN - the primary, production-
-# intended ANN backend (Phase 5). ScaNN has no Windows wheel, so this
-# file is what the Docker image (repo-root Dockerfile) loads via
-# RECS_CONFIG_PATH; native Windows dev keeps using base.yaml (FAISS).
+# retrieval.backend (ScaNN - the primary, production-intended ANN backend,
+# Phase 5; no Windows wheel, so native Windows dev keeps base.yaml/FAISS)
+# and dashboard.api_base_url (STEP 9): inside Docker Compose's default
+# network, "localhost" from the dashboard container's perspective is the
+# dashboard container itself, not the separate api container - Compose
+# makes each service reachable by its service NAME instead
+# (docker-compose.yml's `api` service), so this points there.
 #
 # Kept as a full standalone copy of base.yaml, not a partial override -
 # src/recommendation/utils/config.py loads each config file as a complete
@@ -22,6 +25,7 @@ paths:
   data_synthetic: "data/synthetic"
   models_dir: "models"
   data_sqlite: "data/sqlite/backend_shaped_synthetic.db"
+  data_source: "sqlite"
 
 # Phase 2 synthetic dataset generation.
 synthetic_data:
@@ -164,10 +168,10 @@ api:
   host: "0.0.0.0"
   port: 8000
 
-# Phase 9: internal dashboard. Currently unused: the dashboard reuses
-# RecommendationService in-process (src/recommendation/ui/service_loader.py)
-# rather than calling the API over HTTP, so a single `streamlit run` is
-# enough - no separately-running API server required. Kept here in case a
-# real microservice split (dashboard -> HTTP -> API) is revisited later.
+# Phase 9 / STEP 9: internal dashboard. Streamlit is a pure HTTP client of
+# FastAPI (docs/data-mapping.md section 18) - "api" below is the
+# docker-compose.yml service name/hostname, not localhost (see this
+# file's header comment).
 dashboard:
-  api_base_url: "http://localhost:8000"
+  api_base_url: "http://api:8000"
+  request_timeout_seconds: 10.0

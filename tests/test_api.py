@@ -25,7 +25,7 @@ from recommendation.data.adapters.base import (
     SearchAdapter,
     UserAdapter,
 )
-from recommendation.data.schemas.engagement import PurchaseRecord
+from recommendation.data.schemas.engagement import EngagementProfile, PurchaseRecord
 from recommendation.data.schemas.product import Product
 from recommendation.data.schemas.user import UserProfile
 from recommendation.features.product_features import build_product_features
@@ -184,6 +184,12 @@ def _build_service(**config_overrides) -> RecommendationService:
         **config_overrides,
     )
 
+    engagement_profiles = {
+        1: EngagementProfile(user_id=1, profile=profiles[1], purchases=purchases[1]),
+        2: EngagementProfile(user_id=2, profile=profiles[2], purchases=purchases[2]),
+        3: EngagementProfile(user_id=3, profile=profiles[3]),
+    }
+
     return RecommendationService(
         product_lookup=product_lookup,
         product_features=product_features,
@@ -198,6 +204,7 @@ def _build_service(**config_overrides) -> RecommendationService:
         config=config,
         ranker_model_version="ranker_v1_test",
         two_tower_model_version="two_tower_v1_test",
+        engagement_profiles=engagement_profiles,
     )
 
 
@@ -358,6 +365,72 @@ def test_items_have_stable_rank_ordering(client):
 
 
 # --- failure handling --------------------------------------------------
+
+# --- STEP 9: enriched recommendation items ----------------------------------
+
+def test_recommendation_items_include_display_fields(client):
+    response = client.get("/v1/users/1/recommendations")
+    assert response.status_code == 200
+    item = response.json()["items"][0]
+    assert item["product_name"].startswith("Product")
+    assert item["category"] is not None
+    assert "brand" in item and "price" in item and "is_active" in item and "stock_quantity" in item
+
+
+# --- STEP 9: GET /v1/users ---------------------------------------------------
+
+def test_get_users_lists_all_known_users(client):
+    response = client.get("/v1/users")
+    assert response.status_code == 200
+    user_ids = [u["user_id"] for u in response.json()["users"]]
+    assert user_ids == [1, 2, 3]
+
+
+def test_get_users_returns_503_when_service_not_loaded(client):
+    client.app.state.service = None
+    response = client.get("/v1/users")
+    assert response.status_code == 503
+
+
+# --- STEP 9: GET /v1/users/{id}/profile --------------------------------------
+
+def test_get_user_profile_known_user(client):
+    response = client.get("/v1/users/1/profile")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["user_id"] == 1
+    assert body["tier"] == "strong"
+    assert body["purchase_count"] == 3
+    assert isinstance(body["purchases"], list) and len(body["purchases"]) == 3
+
+
+def test_get_user_profile_no_history_user(client):
+    response = client.get("/v1/users/3/profile")
+    assert response.status_code == 200
+    assert response.json()["tier"] == "no_history"
+
+
+def test_get_user_profile_unknown_user_returns_404(client):
+    response = client.get(f"/v1/users/{UNKNOWN_USER_ID}/profile")
+    assert response.status_code == 404
+
+
+# --- STEP 9: GET /v1/metrics/offline -----------------------------------------
+
+def test_get_offline_metrics_returns_val_and_test_reports(client):
+    response = client.get("/v1/metrics/offline", params={"top_n": 5})
+    assert response.status_code == 200
+    body = response.json()
+    assert "val_report" in body and "test_report" in body
+    assert body["val_report"]["split_name"] == "val"
+    assert body["test_report"]["split_name"] == "test"
+    assert isinstance(body["num_eval_users"], int)
+
+
+def test_get_offline_metrics_default_top_n(client):
+    response = client.get("/v1/metrics/offline")
+    assert response.status_code == 200
+
 
 def test_pipeline_failure_returns_structured_500():
     failing_service = _build_service()

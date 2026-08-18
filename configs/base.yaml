@@ -12,6 +12,8 @@
 #   RECS_API_HOST / RECS_API_PORT -> api.host / api.port
 #   RECS_API_DEFAULT_TOP_N        -> api.default_recommendation_count
 #   RECS_API_MAX_TOP_N            -> api.max_recommendation_count
+#   RECS_DATA_SOURCE              -> paths.data_source ("synthetic" | "sqlite")
+#   RECS_DASHBOARD_API_BASE_URL   -> dashboard.api_base_url
 # See utils/config.py: _ENV_OVERRIDES for the authoritative list.
 
 random_seed: 42
@@ -23,9 +25,15 @@ paths:
   data_synthetic: "data/synthetic"
   models_dir: "models"
   # Backend-shaped synthetic integration dataset (see
-  # scripts/generate_backend_shaped_sqlite.py) - read-only, not the live
-  # serving data source in V1.
+  # scripts/generate_backend_shaped_sqlite.py) - read-only.
   data_sqlite: "data/sqlite/backend_shaped_synthetic.db"
+  # STEP 9 (docs/data-mapping.md section 18): "sqlite" is the current POC
+  # live-serving source - the approved STEP 7/8 RECENCY+PRICE pipeline
+  # trained against backend_shaped_synthetic.db (models/sqlite_baseline/).
+  # "synthetic" remains available for backward compatibility only - its
+  # artifacts (models/two_tower, models/ranker) predate STEP 6's dimension
+  # change and startup validation will reject them.
+  data_source: "sqlite"
 
 # Phase 2 synthetic dataset generation.
 synthetic_data:
@@ -191,10 +199,13 @@ api:
   host: "0.0.0.0"
   port: 8000
 
-# Phase 9: internal dashboard. Currently unused: the dashboard reuses
-# RecommendationService in-process (src/recommendation/ui/service_loader.py)
-# rather than calling the API over HTTP, so a single `streamlit run` is
-# enough - no separately-running API server required. Kept here in case a
-# real microservice split (dashboard -> HTTP -> API) is revisited later.
+# Phase 9 / STEP 9: internal dashboard. Streamlit is a pure HTTP client of
+# FastAPI (src/recommendation/ui/api_client.py, ui/service_loader.py) - it
+# never instantiates RecommendationService, loads model artifacts, or
+# touches SQLite/synthetic adapters itself (docs/data-mapping.md section
+# 18). Native dev: run `python scripts/run_api.py` first, then
+# `python scripts/run_dashboard.py` in a second terminal - api_base_url
+# below must point at the running API.
 dashboard:
   api_base_url: "http://localhost:8000"
+  request_timeout_seconds: 10.0

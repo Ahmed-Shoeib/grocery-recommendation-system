@@ -1,38 +1,35 @@
-"""Loads the `RecommendationService` once per Streamlit session and
-reuses it across reruns (`st.cache_resource`) - the dashboard shares the
-exact same Two-Tower/ranker/VectorIndex artifacts and the exact same
-`serving.pipeline.recommend` code path the Phase 8 API serves, in-process
-(no HTTP hop to a separately-running API server) so the dashboard is a
-single `streamlit run` away, with no other service to start first.
+"""Constructs the single `RecommendationApiClient` the dashboard uses,
+cached once per Streamlit session (`st.cache_resource`) - STEP 9
+(docs/data-mapping.md section 18) replaced the in-process
+`RecommendationService` this module used to build with a thin HTTP
+client; FastAPI is now the only process that loads model artifacts or
+touches SQLite/synthetic adapters.
 
-`load_service()` checks `st.session_state["_service_override"]` first -
-the dependency-injection seam `tests/test_ui_dashboard.py` uses (via
-Streamlit's `AppTest`) to inject a small/fake service and skip the real
-model-loading startup path entirely, the same pattern `api.app
-.create_app(service=...)` uses for the API's own tests. Setting the
-override to an `Exception` instance instead of a service makes
-`load_service()` raise it - how tests exercise `dashboard.py`'s "service
-failed to load" error state deterministically, without needing an actual
-missing-model-artifacts environment to reproduce the failure.
+`load_api_client()` checks `st.session_state["_api_client_override"]`
+first - the dependency-injection seam `tests/test_ui_dashboard.py` uses
+(via Streamlit's `AppTest`) to inject a fake client, so dashboard tests
+never make a real HTTP call or require a running FastAPI process. This is
+the same override pattern `api.app.create_app(service=...)` uses for the
+API's own tests, and the one this module itself used pre-STEP-9 for
+`RecommendationService` injection.
 """
 
 from __future__ import annotations
 
 import streamlit as st
 
-from recommendation.api.dependencies import RecommendationService, build_recommendation_service
+from recommendation.ui.api_client import RecommendationApiClient
 from recommendation.utils.config import get_config
 
 
-@st.cache_resource(show_spinner="Loading recommendation service (Two-Tower, ranker, VectorIndex)...")
-def _load_service_cached() -> RecommendationService:
-    return build_recommendation_service(get_config())
+@st.cache_resource(show_spinner=False)
+def _load_api_client_cached() -> RecommendationApiClient:
+    config = get_config()
+    return RecommendationApiClient(config.dashboard.api_base_url, timeout_seconds=config.dashboard.request_timeout_seconds)
 
 
-def load_service() -> RecommendationService:
-    override = st.session_state.get("_service_override")
-    if isinstance(override, BaseException):
-        raise override
+def load_api_client() -> RecommendationApiClient:
+    override = st.session_state.get("_api_client_override")
     if override is not None:
         return override
-    return _load_service_cached()
+    return _load_api_client_cached()
