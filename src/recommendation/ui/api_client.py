@@ -130,8 +130,14 @@ class RecommendationApiClient:
         except ValidationError as exc:
             raise MalformedResponseError(f"user profile response for user {user_id} did not match the expected schema: {exc}") from exc
 
-    def get_offline_metrics(self, top_n: int) -> OfflineMetricsResponse:
-        payload = self._get("/v1/metrics/offline", params={"top_n": top_n})
+    def get_offline_metrics(self) -> OfflineMetricsResponse:
+        """Reads the persisted offline evaluation report via `GET
+        /v1/metrics/offline` - a cheap read (STEP 9 fix), no `top_n`
+        parameter since the report's own `top_n`/`k_values` are fixed at
+        the time it was generated (`scripts/generate_offline_report.py`),
+        not chosen per request.
+        """
+        payload = self._get("/v1/metrics/offline")
         try:
             return OfflineMetricsResponse.model_validate(payload)
         except ValidationError as exc:

@@ -26,6 +26,7 @@ only real caller.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import numpy as np
 import tensorflow as tf
@@ -85,11 +86,19 @@ class RecommendationService:
     # Populated from the Phase 3 feature pipeline's own output - not
     # needed for serving a single recommendation request (that only
     # needs the ONE requested user's profile, looked up on demand via
-    # `bundle`), but the dashboard's user-selection list and its offline
-    # metrics section (`ui.metrics`) need every user's engagement data at
-    # once, and recomputing it per-user would be wasteful when it's
-    # already sitting in the feature pipeline result.
+    # `bundle`), but the dashboard's user-selection list needs every
+    # user's engagement data at once, and recomputing it per-user would
+    # be wasteful when it's already sitting in the feature pipeline result.
     engagement_profiles: dict[int, EngagementProfile] = field(default_factory=dict)
+    # STEP 9 offline-metrics fix: the raw `metadata.json` dicts saved
+    # alongside the loaded ranker/Two-Tower artifacts (run_id, dataset
+    # fingerprint, ...) - kept as-is (not just the single `model_version`
+    # string already extracted above) so `GET /v1/metrics/offline` can
+    # confirm a persisted evaluation report was produced against THIS
+    # exact trained run before serving it, without re-hashing the dataset
+    # or reloading artifacts a second time.
+    ranker_metadata: dict = field(default_factory=dict)
+    two_tower_metadata: dict = field(default_factory=dict)
 
     def is_known_user(self, user_id: int) -> bool:
         return self.bundle.users.get_user_profile(user_id) is not None
@@ -123,6 +132,21 @@ class RecommendationService:
         }
 
 
+def resolve_models_root(config: AppConfig) -> Path:
+    """The same `data_source` -> trained-artifact-directory branch
+    `build_recommendation_service` uses, extracted so other read-only
+    callers (the persisted offline-evaluation-report loader) resolve the
+    identical directory without duplicating - or silently drifting from -
+    this logic.
+    """
+    if config.paths.data_source == "sqlite":
+        return resolve_path(config.paths.models_dir) / "sqlite_baseline"
+    elif config.paths.data_source == "synthetic":
+        return resolve_path(config.paths.models_dir)
+    else:
+        raise ValueError(f"unknown paths.data_source: {config.paths.data_source!r}")
+
+
 def build_recommendation_service(config: AppConfig) -> RecommendationService:
     """Real production wiring for LIVE serving - loads the ALREADY-TRAINED
     artifacts (never retrains) and builds the Phase 5 VectorIndex.
@@ -152,12 +176,7 @@ def build_recommendation_service(config: AppConfig) -> RecommendationService:
     in milliseconds rather than after several seconds of otherwise-wasted
     startup work.
     """
-    if config.paths.data_source == "sqlite":
-        models_root = resolve_path(config.paths.models_dir) / "sqlite_baseline"
-    elif config.paths.data_source == "synthetic":
-        models_root = resolve_path(config.paths.models_dir)
-    else:
-        raise ValueError(f"unknown paths.data_source: {config.paths.data_source!r}")
+    models_root = resolve_models_root(config)
 
     two_tower_dir = models_root / "two_tower"
     ranker_dir = models_root / "ranker"
@@ -222,4 +241,6 @@ def build_recommendation_service(config: AppConfig) -> RecommendationService:
         ranker_model_version=str(ranker_artifacts.metadata.get("model_version", "unknown")),
         two_tower_model_version=str(two_tower_artifacts.metadata.get("model_version", "unknown")),
         engagement_profiles=feature_result.engagement_profiles,
+        ranker_metadata=ranker_artifacts.metadata,
+        two_tower_metadata=two_tower_artifacts.metadata,
     )

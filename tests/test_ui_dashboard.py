@@ -19,6 +19,7 @@ import pytest
 from streamlit.testing.v1 import AppTest
 
 from recommendation.api.schemas import (
+    OfflineMetricsProvenance,
     OfflineMetricsResponse,
     OfflineMetricsSplitReport,
     RecommendationItem,
@@ -79,9 +80,15 @@ class _FakeApiClient:
     backed by in-memory fixtures instead of real HTTP calls.
     """
 
-    def __init__(self, fail_recommendations: Exception | None = None, fail_users: Exception | None = None) -> None:
+    def __init__(
+        self,
+        fail_recommendations: Exception | None = None,
+        fail_users: Exception | None = None,
+        fail_offline_metrics: Exception | None = None,
+    ) -> None:
         self._fail_recommendations = fail_recommendations
         self._fail_users = fail_users
+        self._fail_offline_metrics = fail_offline_metrics
 
     def list_users(self) -> UserListResponse:
         if self._fail_users is not None:
@@ -102,13 +109,20 @@ class _FakeApiClient:
             raise self._fail_recommendations
         return _recommendation_response(user_id, _PROFILES[user_id].tier, limit or 10)
 
-    def get_offline_metrics(self, top_n: int) -> OfflineMetricsResponse:
+    def get_offline_metrics(self) -> OfflineMetricsResponse:
+        if self._fail_offline_metrics is not None:
+            raise self._fail_offline_metrics
         split = OfflineMetricsSplitReport(
             split_name="val", num_cases=2, ndcg_at_k={5: 0.5}, precision_at_k={5: 0.4}, recall_at_k={5: 0.3},
-            hit_rate_at_k={5: 0.6}, mrr=0.5, catalog_coverage=0.8, mean_distinct_categories=2.0,
-            duplicate_rate=0.0, fill_rate=1.0, tier_counts={"strong": 1, "sparse": 1},
+            hit_rate_at_k={5: 0.6}, mrr=0.5, catalog_coverage=0.8, mean_distinct_categories=2.0, mean_fill_rate=1.0,
         )
-        return OfflineMetricsResponse(num_eval_users=2, val_report=split, test_report=split)
+        provenance = OfflineMetricsProvenance(
+            generated_at=datetime.now(timezone.utc), run_id="20260818T000000",
+            ranker_model_version="sqlite_baseline_ranker_v1", two_tower_model_version="sqlite_baseline_two_tower_v1",
+            dataset_fingerprint_sha256_16="abc123", recency_enabled=True, recency_half_life_days=21.0,
+            include_price_features=True, k_values=[5, 10, 20], top_n=10,
+        )
+        return OfflineMetricsResponse(provenance=provenance, val_report=split, test_report=split)
 
 
 @pytest.fixture
@@ -165,6 +179,22 @@ def test_dashboard_handles_recommendation_api_failure_gracefully():
     assert not at.exception
     errors = [e.value for e in at.error]
     assert any("generating recommendations" in e for e in errors)
+
+
+def test_dashboard_handles_offline_metrics_unavailable_gracefully():
+    """`GET /v1/metrics/offline` returns 409 when the persisted report is
+    missing/malformed/stale (STEP 9 fix) - the dashboard must show a clean
+    message for that split, not crash the whole page or fall back to
+    computing anything itself.
+    """
+    at = AppTest.from_file(_DASHBOARD_PATH, default_timeout=60)
+    at.session_state["_api_client_override"] = _FakeApiClient(
+        fail_offline_metrics=ApiResponseError(409, "no offline evaluation report found")
+    )
+    at.run()
+    assert not at.exception
+    errors = [e.value for e in at.error]
+    assert any("loading offline metrics" in e for e in errors)
 
 
 def test_dashboard_handles_api_unavailable_gracefully():

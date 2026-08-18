@@ -191,30 +191,32 @@ def _render_pipeline_debug(meta, items: list) -> None:
         st.bar_chart(pd.Series(dict(categories), name="count")) if categories else st.info("No candidates to show.")
 
 
-def _render_metrics_section(client, top_n: int) -> None:
+def _render_metrics_section(client) -> None:
     st.subheader("6. Metrics / debug")
     st.caption(
-        "⚠️ These are OFFLINE metrics computed via leave-one-out evaluation on the current dataset "
-        "(same protocol as scripts/run_pipeline.py), served by `GET /v1/metrics/offline`. They are NOT real "
+        "⚠️ These are OFFLINE metrics from the APPROVED STEP 5/7/8 temporal future-purchase evaluation "
+        "protocol, PERSISTED by `scripts/generate_offline_report.py` and served as a cheap read by "
+        "`GET /v1/metrics/offline` (no evaluation pass runs on this request). They are NOT real "
         "production/online metrics (CTR, conversion, real engagement) - V1 has no event-tracking pipeline to "
         "compute those from."
     )
-    if st.button("Compute offline metrics (may take a moment)"):
-        try:
-            with st.spinner("Re-running the leave-one-out evaluation..."):
-                st.session_state["_offline_metrics"] = client.get_offline_metrics(top_n)
-        except ApiClientError as exc:
-            _show_api_error(exc, "computing offline metrics")
-            return
-
-    response = st.session_state.get("_offline_metrics")
-    if response is None:
-        st.info("Click the button above to compute offline metrics for the current Top-N.")
+    try:
+        response = client.get_offline_metrics()
+    except ApiClientError as exc:
+        _show_api_error(exc, "loading offline metrics")
         return
 
-    st.caption(f"{response.num_eval_users} held-out evaluation users (leave-one-out val/test targets).")
+    provenance = response.provenance
+    st.caption(
+        f"run_id=`{provenance.run_id}` · ranker=`{provenance.ranker_model_version}` · "
+        f"two_tower=`{provenance.two_tower_model_version}` · dataset_fingerprint=`{provenance.dataset_fingerprint_sha256_16}` · "
+        f"recency={'on' if provenance.recency_enabled else 'off'}"
+        + (f" ({provenance.recency_half_life_days}d half-life)" if provenance.recency_half_life_days else "")
+        + f" · price_features={'on' if provenance.include_price_features else 'off'} · top_n={provenance.top_n} · "
+        f"generated_at={provenance.generated_at.isoformat()}"
+    )
     for label, report in (("Validation split", response.val_report), ("Test split", response.test_report)):
-        st.markdown(f"**{label}**")
+        st.markdown(f"**{label}** ({report.num_cases} evaluation cases)")
         k_values = sorted(report.ndcg_at_k)
         table = pd.DataFrame(
             {
@@ -226,12 +228,11 @@ def _render_metrics_section(client, top_n: int) -> None:
             }
         )
         st.dataframe(table, hide_index=True, use_container_width=True)
-        col1, col2, col3, col4, col5 = st.columns(5)
+        col1, col2, col3, col4 = st.columns(4)
         col1.metric("MRR", f"{report.mrr:.4f}")
         col2.metric("Catalog coverage", f"{report.catalog_coverage:.0%}")
         col3.metric("Avg. distinct categories", f"{report.mean_distinct_categories:.1f}")
-        col4.metric("Duplicate rate", f"{report.duplicate_rate:.0%}")
-        col5.metric("Fill rate", f"{report.fill_rate:.0%}")
+        col4.metric("Mean fill rate", f"{report.mean_fill_rate:.0%}")
 
 
 def main() -> None:
@@ -285,7 +286,7 @@ def main() -> None:
 
     _render_recommendations(response.items)
     _render_pipeline_debug(response.meta, response.items)
-    _render_metrics_section(client, top_n)
+    _render_metrics_section(client)
 
 
 main()

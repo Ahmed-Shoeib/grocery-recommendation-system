@@ -121,7 +121,7 @@ def test_500_raises_api_response_error_with_status_and_message(monkeypatch, clie
 def test_422_on_list_users_is_api_response_error_not_unknown_user(monkeypatch, client):
     _install_fake_get(monkeypatch, lambda url, params=None, timeout=None: _FakeResponse(422, {"error": "invalid_request", "message": "bad params"}))
     with pytest.raises(ApiResponseError):
-        client.get_offline_metrics(top_n=5)
+        client.get_offline_metrics()
 
 
 def test_error_body_without_json_falls_back_to_raw_text(monkeypatch, client):
@@ -181,12 +181,18 @@ def test_get_offline_metrics_parses_into_schema_model(monkeypatch, client):
     split = {
         "split_name": "val", "num_cases": 2, "ndcg_at_k": {"5": 0.5}, "precision_at_k": {"5": 0.4},
         "recall_at_k": {"5": 0.3}, "hit_rate_at_k": {"5": 0.6}, "mrr": 0.5, "catalog_coverage": 0.8,
-        "mean_distinct_categories": 2.0, "duplicate_rate": 0.0, "fill_rate": 1.0, "tier_counts": {"strong": 1},
+        "mean_distinct_categories": 2.0, "mean_fill_rate": 1.0,
     }
-    payload = {"num_eval_users": 2, "val_report": split, "test_report": split}
+    provenance = {
+        "generated_at": "2026-08-18T00:00:00+00:00", "run_id": "20260818T000000",
+        "ranker_model_version": "sqlite_baseline_ranker_v1", "two_tower_model_version": "sqlite_baseline_two_tower_v1",
+        "dataset_fingerprint_sha256_16": "abc123", "recency_enabled": True, "recency_half_life_days": 21.0,
+        "include_price_features": True, "k_values": [5, 10, 20], "top_n": 10,
+    }
+    payload = {"provenance": provenance, "val_report": split, "test_report": split}
     _install_fake_get(monkeypatch, lambda url, params=None, timeout=None: _FakeResponse(200, payload))
-    result = client.get_offline_metrics(top_n=5)
-    assert result.num_eval_users == 2
+    result = client.get_offline_metrics()
+    assert result.provenance.run_id == "20260818T000000"
     assert result.val_report.ndcg_at_k == {5: 0.5}  # string key coerced to int by the schema's dict[int, float] annotation
 
 

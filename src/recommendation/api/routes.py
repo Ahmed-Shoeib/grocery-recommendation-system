@@ -11,12 +11,18 @@ STEP 9 (docs/data-mapping.md section 18) additions:
 fields (`ui.data_access.format_recommendation_table`, unchanged, just
 called from here instead of from `dashboard.py` directly) so a client
 never needs its own separate catalog access. `/users`, `/users/{id}
-/profile`, `/metrics/offline` are small, generally-useful read-only
-endpoints - NOT recommendation generation - added so the Streamlit
-dashboard (now a pure HTTP client) can still browse users/engagement
-data/offline diagnostics without instantiating a `RecommendationService`
-itself; they reuse `ui.data_access`/`ui.metrics` unchanged, no new
-business logic.
+/profile` are small, generally-useful read-only endpoints - NOT
+recommendation generation - added so the Streamlit dashboard (now a pure
+HTTP client) can still browse users/engagement data without instantiating
+a `RecommendationService` itself; they reuse `ui.data_access` unchanged,
+no new business logic.
+
+`/metrics/offline` (STEP 9 follow-up fix, see `evaluation.offline_report`
+module docstring) is a cheap READ of a report PERSISTED by
+`scripts/generate_offline_report.py` - it never runs an evaluation pass
+itself, so unlike the endpoints above it does not touch `RecommendationService`'s
+pipeline-facing methods at all, only `service.config`/`service
+.ranker_model_version`/`service.ranker_metadata` (already-loaded values).
 """
 
 from __future__ import annotations
@@ -27,10 +33,11 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 
-from recommendation.api.dependencies import RecommendationService
+from recommendation.api.dependencies import RecommendationService, resolve_models_root
 from recommendation.api.errors import UnknownUserError
 from recommendation.api.schemas import (
     HealthResponse,
+    OfflineMetricsProvenance,
     OfflineMetricsResponse,
     OfflineMetricsSplitReport,
     ReadinessResponse,
@@ -40,6 +47,12 @@ from recommendation.api.schemas import (
     UserListItem,
     UserListResponse,
     UserProfileResponse,
+)
+from recommendation.evaluation.offline_report import (
+    OfflineEvaluationReport,
+    OfflineReportError,
+    load_offline_report,
+    validate_report_provenance,
 )
 from recommendation.ui.data_access import (
     format_cart_items,
@@ -51,7 +64,6 @@ from recommendation.ui.data_access import (
     list_users,
     load_user_detail,
 )
-from recommendation.ui.metrics import compute_offline_metrics
 from recommendation.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -200,35 +212,60 @@ async def get_user_profile(user_id: int, service: RecommendationService = Depend
 
 
 @router.get("/metrics/offline", response_model=OfflineMetricsResponse)
-async def get_offline_metrics(
-    top_n: int = Query(default=10, ge=1, description="Top-N used for the offline leave-one-out evaluation pass"),
-    service: RecommendationService = Depends(get_service),
-) -> OfflineMetricsResponse:
-    """Offline, synthetic/SQLite-dataset leave-one-out metrics only (see
-    `ui.metrics` module docstring) - reuses `ui.metrics.compute_offline_metrics`
-    unchanged. Expensive (runs a full evaluation pass); not for
-    high-frequency polling.
-    """
-    summary = compute_offline_metrics(service, top_n)
+async def get_offline_metrics(service: RecommendationService = Depends(get_service)) -> OfflineMetricsResponse:
+    """Cheap READ of the PERSISTED offline evaluation report produced by
+    `scripts/generate_offline_report.py` (the APPROVED STEP 5/7/8 temporal
+    future-purchase protocol - see `evaluation.offline_report` module
+    docstring). Never runs `generate_recommendations`/an evaluation pass
+    itself - this handler does not call the pipeline at all.
 
-    def _to_schema(report) -> OfflineMetricsSplitReport:
+    Fails clearly (409) rather than silently falling back to a live
+    evaluation run if the report is missing, malformed, or was produced
+    against a different model/run/dataset than the one this process
+    currently has loaded (`OfflineReportError` and its subclasses).
+    """
+    report_path = resolve_models_root(service.config) / "offline_report.json"
+    try:
+        report: OfflineEvaluationReport = load_offline_report(report_path)
+        validate_report_provenance(
+            report,
+            ranker_model_version=service.ranker_model_version,
+            two_tower_model_version=service.two_tower_model_version,
+            ranker_run_id=str(service.ranker_metadata.get("run_id", "")),
+            ranker_dataset_fingerprint=str(service.ranker_metadata.get("dataset_fingerprint_sha256_16", "")),
+        )
+    except OfflineReportError as exc:
+        logger.warning("offline metrics report unavailable: %s", exc)
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    def _to_schema(split_report) -> OfflineMetricsSplitReport:
         return OfflineMetricsSplitReport(
-            split_name=report.split_name,
-            num_cases=report.num_cases,
-            ndcg_at_k=report.ndcg_at_k,
-            precision_at_k=report.precision_at_k,
-            recall_at_k=report.recall_at_k,
-            hit_rate_at_k=report.hit_rate_at_k,
-            mrr=report.mrr,
-            catalog_coverage=report.catalog_coverage,
-            mean_distinct_categories=report.mean_distinct_categories,
-            duplicate_rate=report.duplicate_rate,
-            fill_rate=report.fill_rate,
-            tier_counts=report.tier_counts,
+            split_name=split_report.split_name,
+            num_cases=split_report.num_cases,
+            ndcg_at_k=split_report.ndcg_at_k,
+            precision_at_k=split_report.precision_at_k,
+            recall_at_k=split_report.recall_at_k,
+            hit_rate_at_k=split_report.hit_rate_at_k,
+            mrr=split_report.mrr,
+            catalog_coverage=split_report.catalog_coverage,
+            mean_distinct_categories=split_report.mean_distinct_categories,
+            mean_fill_rate=split_report.mean_fill_rate,
         )
 
+    provenance = OfflineMetricsProvenance(
+        generated_at=report.generated_at,
+        run_id=report.run_id,
+        ranker_model_version=report.ranker_model_version,
+        two_tower_model_version=report.two_tower_model_version,
+        dataset_fingerprint_sha256_16=report.dataset_fingerprint_sha256_16,
+        recency_enabled=report.recency_enabled,
+        recency_half_life_days=report.recency_half_life_days,
+        include_price_features=report.include_price_features,
+        k_values=report.k_values,
+        top_n=report.top_n,
+    )
     return OfflineMetricsResponse(
-        num_eval_users=summary.num_eval_users,
-        val_report=_to_schema(summary.val_report),
-        test_report=_to_schema(summary.test_report),
+        provenance=provenance,
+        val_report=_to_schema(report.val_report),
+        test_report=_to_schema(report.test_report),
     )

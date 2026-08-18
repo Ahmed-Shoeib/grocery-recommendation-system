@@ -8,12 +8,14 @@ tests exercise API plumbing/contracts, not recommendation quality.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 import numpy as np
 import pytest
 from fastapi.testclient import TestClient
 
 from recommendation.api.app import create_app
-from recommendation.api.dependencies import RecommendationService
+from recommendation.api.dependencies import RecommendationService, resolve_models_root
 from recommendation.data.adapters.base import (
     AdapterBundle,
     CartAdapter,
@@ -28,6 +30,12 @@ from recommendation.data.adapters.base import (
 from recommendation.data.schemas.engagement import EngagementProfile, PurchaseRecord
 from recommendation.data.schemas.product import Product
 from recommendation.data.schemas.user import UserProfile
+from recommendation.evaluation.offline_report import (
+    REPORT_SCHEMA_VERSION,
+    OfflineEvalSplitReport,
+    OfflineEvaluationReport,
+    save_offline_report,
+)
 from recommendation.features.product_features import build_product_features
 from recommendation.ranking.features import RANKING_FEATURE_NAMES
 from recommendation.ranking.model import build_ranker_model
@@ -39,6 +47,7 @@ from recommendation.utils.config import (
     AppConfig,
     ColdStartConfig,
     EligibilityConfig,
+    PathsConfig,
     RankingConfig,
     RetrievalConfig,
     TwoTowerConfig,
@@ -205,12 +214,18 @@ def _build_service(**config_overrides) -> RecommendationService:
         ranker_model_version="ranker_v1_test",
         two_tower_model_version="two_tower_v1_test",
         engagement_profiles=engagement_profiles,
+        ranker_metadata={"run_id": "test_run_1", "dataset_fingerprint_sha256_16": "fingerprint_abc"},
+        two_tower_metadata={"run_id": "test_run_1", "dataset_fingerprint_sha256_16": "fingerprint_abc"},
     )
 
 
 @pytest.fixture
-def service() -> RecommendationService:
-    return _build_service()
+def service(tmp_path) -> RecommendationService:
+    # `paths.models_dir` pointed at a per-test tmp dir so
+    # `resolve_models_root(service.config)` (used by GET /v1/metrics/offline
+    # to find the persisted offline_report.json) never touches the real
+    # models/sqlite_baseline/ directory.
+    return _build_service(paths=PathsConfig(models_dir=str(tmp_path)))
 
 
 @pytest.fixture
@@ -218,6 +233,40 @@ def client(service) -> TestClient:
     app = create_app(service=service)
     with TestClient(app) as c:
         yield c
+
+
+def _offline_report_path(service: RecommendationService):
+    return resolve_models_root(service.config) / "offline_report.json"
+
+
+def _valid_offline_report(**overrides) -> OfflineEvaluationReport:
+    split = OfflineEvalSplitReport(
+        split_name="val", num_cases=2, precision_at_k={5: 0.4}, recall_at_k={5: 0.3}, hit_rate_at_k={5: 0.6},
+        ndcg_at_k={5: 0.5}, mrr=0.5, mean_distinct_categories=2.0, catalog_coverage=0.8, mean_fill_rate=1.0,
+    )
+    test_split = OfflineEvalSplitReport(
+        split_name="test", num_cases=2, precision_at_k={5: 0.3}, recall_at_k={5: 0.2}, hit_rate_at_k={5: 0.5},
+        ndcg_at_k={5: 0.4}, mrr=0.4, mean_distinct_categories=1.5, catalog_coverage=0.7, mean_fill_rate=0.9,
+    )
+    fields = dict(
+        schema_version=REPORT_SCHEMA_VERSION,
+        generated_at=datetime.now(timezone.utc),
+        run_id="test_run_1",
+        ranker_model_version="ranker_v1_test",
+        two_tower_model_version="two_tower_v1_test",
+        data_source="C:/fake/backend_shaped_synthetic.db",
+        dataset_fingerprint_sha256_16="fingerprint_abc",
+        recency_enabled=True,
+        recency_half_life_days=21.0,
+        include_price_features=True,
+        price_tier_boundaries=[4.0, 6.7],
+        k_values=[5, 10, 20],
+        top_n=10,
+        val_report=split,
+        test_report=test_split,
+    )
+    fields.update(overrides)
+    return OfflineEvaluationReport(**fields)
 
 
 # --- health / readiness ------------------------------------------------
@@ -415,21 +464,103 @@ def test_get_user_profile_unknown_user_returns_404(client):
     assert response.status_code == 404
 
 
-# --- STEP 9: GET /v1/metrics/offline -----------------------------------------
+# --- STEP 9 fix: GET /v1/metrics/offline is a cheap read of a persisted report ---
+# (docs/data-mapping.md section 18 follow-up - see `evaluation.offline_report`
+# module docstring). The endpoint must NEVER call `generate_recommendations`/
+# run an evaluation pass itself - see the non-recomputation tests below.
 
-def test_get_offline_metrics_returns_val_and_test_reports(client):
-    response = client.get("/v1/metrics/offline", params={"top_n": 5})
-    assert response.status_code == 200
-    body = response.json()
-    assert "val_report" in body and "test_report" in body
-    assert body["val_report"]["split_name"] == "val"
-    assert body["test_report"]["split_name"] == "test"
-    assert isinstance(body["num_eval_users"], int)
-
-
-def test_get_offline_metrics_default_top_n(client):
+def test_get_offline_metrics_valid_report_returns_200_with_provenance(service, client):
+    save_offline_report(_offline_report_path(service), _valid_offline_report())
     response = client.get("/v1/metrics/offline")
     assert response.status_code == 200
+    body = response.json()
+    assert body["val_report"]["split_name"] == "val"
+    assert body["test_report"]["split_name"] == "test"
+    assert body["val_report"]["num_cases"] == 2
+    provenance = body["provenance"]
+    assert provenance["run_id"] == "test_run_1"
+    assert provenance["ranker_model_version"] == "ranker_v1_test"
+    assert provenance["two_tower_model_version"] == "two_tower_v1_test"
+    assert provenance["dataset_fingerprint_sha256_16"] == "fingerprint_abc"
+    assert provenance["k_values"] == [5, 10, 20]
+    assert provenance["top_n"] == 10
+
+
+def test_get_offline_metrics_missing_report_returns_409(client):
+    # No offline_report.json written for this test's tmp models_dir.
+    response = client.get("/v1/metrics/offline")
+    assert response.status_code == 409
+    body = response.json()
+    assert body["error"] == "offline_report_unavailable"
+    assert "generate_offline_report" in body["message"]
+
+
+def test_get_offline_metrics_malformed_json_returns_409(service, client):
+    path = _offline_report_path(service)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("{not valid json", encoding="utf-8")
+    response = client.get("/v1/metrics/offline")
+    assert response.status_code == 409
+    assert response.json()["error"] == "offline_report_unavailable"
+
+
+def test_get_offline_metrics_malformed_shape_returns_409(service, client):
+    path = _offline_report_path(service)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text('{"schema_version": 1, "run_id": "x"}', encoding="utf-8")
+    response = client.get("/v1/metrics/offline")
+    assert response.status_code == 409
+    assert response.json()["error"] == "offline_report_unavailable"
+
+
+def test_get_offline_metrics_run_id_mismatch_returns_409(service, client):
+    save_offline_report(_offline_report_path(service), _valid_offline_report(run_id="some_other_run"))
+    response = client.get("/v1/metrics/offline")
+    assert response.status_code == 409
+    body = response.json()
+    assert body["error"] == "offline_report_unavailable"
+    assert "run_id" in body["message"]
+
+
+def test_get_offline_metrics_dataset_fingerprint_mismatch_returns_409(service, client):
+    save_offline_report(_offline_report_path(service), _valid_offline_report(dataset_fingerprint_sha256_16="different_fingerprint"))
+    response = client.get("/v1/metrics/offline")
+    assert response.status_code == 409
+    assert "dataset_fingerprint" in response.json()["message"]
+
+
+def test_get_offline_metrics_ranker_model_version_mismatch_returns_409(service, client):
+    save_offline_report(_offline_report_path(service), _valid_offline_report(ranker_model_version="some_other_ranker_v2"))
+    response = client.get("/v1/metrics/offline")
+    assert response.status_code == 409
+    assert "ranker_model_version" in response.json()["message"]
+
+
+def test_get_offline_metrics_does_not_call_generate_recommendations(monkeypatch, service, client):
+    """The core regression this fix closes: the endpoint must be a pure
+    read of the persisted report, never a live evaluation pass over the
+    (potentially hundreds-of-users) evaluation population.
+    """
+    import recommendation.serving.pipeline as pipeline_module
+
+    def _fail_if_called(*args, **kwargs):
+        raise AssertionError("GET /v1/metrics/offline must not call generate_recommendations")
+
+    monkeypatch.setattr(pipeline_module, "generate_recommendations", _fail_if_called)
+    save_offline_report(_offline_report_path(service), _valid_offline_report())
+
+    response = client.get("/v1/metrics/offline")
+    assert response.status_code == 200
+
+
+def test_get_offline_metrics_does_not_call_service_recommend(monkeypatch, service, client):
+    calls = []
+    monkeypatch.setattr(service, "recommend", lambda *a, **k: calls.append((a, k)))
+    save_offline_report(_offline_report_path(service), _valid_offline_report())
+
+    response = client.get("/v1/metrics/offline")
+    assert response.status_code == 200
+    assert calls == []
 
 
 def test_pipeline_failure_returns_structured_500():

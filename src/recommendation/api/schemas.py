@@ -130,19 +130,36 @@ class OfflineMetricsSplitReport(BaseModel):
     mrr: float
     catalog_coverage: float
     mean_distinct_categories: float
-    duplicate_rate: float
-    fill_rate: float
-    tier_counts: dict[str, int]
+    mean_fill_rate: float
+
+
+class OfflineMetricsProvenance(BaseModel):
+    """Enough to prove which model/run/dataset/config these numbers
+    describe, and to let a client detect a stale report at a glance -
+    see `evaluation.offline_report.OfflineEvaluationReport`.
+    """
+
+    generated_at: datetime
+    run_id: str
+    ranker_model_version: str
+    two_tower_model_version: str
+    dataset_fingerprint_sha256_16: str
+    recency_enabled: bool
+    recency_half_life_days: float | None = None
+    include_price_features: bool
+    k_values: list[int]
+    top_n: int
 
 
 class OfflineMetricsResponse(BaseModel):
-    """Offline, synthetic/SQLite-dataset leave-one-out metrics ONLY (see
-    `ui.metrics` module docstring) - never a production/online metric.
-    Expensive to compute (runs a full evaluation pass), included for
-    parity with the pre-STEP-9 dashboard's debug section, not intended
-    for high-frequency polling.
+    """Offline, SQLite-dataset evaluation metrics ONLY (the APPROVED STEP
+    5/7/8 temporal future-purchase protocol - see `evaluation
+    .offline_report` module docstring) - never a production/online
+    metric. This is a cheap READ of a report persisted by
+    `scripts/generate_offline_report.py`; the endpoint itself never runs
+    an evaluation pass.
     """
 
-    num_eval_users: int
+    provenance: OfflineMetricsProvenance
     val_report: OfflineMetricsSplitReport
     test_report: OfflineMetricsSplitReport

@@ -29,6 +29,7 @@ logger = get_logger(__name__)
 
 _ERROR_CODES = {
     404: "not_found",
+    409: "offline_report_unavailable",
     422: "invalid_request",
     503: "not_ready",
 }
