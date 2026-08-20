@@ -10,7 +10,12 @@ wire contract, kept separate from internal domain/model schemas.
 `/v1/users/{user_id}/recommendations`, and the STEP 9 read-only
 `/v1/users`, `/v1/users/{user_id}/profile`, `/v1/metrics/offline`
 endpoints - all deferring to `serving.pipeline.recommend`/`ui.data_access`/
-`ui.metrics` for the actual work, never duplicating it here.
+`evaluation.offline_report` for the actual work, never duplicating it
+here. `/v1/metrics/offline` is a cheap read of a report PERSISTED by
+`scripts/generate_offline_report.py` (STEP 9 follow-up fix -
+docs/data-mapping.md section 18.1); it does not call `ui.metrics`
+(legacy, no longer wired into any live route - see that module's
+docstring).
 
 STEP 9 (docs/data-mapping.md section 18): deliberately does NOT
 re-export `create_app` (`from recommendation.api.app import create_app`)

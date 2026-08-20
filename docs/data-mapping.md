@@ -693,18 +693,19 @@ parameter through the versioned wire contract is deferred until a real
 surface-specific use case exists, consistent with "not by building
 unused event infrastructure now" below.
 
-**Phase 9 status**: the internal Streamlit dashboard
-(`recommendation.ui`) is a second consumer of the same pipeline, but -
-deliberately, for this V1 internal debug tool - it does NOT go through
-the Phase 8 HTTP API. `ui.service_loader.load_service` reuses
+**Phase 9 status, superseded by STEP 9 (§18)**: the internal Streamlit
+dashboard (`recommendation.ui`) was originally a second, in-process
+consumer of the same pipeline - `ui.service_loader.load_service` reused
 `api.dependencies.RecommendationService`/`build_recommendation_service`
-directly, in-process, so a single `streamlit run` works with no API
-server to start first. This is still "one pipeline, reused, not
-duplicated" - the SAME `RecommendationService` class and the SAME
-`serving.pipeline.generate_recommendations` call the API makes, just
-without an HTTP hop. `configs/base.yaml: dashboard.api_base_url` is
-consequently unused for now, kept for a possible future microservice
-split rather than removed.
+directly, with no HTTP hop and no API server required to start first.
+As of STEP 9, this is no longer current: the dashboard is a pure
+`ui.api_client.RecommendationApiClient` HTTP client of the Phase 8 API
+and no longer imports `api.dependencies`, `serving.*`, or any
+model-loading code - see §18 for the full rewiring and why two
+independent `RecommendationService` construction sites was itself a
+defect, not just a preference for fewer processes.
+`configs/base.yaml: dashboard.api_base_url` is now actively used (no
+longer unused/reserved).
 
 ## 10. ANN retrieval backend
 
@@ -869,6 +870,7 @@ genuinely temporal held-out split instead of this content-based heuristic.
 | §16 From-scratch SQLite training + temporal evaluation (`evaluation.temporal_training`, `models/sqlite_baseline/`, Docker/ScaNN verification) | STEP 7 training phase |
 | §17 Controlled two-way ablation - BASE vs. RECENCY+PRICE (`include_price_features`, `scripts/run_ablation.py`, `models/ablation/base/`) | STEP 8 ablation phase |
 | §18 One serving path: Streamlit as a pure FastAPI HTTP client (`api.dependencies.build_recommendation_service` SQLite wiring fix, `ui.api_client.RecommendationApiClient`, `paths.data_source`/`dashboard.api_base_url` config) | STEP 9 serving-architecture phase |
+| §18.1 Persisted offline-report architecture (`evaluation.offline_report`, `scripts/generate_offline_report.py`, provenance validation, `GET /v1/metrics/offline`) | STEP 9 follow-up fix |
 
 ## 14. Recency weighting (STEP 5)
 
@@ -1479,11 +1481,14 @@ not a new dashboard-specific backend:
   `UserProfileResponse`. 404 on an unknown user_id (distinct from the
   recommendations endpoint's `UnknownUserError` path, but the same HTTP
   outcome).
-- `GET /v1/metrics/offline?top_n=N` -> `ui.metrics.compute_offline_metrics`
-  (STEP 7/8's own leave-one-out offline evaluation, unchanged), wrapped
-  as `OfflineMetricsResponse`. Expensive; not for high-frequency polling,
-  same as the pre-STEP-9 dashboard's on-demand "Compute offline metrics"
-  button.
+- `GET /v1/metrics/offline` -> a cheap READ of a report PERSISTED by
+  `scripts/generate_offline_report.py`, wrapped as
+  `OfflineMetricsResponse`. **Superseded by the STEP 9 follow-up fix
+  below (section 18.1)** shortly after this section was first written:
+  the endpoint originally called `ui.metrics.compute_offline_metrics`
+  synchronously per request (the OLD non-temporal leave-one-out
+  protocol, ~88s against the SQLite baseline) - see section 18.1 for why
+  that was replaced and what serves the route today.
 
 Not every dashboard operation became an endpoint: the per-candidate
 `excluded_reasons` debug expander the old in-process dashboard rendered
@@ -1579,4 +1584,70 @@ Two-Tower, ranker, negative sampling, temporal split, eligibility rules,
 re-ranking), and the STEP 7/8 evaluation protocols are all unchanged.
 The obsolete `ecommerce.db` was not investigated, restored, or
 referenced.
+
+## 18.1 STEP 9 follow-up: persisted offline-report architecture
+
+**Problem this closes.** As first shipped, `GET /v1/metrics/offline`
+called `ui.metrics.compute_offline_metrics` synchronously on every
+request - a full evaluation pass (`generate_recommendations` once per
+evaluation-population user) run inline in the HTTP request, ~88s against
+the SQLite baseline, tripping the dashboard's 10s client timeout. Worse,
+that evaluation used the OLD, non-temporal leave-one-out protocol
+(`retrieval.two_tower.splitting`/`.examples`), not the STEP 5/7/8
+APPROVED temporal future-purchase protocol the currently-served
+`models/sqlite_baseline/` artifacts were actually trained and selected
+against - so even ignoring latency, the numbers it showed did not
+describe the model actually being served.
+
+**Current architecture** (`evaluation.offline_report`):
+
+```
+scripts/generate_offline_report.py   (offline, on demand, batch)
+    -> loads already-trained models/sqlite_baseline/{two_tower,ranker}
+       (never retrains - aborts if paths.data_source != "sqlite" or the
+       artifact dirs don't exist)
+    -> re-derives the exact STEP 5/7/8 temporal splits/eval cases
+    -> runs evaluation.temporal_training.evaluate_primary_pipeline for
+       BOTH the val and test splits (UNCHANGED - no new metric logic)
+    -> writes models/sqlite_baseline/offline_report.json
+
+GET /v1/metrics/offline   (online, every request, milliseconds)
+    -> evaluation.offline_report.load_offline_report(report_path)
+    -> validates the persisted JSON's schema version
+    -> validate_report_provenance(...) against the CURRENTLY-LOADED
+       RecommendationService's model/dataset identity
+    -> returns OfflineMetricsResponse
+    -> NEVER calls generate_recommendations / runs an evaluation pass
+```
+
+`ui.metrics.compute_offline_metrics` still exists (that module's own
+docstring now flags it as legacy) but is no longer imported by
+`api.routes` or `ui.dashboard` - it is dead from the live serving path's
+perspective, kept only because its own test (`tests/test_ui_metrics.py`)
+still exercises the non-temporal protocol machinery directly.
+
+**Provenance validation** (`validate_report_provenance`): compares,
+field by field, the *loaded* model/run identity (`ranker_model_version`,
+`two_tower_model_version`, `run_id`, `dataset_fingerprint_sha256_16`
+from the already-loaded artifacts' own `metadata.json`) against what is
+recorded *inside* the persisted report. Any mismatch raises
+`OfflineReportProvenanceMismatchError` -> HTTP 409 listing every
+mismatched field, rather than silently serving metrics that describe a
+different model/dataset than the one currently answering
+`/recommendations`. `OfflineReportMissingError`/
+`OfflineReportMalformedError` cover the report not existing yet / not
+matching the expected schema. All three are subclasses of
+`OfflineReportError`, caught once in `api.routes.get_offline_metrics`.
+
+**Why gitignored**: `offline_report.json` is written inside the same
+`models/sqlite_baseline/` directory as the model weights, under the
+existing blanket `models/*` gitignore rule (`!models/.gitkeep` excepted)
+- a regenerable build output, not source, same as every other trained
+artifact.
+
+**Config surface**: none new. `resolve_models_root(config)`
+(`api.dependencies`) - the same `data_source`-driven directory
+resolution `build_recommendation_service` already uses - is reused so
+the report reader and the live service can never resolve a different
+directory for the same config.
 

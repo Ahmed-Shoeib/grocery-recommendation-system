@@ -8,6 +8,17 @@ history for specifics, e.g. the ScaNN/TensorFlow ABI pin below); this
 document is the place larger architectural trade-offs are surfaced for
 a human decision, not quietly resolved.
 
+> **Snapshot notice**: this document is a point-in-time review written
+> at the end of Phase 10 and is NOT re-verified against the STEP 5-9
+> work that followed (recency weighting, price-aware features, the
+> backend-shaped SQLite data source, the temporal future-purchase
+> evaluation protocol, the STEP 8 ablation, and STEP 9's Streamlit
+> HTTP-client rewiring - see `docs/data-mapping.md` sections 14-18.1).
+> Several items below were resolved by that later work; each such item
+> is annotated inline. Where this document and the current code
+> disagree, the code is authoritative - see `README.md`'s "Current POC
+> status" section for an up-to-date summary.
+
 Every finding is classified as one of:
 
 - **Ready now** - solid as-is for what V1 is (a synthetic-data
@@ -40,11 +51,17 @@ Every finding is classified as one of:
   FastAPI's own automatic validation errors), distinguishes "unknown
   user" (404) from "known user, no history" (200 + fallback
   recommendations), and never leaks a raw traceback.
-- **Streamlit dashboard**: shares the exact same `RecommendationService`
-  and pipeline call as the API (no duplicated recommendation logic),
-  handles service-load and pipeline-call failures gracefully (both
-  paths tested via `AppTest`), verified against real trained artifacts
-  for genuine STRONG/SPARSE/NO_HISTORY users.
+- **Streamlit dashboard** (Phase 9 description, superseded by STEP 9 -
+  `docs/data-mapping.md` §18): at the time of this review, shared the
+  exact same `RecommendationService` and pipeline call as the API
+  in-process (no duplicated recommendation logic), handled service-load
+  and pipeline-call failures gracefully (both paths tested via
+  `AppTest`), verified against real trained artifacts for genuine
+  STRONG/SPARSE/NO_HISTORY users. As of STEP 9, the dashboard no longer
+  constructs a `RecommendationService` at all - it is a pure
+  `ui.api_client.RecommendationApiClient` HTTP client of the API, tested
+  and live-verified end-to-end for the same three cold-start tiers (see
+  §18's "Live integration verification").
 - **Startup artifact validation**: missing, corrupt, or
   dimensionally/schema-incompatible Two-Tower or ranker artifacts fail
   loudly and fast (checked before any dataset/embedding work, not
@@ -85,7 +102,13 @@ Every finding is classified as one of:
 - **No timestamps on search/chatbot/most engagement signals** ⇒ no
   genuine temporal train/test split; leave-one-out with a content-based
   leakage heuristic is used instead (docs/data-mapping.md §12) - a
-  known, documented approximation, not a bug.
+  known, documented approximation, not a bug. **Scope note**: this
+  applies to the original synthetic V1 path only. The `User_events`/
+  SQLite-sourced path (`paths.data_source: "sqlite"`, the current
+  default) DOES carry real timestamps and has a genuine temporal
+  future-purchase evaluation protocol built and applied against it
+  (docs/data-mapping.md §§8.1, 14, 16) - see this document's snapshot
+  notice at the top.
 - **No event-tracking pipeline** ⇒ no CTR, impressions, or conversion
   metrics exist or are computed anywhere in this system.
 - **Search and chatbot context are synthetic-only adapters** - no real
@@ -99,22 +122,28 @@ Every finding is classified as one of:
   because the full ML stack (PyTorch CPU, TensorFlow, Sentence
   Transformers, ScaNN, Streamlit) is bundled in one image. Reasonable
   for an internal V1 system; not a lean microservice image.
-- **API and dashboard each load their own full copy of the models** -
-  the dashboard reuses `RecommendationService` in-process rather than
-  calling the API over HTTP (`configs/base.yaml: dashboard.api_base_url`
-  is defined but currently unused - see docs/data-mapping.md §9), which
-  is simpler to run (one `streamlit run`, no API dependency) at the cost
-  of double the memory footprint if both run simultaneously.
+- ~~**API and dashboard each load their own full copy of the
+  models**~~ - **resolved by STEP 9** (`docs/data-mapping.md` §18): the
+  dashboard is now a pure HTTP client of the API
+  (`ui.api_client.RecommendationApiClient`); it no longer loads any
+  model artifact, and `dashboard.api_base_url` is now actively used, not
+  reserved/unused. Kept here, struck through, as a record of the
+  Phase-10-era limitation this later work fixed.
 - **The Sentence Transformer model is downloaded fresh from the
   Hugging Face Hub on every cold container start** (not baked into the
   image or cached on a persistent volume) - adds startup latency and a
   network dependency each time a fresh container starts.
-- **`build_recommendation_service` regenerates the full synthetic
-  dataset and re-runs the Phase 3 feature pipeline at every process
-  startup** (product embeddings are cached to disk and reused;
-  everything else is recomputed) - fine at 50 products/300 users
-  (~50s cold start including the Hub download, mostly the Sentence
-  Transformer), would not scale as-is to a large real catalog.
+- **`build_recommendation_service` regenerates the full dataset and
+  re-runs the Phase 3 feature pipeline at every process startup**
+  (product embeddings are cached to disk and reused; everything else is
+  recomputed) - fine at V1's original 50-product/300-user synthetic
+  scale (~50s cold start including the Hub download, mostly the
+  Sentence Transformer). As of STEP 9, `paths.data_source: "sqlite"` is
+  the default, regenerating features for the larger backend-shaped
+  SQLite catalog (1,200 products/1,000 users, `data
+  /sqlite/backend_shaped_synthetic.db`) instead of the original
+  synthetic generator at every startup - not re-measured in this
+  review; would not scale as-is to a large real catalog either way.
 
 ## Must address before real production deployment
 
@@ -158,9 +187,12 @@ Every finding is classified as one of:
 ## Future optimization
 
 - Split the single image into leaner per-purpose images (e.g. an API
-  image without Streamlit; consider moving the dashboard to call the
-  API over HTTP - the reserved `dashboard.api_base_url` config already
-  anticipates this - to avoid double-loading the model stack).
+  image without Streamlit). ~~Consider moving the dashboard to call the
+  API over HTTP~~ - **done, STEP 9** (`docs/data-mapping.md` §18): the
+  dashboard is now a pure HTTP client, so it no longer double-loads the
+  model stack; a leaner Streamlit-only image (without the ML stack) is
+  still a live opportunity now that the dashboard process needs none of
+  it.
 - Precompute/cache more of the startup path (not just product
   embeddings) so serving doesn't regenerate the dataset/feature
   pipeline on every process start.
@@ -172,8 +204,18 @@ Every finding is classified as one of:
   structured logging.
 - Load testing at realistic catalog size and request concurrency, after
   the async-blocking fix above.
-- A genuinely temporal evaluation protocol once real backend timestamps
-  exist (V2 - docs/data-mapping.md §7).
+- ~~A genuinely temporal evaluation protocol once real backend
+  timestamps exist (V2)~~ - **implemented, STEP 5/7/8**
+  (docs/data-mapping.md §§8.1, 14, 16) for the `User_events`/SQLite-
+  sourced path: `evaluation.temporal_future_purchase` builds real
+  per-user cutoffs and future-PURCHASE targets from genuine
+  `action_time` values, and `models/sqlite_baseline/` is trained and
+  evaluated against exactly this protocol. The ORIGINAL synthetic V1
+  path (`models/two_tower`/`models/ranker`, kept for backward
+  compatibility) still has no timestamps and still uses the older
+  content-based leakage heuristic (§12) - this item is resolved only
+  for the current default (`paths.data_source: "sqlite"`) path, not for
+  the legacy synthetic one.
 
 ## What was actually fixed during Phase 10 (not just reported)
 

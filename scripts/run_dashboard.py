@@ -1,16 +1,22 @@
-"""Launch the Phase 9 Streamlit dashboard.
+"""Launch the Streamlit dashboard (Phase 9, rewired to a pure FastAPI HTTP
+client by STEP 9 - docs/data-mapping.md section 18).
 
 Thin `streamlit run` wrapper for symmetry with the other scripts/*.py
 entrypoints - equivalent to running:
     streamlit run src/recommendation/ui/dashboard.py
 directly.
 
-Requires the Phase 4 Two-Tower and Phase 6 ranker artifacts to already
-exist under `models/` (`scripts/train_two_tower.py` then
-`scripts/train_ranker.py`) - the dashboard loads them once, in-process,
-via the same `RecommendationService` the API uses; it never trains.
+As of STEP 9, this dashboard is a pure HTTP client - it never loads a
+Two-Tower/ranker artifact, builds a `RecommendationService`, or touches
+SQLite/adapters/TensorFlow itself. `scripts/run_api.py` (FastAPI) MUST
+already be running and reachable at `configs/*.yaml: dashboard
+.api_base_url` (default `http://localhost:8000`, override via
+`RECS_DASHBOARD_API_BASE_URL`) before starting this dashboard - every
+recommendation and every piece of user/catalog data it shows comes from
+an HTTP call to that running API. This never trains.
 
 Usage:
+    python scripts/run_api.py        # start first, in another terminal
     python scripts/run_dashboard.py
 """
 
