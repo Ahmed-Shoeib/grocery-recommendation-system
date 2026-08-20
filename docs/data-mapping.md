@@ -476,7 +476,7 @@ Nothing in this codebase should claim these acceptance criteria are met:
   impression-level tracking, and CTR/conversion computed from it)
 - Session infrastructure, anonymous-user sessions
 - ~~Recency / time-decay features and freshness scoring~~ - **implemented
-  as of the STEP 5 recency phase, see §14**, for every signal that
+  as part of Phase 3, see §14**, for every signal that
   actually carries a real `action_time` (the `User_events`/SQLite-sourced
   path); the old, timestamp-less ERD synthetic signals still get a
   neutral (unweighted) fallback, so this bullet's ORIGINAL scope (a
@@ -495,8 +495,8 @@ confirmed future `User_events` table (§4, threaded through to
 `PurchaseRecord.order_created_at`/`CartAffinityRecord.action_time`/
 `ClickRecord.action_time`/`SearchRecord.action_time`), are **retained in
 the canonical schemas** precisely so recency features could be added
-without another schema migration - as of the STEP 5 recency phase (§14),
-feature engineering DOES derive a decay signal from them, superseding
+without another schema migration - as part of Phase 3 (§14), feature
+engineering DOES derive a decay signal from them, superseding
 this section's original "must not" for those fields specifically.
 
 Extensibility is achieved through interfaces (adapters, the `context`
@@ -693,12 +693,12 @@ parameter through the versioned wire contract is deferred until a real
 surface-specific use case exists, consistent with "not by building
 unused event infrastructure now" below.
 
-**Phase 9 status, superseded by STEP 9 (§18)**: the internal Streamlit
+**Phase 9, current implementation (see §18)**: the internal Streamlit
 dashboard (`recommendation.ui`) was originally a second, in-process
 consumer of the same pipeline - `ui.service_loader.load_service` reused
 `api.dependencies.RecommendationService`/`build_recommendation_service`
 directly, with no HTTP hop and no API server required to start first.
-As of STEP 9, this is no longer current: the dashboard is a pure
+That original design is no longer current: the dashboard is now a pure
 `ui.api_client.RecommendationApiClient` HTTP client of the Phase 8 API
 and no longer imports `api.dependencies`, `serving.*`, or any
 model-loading code - see §18 for the full rewiring and why two
@@ -852,27 +852,39 @@ genuinely temporal held-out split instead of this content-based heuristic.
 
 ## 13. Phase map (which phase implements what in this document)
 
+This project has ONE roadmap: the 11 phases in `README.md`'s
+"Development phases" section. Sections §14-18.1 below document later
+mentor-driven work that extended specific phases after the initial 10
+were complete; that work was historically tracked with its own "STEP"
+numbering (STEP 5-9) during development, but STEP is not a second
+roadmap - every STEP maps onto one or more of the 11 phases, listed in
+the right-hand column below. Read each of §14-18.1 as "the current
+implementation of Phase N," not as an independent stage after Phase 11.
+
 | Section here | Implementing phase |
 |---|---|
 | §2 UserProfile fields | Phase 2 |
-| §3 Cold-start tiers | Phase 7 (four signals) / User_events contract change (five signals, click added) |
-| §4 Click/Search/Chatbot adapters; `User_events` contract, `UserInteraction`, `UserEventsAdapter` | Phase 2 (search/chatbot synthetic adapters) / User_events contract change (click signal + synthetic adapter, `UserInteraction` canonical event, `UserEventsAdapter` future real-backend adapter, action_time preservation) / SQLite integration phase (`backend_shaped_synthetic.db`, `adapters.sqlite_factory.build_sqlite_adapters`, `data.sqlite.*`) |
+| §3 Cold-start tiers | Phase 7 - originally four signals, now sized against five (click added to the canonical `User_events` contract, Phase 2) |
+| §4 Click/Search/Chatbot adapters; `User_events` contract, `UserInteraction`, `UserEventsAdapter` | Phase 2 - search/chatbot synthetic adapters, the confirmed `User_events` contract (click signal + synthetic adapter, `UserInteraction` canonical event, `UserEventsAdapter` future real-backend adapter, action_time preservation), and the backend-shaped SQLite integration (`backend_shaped_synthetic.db`, `adapters.sqlite_factory.build_sqlite_adapters`, `data.sqlite.*`) |
 | §5 Eligibility/business rules policy (hard pre-retrieval gate + final lightweight validation) | Phase 7 (policy interface, originally applied last) / Phase 11 (moved to a hard pre-retrieval gate, mentor-reviewed) |
 | §6 Popularity | Phase 2 (data) / Phase 7 (fallback ranking) |
 | §8 Offline evaluation | Phase 4 (Recall/HitRate) / Phase 5 (latency) / Phase 6 (Precision/NDCG/MRR) / Phase 7 (coverage/diversity/duplicate/fill-rate/cold-start/pipeline latency) / Phase 8 (HTTP end-to-end latency) |
-| §8.1 Temporal future-purchase evaluation protocol (`evaluation.temporal_future_purchase`, SQLite temporal splits, point-in-time truncation, leakage audit) | Offline evaluation redesign phase (evaluation/splitting infrastructure only - no retraining, no index rebuild) |
-| §9 Surface context hook / dashboard architecture | Phase 7 (pipeline parameter, not yet exposed via API) / Phase 9 (dashboard reused RecommendationService in-process, not via HTTP) / STEP 9 (dashboard rewired to a pure FastAPI HTTP client - see §18) |
+| §8.1 Temporal future-purchase evaluation protocol (`evaluation.temporal_future_purchase`, SQLite temporal splits, point-in-time truncation, leakage audit) | Phase 7 - the evaluation/splitting infrastructure reuses the same serving pipeline point-in-time (no retraining, no index rebuild); its metrics extend the same lineage as §8 (Phases 4/6) |
+| §9 Surface context hook / dashboard architecture | Phase 7 (pipeline parameter, not yet exposed via API) / Phase 9 (current: pure FastAPI HTTP client; originally reused RecommendationService in-process - see §18) |
 | §10 VectorIndex backends | Phase 5 (ScaNN primary/Docker + FAISS Windows dev fallback) |
 | §11 Neural ranking (VectorIndex candidates, richer cross features, baseline comparison) | Phase 6 |
-| §12 Leakage-limitation mitigation | Phase 3 (guard) / Phase 4 (consumer) / Phase 6 (extended to ranking negatives) / User_events contract change (extended to clicks) |
-| §14 Recency weighting (`features.recency`, `effective_weight`, `_signal_embedding_component`) | STEP 5 recency phase |
-| §15 Price-aware derived features (`features.price`, `price_tier_id`/`PriceCatalogContext`/`UserPriceProfile`) | STEP 6 price phase |
-| §16 From-scratch SQLite training + temporal evaluation (`evaluation.temporal_training`, `models/sqlite_baseline/`, Docker/ScaNN verification) | STEP 7 training phase |
-| §17 Controlled two-way ablation - BASE vs. RECENCY+PRICE (`include_price_features`, `scripts/run_ablation.py`, `models/ablation/base/`) | STEP 8 ablation phase |
-| §18 One serving path: Streamlit as a pure FastAPI HTTP client (`api.dependencies.build_recommendation_service` SQLite wiring fix, `ui.api_client.RecommendationApiClient`, `paths.data_source`/`dashboard.api_base_url` config) | STEP 9 serving-architecture phase |
-| §18.1 Persisted offline-report architecture (`evaluation.offline_report`, `scripts/generate_offline_report.py`, provenance validation, `GET /v1/metrics/offline`) | STEP 9 follow-up fix |
+| §12 Leakage-limitation mitigation | Phase 3 (guard) / Phase 4 (consumer) / Phase 6 (extended to ranking negatives) / Phase 2 (extended to clicks via the `User_events` contract) |
+| §14 Recency weighting (`features.recency`, `effective_weight`, `_signal_embedding_component`) | Phase 3 (historically tracked as STEP 5) |
+| §15 Price-aware derived features (`features.price`, `price_tier_id`/`PriceCatalogContext`/`UserPriceProfile`) | Phase 3 (features) / Phase 4 (Two-Tower encoder dims) / Phase 6 (ranker features) (historically tracked as STEP 6) |
+| §16 From-scratch SQLite training + temporal evaluation (`evaluation.temporal_training`, `models/sqlite_baseline/`, Docker/ScaNN verification) | Phase 2 (data source) / Phase 4 (retrained Two-Tower) / Phase 6 (retrained ranker) / Phase 7 (temporal training reuses the full pipeline) (historically tracked as STEP 7) |
+| §17 Controlled two-way ablation - BASE vs. RECENCY+PRICE (`include_price_features`, `scripts/run_ablation.py`, `models/ablation/base/`) | Not a phase - a controlled experiment validating the Phase 3/4/6 improvements above (historically tracked as STEP 8) |
+| §18 One serving path: Streamlit as a pure FastAPI HTTP client (`api.dependencies.build_recommendation_service` SQLite wiring fix, `ui.api_client.RecommendationApiClient`, `paths.data_source`/`dashboard.api_base_url` config) | Phase 9 (dashboard becomes a pure HTTP client) / Phase 8 (API-side wiring fix) (historically tracked as STEP 9) |
+| §18.1 Persisted offline-report architecture (`evaluation.offline_report`, `scripts/generate_offline_report.py`, provenance validation, `GET /v1/metrics/offline`) | Phase 8 (historically tracked as a STEP 9 follow-up fix) |
 
-## 14. Recency weighting (STEP 5)
+## 14. Recency weighting — Phase 3 (Feature Engineering), current implementation
+
+*(This work was historically tracked during development as STEP 5. It is
+now part of Phase 3, not a separate stage - see §13.)*
 
 **Formula.** `features.recency.effective_weight(base_signal_weight,
 event_time, reference_time, config.recency)` =
@@ -1002,7 +1014,10 @@ Product embeddings for this SQLite catalog are cached separately at
 `data/processed/product_embeddings_sqlite.npz` (gitignored, regenerable),
 never overwriting the synthetic V1 cache (`embedding.cache_path`).
 
-## 15. Price-aware derived features (STEP 6)
+## 15. Price-aware derived features — Phase 3 (features) / Phase 4 (Two-Tower) / Phase 6 (Ranking), current implementation
+
+*(This work was historically tracked during development as STEP 6. It is
+now part of Phases 3, 4, and 6, not a separate stage - see §13.)*
 
 **Non-negotiable ERD constraint**: every concept below (`effective_price`,
 price tiers, category-relative price, the user price profile,
@@ -1162,25 +1177,27 @@ real Keras Two-Tower/ranker model BUILDS one fresh via `build_user_tower`/
 `build_item_tower`/`build_ranker_model` in the same test, so it always
 matches the CURRENT encoder's dimensions; no test loads a stale
 cross-run artifact). `models/` was intentionally left untouched (not
-retrained, not mutated) - the NEXT phase is specifically scoped to
-retrain Two-Tower/ranker/rebuild the ScaNN/FAISS index against this
-SQLite catalog with the new price-aware feature set.
-`TwoTowerFeatureEncoder.from_dict` degrades a pre-STEP-6 serialized
-encoder dict missing the `price_tier_vocab` key to the same fixed
-`PRICE_TIERS` vocabulary `fit()` always produces, rather than raising.
+retrained, not mutated) - the SQLite training/retraining work in §16 is
+specifically scoped to retrain Two-Tower/ranker/rebuild the ScaNN/FAISS
+index against this SQLite catalog with the new price-aware feature set.
+`TwoTowerFeatureEncoder.from_dict` degrades a pre-price-feature-era
+serialized encoder dict missing the `price_tier_vocab` key to the same
+fixed `PRICE_TIERS` vocabulary `fit()` always produces, rather than
+raising.
 
-**Evaluation in this phase**: feature-level diagnostics only
-(`scripts/price_diagnostics.py`: product examples, 5 real-user price-
-profile examples spanning strong history / recent spending shift / one
-purchase / engagement-no-purchase / NO_HISTORY, and 3 user x candidate
-compatibility examples) - no retraining, no Top-N recommendation-quality
-comparison (that requires the SAME retrained-Two-Tower/ranker work the
-NEXT phase is scoped to do, per §8.1's precedent of deferring Top-N
+**Evaluation at this point in the feature work**: feature-level
+diagnostics only (`scripts/price_diagnostics.py`: product examples, 5
+real-user price-profile examples spanning strong history / recent
+spending shift / one purchase / engagement-no-purchase / NO_HISTORY, and
+3 user x candidate compatibility examples) - no retraining, no Top-N
+recommendation-quality comparison (that requires the SAME retrained-
+Two-Tower/ranker work in §16, per §8.1's precedent of deferring Top-N
 evaluation until an appropriately-dimensioned model exists for this
 catalog).
 
-**Revenue-aware metrics**: NOT implemented this phase (deliberately -
-see §35 of this phase's own spec: "prepare, don't optimize yet"). The
+**Revenue-aware metrics**: NOT implemented as part of this feature work
+(deliberately - see the mentor spec's §35: "prepare, don't optimize
+yet"). The
 primary offline ground truth is UNCHANGED and remains held-out FUTURE
 PURCHASE products (§8.1) - Precision/Recall/HitRate/NDCG/MRR@K continue
 to treat every future purchase as equally "relevant" regardless of price;
@@ -1194,7 +1211,11 @@ phase produces are internally consistent and mechanically correct, but
 (like every other V1 offline result, §8) they demonstrate PIPELINE
 CORRECTNESS, not a real-world-calibrated price-sensitivity signal.
 
-## 16. From-scratch SQLite training + temporal evaluation (STEP 7)
+## 16. From-scratch SQLite training + temporal evaluation — Phases 2/4/6/7, current artifacts
+
+*(This work was historically tracked during development as STEP 7. It is
+a training/artifact-evolution event inside Phases 2, 4, 6, and 7, not a
+separate stage - see §13.)*
 
 **Why a new module was needed.** The pre-existing Two-Tower/ranker
 example builders (`retrieval.two_tower.examples`, `ranking.examples`) are
@@ -1287,7 +1308,12 @@ recommendations end-to-end with ScaNN as the retrieval backend. Skipped
 (not failed) whenever `scann` isn't importable or the artifacts aren't
 present - inert on native Windows dev.
 
-## 17. Controlled two-way ablation - BASE vs. RECENCY+PRICE (STEP 8)
+## 17. Controlled two-way ablation - BASE vs. RECENCY+PRICE
+
+*(This experiment was historically tracked during development as STEP 8.
+It is NOT a project phase - it is a controlled experiment validating the
+Phases 3/4/6 improvements above, kept as historical/scientific evidence
+- see §13.)*
 
 **Question answered**: does STEP 5 (recency) + STEP 6 (price-aware
 personalization) TOGETHER improve the controlled offline future-purchase
@@ -1367,7 +1393,7 @@ together. The valid conclusion is "recency + price-aware modeling
 together improved the system by the amounts above" - NOT "recency caused
 X" or "price caused Y" independently. An isolated ablation (recency-only,
 price-only) would require two additional controlled runs and is
-explicitly out of this phase's scope.
+explicitly out of this experiment's scope.
 
 **Artifacts**: BASE written to the isolated `models/ablation/base/`
 (gitignored, same convention as `models/sqlite_baseline/`). RECENCY+PRICE
@@ -1376,7 +1402,11 @@ into `models/ablation/recency_price/` - documented in the run's own
 console output rather than copying multi-hundred-MB artifacts
 unnecessarily.
 
-## 18. One serving path: Streamlit as a pure FastAPI HTTP client (STEP 9)
+## 18. One serving path: Streamlit as a pure FastAPI HTTP client — Phase 9 (dashboard) / Phase 8 (API), current implementation
+
+*(This work was historically tracked during development as STEP 9. It is
+now part of Phase 9's and Phase 8's current implementation, not a
+separate stage - see §13.)*
 
 **Problem this closes**: through STEP 8, FastAPI (`api.dependencies
 .build_recommendation_service`) and Streamlit (`ui.service_loader
@@ -1441,7 +1471,8 @@ exactly the "reject incompatible old artifacts" requirement, reused
 unchanged.
 
 **Serving-time recency reference_time**: unchanged, and already correct
-before this phase - `serving.pipeline.recommend()` (STEP 5) establishes
+before this fix - `serving.pipeline.recommend()` (Phase 3's recency work)
+establishes
 `reference_time = datetime.now()` **once** per request, at the serving
 layer, and passes it explicitly into `build_user_features()`. No
 `datetime.now()` call was reintroduced anywhere inside the recency
@@ -1554,11 +1585,10 @@ dev) sets `http://localhost:8000`; `configs/docker.yaml` sets
 `localhost` inside the Streamlit container would resolve to the
 Streamlit container itself, not the API container. This is a
 config-only change: no Dockerfile, no image rebuild, no new service was
-needed for STEP 9 - both containers already exist in the compose
-topology from Phase 8/STEP 7's Docker verification; only the value
+needed for this - both containers already exist in the compose
+topology from Phase 8's/§16's Docker verification; only the value
 `dashboard.api_base_url` resolves to differs per environment, exactly
-like `retrieval.backend` (FAISS vs. ScaNN) already did before this
-phase.
+like `retrieval.backend` (FAISS vs. ScaNN) already did.
 
 **Live integration verification** (not mocks): FastAPI was started
 against the real `models/sqlite_baseline/` artifacts and the real
@@ -1573,19 +1603,23 @@ user 1 (SPARSE), user 24 (NO_HISTORY). All three returned HTTP 200, 10/10
 requested items, zero duplicate `product_id`s, zero ineligible
 (inactive/out-of-stock) products leaked into results, and
 tier-appropriate `source` values (`personalized` for STRONG/SPARSE,
-`preferred_category` for NO_HISTORY) - see the STEP 9 final report for
-the full per-user output. The server was then stopped; no training,
-retraining, or artifact regeneration occurred at any point.
+`preferred_category` for NO_HISTORY) - see the original mentor-review
+report for the full per-user output. The server was then stopped; no
+training, retraining, or artifact regeneration occurred at any point.
 
-**Explicitly out of scope for this phase** (per the STEP 9 brief): the
-ERD/SQLite schema, `backend_shaped_synthetic.db`, all model
+**Explicitly out of scope for this rewiring work**: the ERD/SQLite
+schema, `backend_shaped_synthetic.db`, all model
 architectures/features/hyperparameters (recency half-life, price tiers,
 Two-Tower, ranker, negative sampling, temporal split, eligibility rules,
-re-ranking), and the STEP 7/8 evaluation protocols are all unchanged.
+re-ranking), and the §16/§17 evaluation protocols are all unchanged.
 The obsolete `ecommerce.db` was not investigated, restored, or
 referenced.
 
-## 18.1 STEP 9 follow-up: persisted offline-report architecture
+## 18.1 Persisted offline-report architecture — Phase 8, current implementation
+
+*(This fix was historically tracked during development as a STEP 9
+follow-up. It is now part of Phase 8's current implementation, not a
+separate stage - see §13.)*
 
 **Problem this closes.** As first shipped, `GET /v1/metrics/offline`
 called `ui.metrics.compute_offline_metrics` synchronously on every

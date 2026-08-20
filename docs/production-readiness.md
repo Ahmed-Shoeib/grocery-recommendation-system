@@ -9,15 +9,20 @@ document is the place larger architectural trade-offs are surfaced for
 a human decision, not quietly resolved.
 
 > **Snapshot notice**: this document is a point-in-time review written
-> at the end of Phase 10 and is NOT re-verified against the STEP 5-9
-> work that followed (recency weighting, price-aware features, the
-> backend-shaped SQLite data source, the temporal future-purchase
-> evaluation protocol, the STEP 8 ablation, and STEP 9's Streamlit
-> HTTP-client rewiring - see `docs/data-mapping.md` sections 14-18.1).
-> Several items below were resolved by that later work; each such item
-> is annotated inline. Where this document and the current code
-> disagree, the code is authoritative - see `README.md`'s "Current POC
-> status" section for an up-to-date summary.
+> at the end of Phase 10 and is NOT re-verified against the later
+> mentor-driven work that extended Phases 2, 3, 4, 6, 7, 8, and 9 since
+> (recency weighting and price-aware features in Phase 3, the current
+> 9/9-dimensional Two-Tower in Phase 4, the 29-feature ranker in Phase 6,
+> the backend-shaped SQLite data source and five-signal `User_events`
+> contract in Phase 2, the temporal future-purchase evaluation protocol
+> running through Phase 7, the persisted offline-metrics endpoint in
+> Phase 8, and the pure-HTTP-client Streamlit rewiring in Phase 9 - see
+> `docs/data-mapping.md` sections 14-18.1; that later work was
+> historically tracked as STEP 5-9, a labeling since superseded by the
+> phase-numbered roadmap). Several items below were resolved by that
+> later work; each such item is annotated inline. Where this document
+> and the current code disagree, the code is authoritative - see
+> `README.md`'s "Current POC status" section for an up-to-date summary.
 
 Every finding is classified as one of:
 
@@ -51,17 +56,17 @@ Every finding is classified as one of:
   FastAPI's own automatic validation errors), distinguishes "unknown
   user" (404) from "known user, no history" (200 + fallback
   recommendations), and never leaks a raw traceback.
-- **Streamlit dashboard** (Phase 9 description, superseded by STEP 9 -
-  `docs/data-mapping.md` §18): at the time of this review, shared the
-  exact same `RecommendationService` and pipeline call as the API
+- **Streamlit dashboard** (Phase 9 - its architecture evolved since this
+  review, `docs/data-mapping.md` §18): at the time of this review, shared
+  the exact same `RecommendationService` and pipeline call as the API
   in-process (no duplicated recommendation logic), handled service-load
   and pipeline-call failures gracefully (both paths tested via
   `AppTest`), verified against real trained artifacts for genuine
-  STRONG/SPARSE/NO_HISTORY users. As of STEP 9, the dashboard no longer
-  constructs a `RecommendationService` at all - it is a pure
-  `ui.api_client.RecommendationApiClient` HTTP client of the API, tested
-  and live-verified end-to-end for the same three cold-start tiers (see
-  §18's "Live integration verification").
+  STRONG/SPARSE/NO_HISTORY users. In Phase 9's current implementation,
+  the dashboard no longer constructs a `RecommendationService` at all -
+  it is a pure `ui.api_client.RecommendationApiClient` HTTP client of the
+  API, tested and live-verified end-to-end for the same three cold-start
+  tiers (see §18's "Live integration verification").
 - **Startup artifact validation**: missing, corrupt, or
   dimensionally/schema-incompatible Two-Tower or ranker artifacts fail
   loudly and fast (checked before any dataset/embedding work, not
@@ -123,12 +128,12 @@ Every finding is classified as one of:
   Transformers, ScaNN, Streamlit) is bundled in one image. Reasonable
   for an internal V1 system; not a lean microservice image.
 - ~~**API and dashboard each load their own full copy of the
-  models**~~ - **resolved by STEP 9** (`docs/data-mapping.md` §18): the
-  dashboard is now a pure HTTP client of the API
-  (`ui.api_client.RecommendationApiClient`); it no longer loads any
-  model artifact, and `dashboard.api_base_url` is now actively used, not
-  reserved/unused. Kept here, struck through, as a record of the
-  Phase-10-era limitation this later work fixed.
+  models**~~ - **resolved in Phase 9's current implementation**
+  (`docs/data-mapping.md` §18): the dashboard is now a pure HTTP client
+  of the API (`ui.api_client.RecommendationApiClient`); it no longer
+  loads any model artifact, and `dashboard.api_base_url` is now actively
+  used, not reserved/unused. Kept here, struck through, as a record of
+  the Phase-10-era limitation this later work fixed.
 - **The Sentence Transformer model is downloaded fresh from the
   Hugging Face Hub on every cold container start** (not baked into the
   image or cached on a persistent volume) - adds startup latency and a
@@ -138,12 +143,12 @@ Every finding is classified as one of:
   (product embeddings are cached to disk and reused; everything else is
   recomputed) - fine at V1's original 50-product/300-user synthetic
   scale (~50s cold start including the Hub download, mostly the
-  Sentence Transformer). As of STEP 9, `paths.data_source: "sqlite"` is
-  the default, regenerating features for the larger backend-shaped
-  SQLite catalog (1,200 products/1,000 users, `data
-  /sqlite/backend_shaped_synthetic.db`) instead of the original
-  synthetic generator at every startup - not re-measured in this
-  review; would not scale as-is to a large real catalog either way.
+  Sentence Transformer). In Phase 2's current implementation,
+  `paths.data_source: "sqlite"` is the default, regenerating features
+  for the larger backend-shaped SQLite catalog (1,200 products/1,000
+  users, `data/sqlite/backend_shaped_synthetic.db`) instead of the
+  original synthetic generator at every startup - not re-measured in
+  this review; would not scale as-is to a large real catalog either way.
 
 ## Must address before real production deployment
 
@@ -188,11 +193,11 @@ Every finding is classified as one of:
 
 - Split the single image into leaner per-purpose images (e.g. an API
   image without Streamlit). ~~Consider moving the dashboard to call the
-  API over HTTP~~ - **done, STEP 9** (`docs/data-mapping.md` §18): the
-  dashboard is now a pure HTTP client, so it no longer double-loads the
-  model stack; a leaner Streamlit-only image (without the ML stack) is
-  still a live opportunity now that the dashboard process needs none of
-  it.
+  API over HTTP~~ - **done, in Phase 9's current implementation**
+  (`docs/data-mapping.md` §18): the dashboard is now a pure HTTP client,
+  so it no longer double-loads the model stack; a leaner Streamlit-only
+  image (without the ML stack) is still a live opportunity now that the
+  dashboard process needs none of it.
 - Precompute/cache more of the startup path (not just product
   embeddings) so serving doesn't regenerate the dataset/feature
   pipeline on every process start.
@@ -205,8 +210,8 @@ Every finding is classified as one of:
 - Load testing at realistic catalog size and request concurrency, after
   the async-blocking fix above.
 - ~~A genuinely temporal evaluation protocol once real backend
-  timestamps exist (V2)~~ - **implemented, STEP 5/7/8**
-  (docs/data-mapping.md §§8.1, 14, 16) for the `User_events`/SQLite-
+  timestamps exist (V2)~~ - **implemented, folded into Phases 3, 6, and
+  7** (docs/data-mapping.md §§8.1, 14, 16) for the `User_events`/SQLite-
   sourced path: `evaluation.temporal_future_purchase` builds real
   per-user cutoffs and future-PURCHASE targets from genuine
   `action_time` values, and `models/sqlite_baseline/` is trained and

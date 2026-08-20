@@ -20,15 +20,15 @@ See [Current POC status](#current-poc-status) below for a concise summary
 of what's implemented today, `docs/data-mapping.md` for the full ERD
 reconciliation, V1/V2 scope boundary, and every design decision's
 rationale, and `docs/production-readiness.md` for a critical, classified
-review of what is and isn't ready for real production use (a Phase-10
-snapshot - see that document's own notice for what STEP 5-9 changed
-since).
+review of what is and isn't ready for real production use (a Phase 10
+snapshot - see that document's own notice for how later mentor-driven
+work folded into Phases 2-9 since).
 
 ## Current POC status
 
-The items below reflect the CURRENT implementation (STEP 5-9), verified
-directly against the running code - see `docs/data-mapping.md` sections
-14-18.1 for the full rationale behind each:
+The items below reflect the CURRENT implementation of Phases 2-9,
+verified directly against the running code - see `docs/data-mapping.md`
+sections 14-18.1 for the full rationale behind each:
 
 - **Data source**: `data/sqlite/backend_shaped_synthetic.db` - a
   backend-ERD-shaped SQLite database, entirely synthetic - is the
@@ -59,12 +59,15 @@ directly against the running code - see `docs/data-mapping.md` sections
   cutoff, held-out future PURCHASE events as ground truth - a separate
   protocol from the original non-temporal leave-one-out one still used
   to train/evaluate the legacy synthetic-V1 artifacts.
-- **29-feature current ranker** (9 item-numeric + 9 user-numeric
-  encoder dims feeding the Two-Tower, 29 explicit features feeding the
-  ranker) - the STEP 7/8-approved RECENCY+PRICE configuration served by
-  default. A 23-feature variant (`RANKING_FEATURE_NAMES_BASE`, 7
-  item-numeric/8 user-numeric encoder dims) exists ONLY for the STEP 8
-  controlled BASE ablation - it is not what's currently served.
+- **29-feature current ranker** (Phase 6, extended by later price-aware
+  feature work) - 9 item-numeric + 9 user-numeric encoder dims feeding
+  the Two-Tower (Phase 4), 29 explicit features feeding the ranker
+  (Phase 6) - the RECENCY+PRICE configuration served by default,
+  validated by a controlled ablation experiment (`docs/data-mapping.md`
+  §17). A 23-feature variant (`RANKING_FEATURE_NAMES_BASE`, 7
+  item-numeric/8 user-numeric encoder dims) exists ONLY as the BASE
+  condition of that ablation experiment - it is not what's currently
+  served.
 - **Pre-retrieval eligibility + final safety check**: `isActive`/
   `stockQuantity` gate candidate generation itself - before Two-Tower/
   VectorIndex retrieval and every fallback source ever runs - plus a
@@ -79,8 +82,9 @@ directly against the running code - see `docs/data-mapping.md` sections
 - **`models/sqlite_baseline/`** is the current SQLite-serving artifact
   root (Two-Tower + ranker + FAISS index + the persisted offline
   report), distinct from the legacy top-level `models/two_tower`/
-  `models/ranker` (pre-STEP-6, synthetic-V1 only) and
-  `models/ablation/base/` (the STEP 8 BASE-condition artifacts only).
+  `models/ranker` (pre-price-feature-era, synthetic-V1 only) and
+  `models/ablation/base/` (the ablation experiment's BASE-condition
+  artifacts only).
 - **FastAPI is the single serving path**: it is the only process that
   ever constructs a `RecommendationService`, loads Two-Tower/ranker
   artifacts, builds the VectorIndex, or touches an adapter/SQLite
@@ -99,33 +103,17 @@ directly against the running code - see `docs/data-mapping.md` sections
 
 ## Status
 
-All 10 planned phases are complete: project scaffolding; canonical data
-adapters + synthetic dataset; the Sentence Transformer + feature-
-engineering pipeline; a trained Two-Tower retrieval model (128-D,
-L2-normalized, leave-one-out evaluated); a ScaNN/FAISS `VectorIndex`
-over its embeddings; a neural ranker that re-scores VectorIndex
-candidates with richer cross features (beats the raw-retrieval-score
-baseline on every ranking metric); the full V1 serving pipeline
-(three-level cold-start blending, dedup/diversity re-ranking, hard
-pre-retrieval eligibility + a final lightweight eligibility validation -
-see Phase 11 below); a versioned FastAPI recommendation API (`/v1`); an
-internal Streamlit dashboard; and Phase 10 production hardening -
-containerization, startup artifact validation, environment-variable
-config overrides, structured observability, and a full
-integration/reliability pass, documented in `docs/production-readiness.md`.
-
-**Phase 11** (mentor-reviewed architecture change, post-Phase-10):
-`isActive`/`stockQuantity` moved from a final-only filter to a hard
-PRE-retrieval eligibility gate - inactive/out-of-stock products never
-become Two-Tower/VectorIndex retrieval candidates in the first place,
-with the final eligibility check kept as a lightweight defense-in-depth
-safety net, not the primary mechanism. Zero Two-Tower/ranker retraining
-and zero VectorIndex rebuild required - see the architecture diagram and
-`docs/data-mapping.md` §5.
+All 11 phases are complete. See "Development phases" below for exactly
+what each phase implements TODAY - later mentor-driven work (recency
+weighting, price-aware features, the backend-shaped SQLite dataset and
+`User_events` contract, temporal future-purchase evaluation, and the
+Streamlit HTTP-client rewiring) was folded into the phase it improved,
+not tracked as additional stages after Phase 11. See "Current POC
+status" above for a concise current-state summary, and
+`docs/data-mapping.md` §13 for the full section-to-phase map.
 
 **What's next** (deliberately out of scope for this project's own phase
-plan): a separate, controlled benchmarking/experimentation pass, and
-further optimization once a real dataset is available - see
+plan): further optimization once a real dataset is available - see
 `docs/production-readiness.md`'s "Future optimization" section.
 
 ## Architecture
@@ -290,7 +278,7 @@ docs/
   erd.jpeg                  Source-of-truth backend ERD
   data-mapping.md            ERD reconciliation, V1/V2 scope, every design decision's rationale
   production-readiness.md    Phase 10 critical review (Ready now / Acceptable limitation / Must address / Future)
-models/                     Serialized model artifacts (gitignored - regenerable). sqlite_baseline/ = CURRENT SQLite-serving artifacts + the persisted offline report; top-level two_tower/ranker/ = LEGACY pre-STEP-6 synthetic-V1 artifacts; ablation/base/ = STEP 8 BASE-condition artifacts only
+models/                     Serialized model artifacts (gitignored - regenerable). sqlite_baseline/ = CURRENT SQLite-serving artifacts + the persisted offline report; top-level two_tower/ranker/ = LEGACY pre-price-feature-era synthetic-V1 artifacts; ablation/base/ = BASE-condition artifacts for the controlled ablation experiment only
 src/recommendation/
   data/
     adapters/                Backend + synthetic data adapters -> canonical schemas
@@ -306,7 +294,7 @@ src/recommendation/
   evaluation/                  Offline metrics + latency measurement + temporal future-purchase protocol (temporal_future_purchase.py) + persisted offline-report (de)serialization/provenance (offline_report.py)
   serving/                    Cold-start tiering, fallback candidates, two-stage eligibility (hard pre-retrieval gate + final lightweight validation), startup artifact validation, the full pipeline orchestrator
   api/                         FastAPI app (v1) - app/routes/schemas/dependencies, thin wrapper over serving.pipeline
-  ui/                           Streamlit dashboard (dashboard.py rendering-only, api_client.py typed HTTP client) - a PURE HTTP client of the FastAPI service since STEP 9, never loads a model artifact or RecommendationService itself; data_access.py/metrics.py now run server-side only (data_access.py) or are legacy/unused by the live route (metrics.py)
+  ui/                           Streamlit dashboard (dashboard.py rendering-only, api_client.py typed HTTP client) - a PURE HTTP client of the FastAPI service (Phase 9's current architecture), never loads a model artifact or RecommendationService itself; data_access.py/metrics.py now run server-side only (data_access.py) or are legacy/unused by the live route (metrics.py)
   utils/                       Config loading (incl. env var overrides), logging
 scripts/                     One entrypoint per workflow step - see Training/Inference workflows below
 tests/                       pytest suite (see Testing below)
@@ -393,9 +381,9 @@ independent reruns in the same session).
 
 ```bash
 python scripts/run_pipeline.py         # legacy synthetic-V1 pipeline eval report + qualitative examples + latency
-python scripts/generate_offline_report.py  # STEP 9: temporal offline evaluation -> models/sqlite_baseline/offline_report.json
+python scripts/generate_offline_report.py  # Phase 8: temporal offline evaluation -> models/sqlite_baseline/offline_report.json
 python scripts/run_api.py              # FastAPI service (loads artifacts once at startup, never trains) - start this FIRST
-python scripts/run_dashboard.py        # Streamlit dashboard - pure HTTP client of the running API (STEP 9), start run_api.py first
+python scripts/run_dashboard.py        # Streamlit dashboard - pure HTTP client of the running API (Phase 9), start run_api.py first
 ```
 
 ### API usage
@@ -404,13 +392,13 @@ python scripts/run_dashboard.py        # Streamlit dashboard - pure HTTP client 
 GET /v1/health                                    liveness
 GET /v1/ready                                      readiness (catalog/Two-Tower/ranker/VectorIndex all loaded)
 GET /v1/users/{user_id}/recommendations?limit=10   Top-N recommendations
-GET /v1/users                                      read-only user list (STEP 9, for the dashboard's picker)
-GET /v1/users/{user_id}/profile                    read-only engagement/feature snapshot (STEP 9)
-GET /v1/metrics/offline                            persisted temporal offline-evaluation report (STEP 9 follow-up) - reads only, never recomputes
+GET /v1/users                                      read-only user list (for the dashboard's picker)
+GET /v1/users/{user_id}/profile                    read-only engagement/feature snapshot
+GET /v1/metrics/offline                            persisted temporal offline-evaluation report - reads only, never recomputes
 ```
 
 Response: `product_id`, `rank`, `score`, `source` per item, PLUS
-(as of STEP 9) server-joined display fields - `product_name`, `category`,
+server-joined display fields - `product_name`, `category`,
 `brand`, `price`, `is_active`, `stock_quantity` - so a client never needs
 its own separate catalog access; still never an internal model
 tensor/embedding/feature vector. Also `meta` (tier, requested/returned
@@ -480,12 +468,12 @@ ORIGINAL, smaller synthetic-V1 pipeline (`scripts/run_pipeline.py`,
 protocol) - kept as historical Phase 10/11 evidence, not re-verified
 against the current default SQLite-backed dataset. For the CURRENT
 `data/sqlite/backend_shaped_synthetic.db` dataset, temporal
-future-purchase metrics for the STEP 7/8-approved RECENCY+PRICE
-configuration (`models/sqlite_baseline/`) are in
+future-purchase metrics for the current RECENCY+PRICE configuration
+(`models/sqlite_baseline/`, Phases 3/4/6) are in
 `docs/data-mapping.md` §17 (e.g. test Recall@20: 0.088 → 0.402, test
-NDCG@20: 0.048 → 0.299 vs. the STEP 8 BASE ablation condition) and are
-also available live via `GET /v1/metrics/offline` (see "Offline metrics
-architecture" below) or by re-running
+NDCG@20: 0.048 → 0.299 vs. the ablation experiment's BASE condition) and
+are also available live via `GET /v1/metrics/offline` (see "Offline
+metrics architecture" below) or by re-running
 `python scripts/generate_offline_report.py`.
 
 From the most recent full pipeline evaluation (`scripts/run_pipeline.py`,
@@ -552,7 +540,7 @@ correctly and that each stage (ranker, re-ranking, eligibility) measurably
 does what it's supposed to relative to the stage before it, nothing more.
 See `docs/data-mapping.md` §8.
 
-### Offline metrics architecture (current, STEP 9 follow-up)
+### Offline metrics architecture (current — Phase 8)
 
 `GET /v1/metrics/offline` does **not** recompute recommendations or run
 an evaluation pass inside the HTTP request. Instead:
@@ -629,46 +617,77 @@ real backend factory would follow the exact same shape.
 
 ## Development phases
 
-1. Foundation & architecture.
-2. Canonical data layer & synthetic grocery dataset.
-3. Feature engineering & semantic product embeddings.
-4. Neural Two-Tower retrieval model.
-5. ANN retrieval: ScaNN (primary/production backend, Linux/Docker) + FAISS (native-Windows dev fallback).
-6. Neural ranking of VectorIndex candidates, richer than retrieval features, evaluated (NDCG/Precision/Recall/HitRate/MRR) against a raw-retrieval-score baseline.
-7. Full serving pipeline: three-level cold-start blending (strong/sparse/no-history), dedup + category/brand diversity re-ranking, business rules/eligibility (applied last).
-8. Versioned (`/v1`) FastAPI recommendation API - dependency-injected, model artifacts loaded once at startup, thin wrapper over the Phase 7 pipeline (no duplicated logic).
-9. Internal Streamlit dashboard for demonstrating/debugging the recommendation engine - user signals, cold-start tier, candidate-pool/eligibility diagnostics, offline metrics - originally reusing the API's RecommendationService in-process (superseded by STEP 9 below).
-10. Production hardening: multi-stage Docker (test/api/dashboard), startup artifact validation, env-var config overrides, structured observability, a full reliability pass, Windows + Docker/Linux integration verification, and this documentation - see `docs/production-readiness.md` for the critical review (a Phase-10 snapshot, annotated where STEP 5-9 superseded it).
-11. Mentor-reviewed architecture change: hard PRE-retrieval eligibility (isActive/stockQuantity gate candidate generation itself, via `retrieval.index.eligibility_filter.EligibilityRestrictedIndex` for the VectorIndex path) plus a final lightweight eligibility re-validation as a defense-in-depth safety net - no Two-Tower/ranker retraining or VectorIndex rebuild required when catalog/stock state changes.
+Each phase below is a separate commit, reviewed and approved before the
+next began. The description is each phase's CURRENT implementation, not
+just its original scope - later mentor-driven work extended several of
+these phases after the initial 10 were complete (historically tracked
+with its own "STEP" numbering, STEP 5-9); that work is folded into the
+phase it improved below rather than presented as additional stages. See
+`docs/data-mapping.md` §13 for the full section-to-phase map, including
+exactly which STEP absorbed into which phase.
 
-**STEP 5-9** (a later, separately-tracked work sequence, using its own
-numbering rather than continuing the Phase 1-11 count - see
-`docs/data-mapping.md` §13 for the full phase-to-decision map):
-
-- **STEP 5** - Recency (time-decay) weighting: exponential half-life
-  decay on category/brand affinity, the semantic-embedding blend, and
-  the user price profile, opt-in per call via an explicit
-  `reference_time` (`docs/data-mapping.md` §14).
-- **STEP 6** - Price-aware derived features: effective price, discount
-  status, catalog price tiers, category-relative price, a user price
-  profile, and price-distance/tier-match cross features - a learned
-  compatibility signal, never a hard rule; no backend schema change
-  (`docs/data-mapping.md` §15).
-- **STEP 7** - From-scratch training against the backend-shaped SQLite
-  dataset (`data/sqlite/backend_shaped_synthetic.db`) under the new
-  temporal future-purchase evaluation protocol, producing the current
-  `models/sqlite_baseline/` artifacts (`docs/data-mapping.md` §16).
-- **STEP 8** - Controlled two-way ablation, BASE (recency+price off, 23
-  ranker features) vs. RECENCY+PRICE (both on, 29 ranker features - the
-  configuration actually served), isolating whether the STEP 5+6 work
-  together improved offline metrics on this dataset
-  (`docs/data-mapping.md` §17).
-- **STEP 9** - Streamlit rewired to a pure FastAPI HTTP client (single
-  serving path - FastAPI is the only process that ever loads a model
-  artifact or builds a `RecommendationService`), plus a follow-up fix
-  replacing `GET /v1/metrics/offline`'s synchronous per-request
-  evaluation pass with a cheap read of a persisted, provenance-validated
-  report (`docs/data-mapping.md` §§18-18.1).
-
-Each phase is a separate commit, reviewed and approved before the next
-begins. See `docs/data-mapping.md` §13 for the full phase-to-decision map.
+1. **Foundation & architecture.** Project scaffolding, configuration
+   loading, logging.
+2. **Canonical data layer & dataset integration.** The `AdapterBundle`
+   interface (eight ABCs) and canonical schemas; the original small
+   synthetic generator (~50 products/300 users, kept for backward
+   compatibility, `paths.data_source: "synthetic"`); and, as the current
+   default, the backend-ERD-shaped SQLite dataset
+   (`data/sqlite/backend_shaped_synthetic.db` - 1,200 products, 1,000
+   users) with the confirmed `User_events` activity-log contract and
+   five engagement signals (CLICK/SEARCH/ADD_TO_CART/PURCHASE/CHATBOT,
+   up from the original four).
+3. **Feature engineering & semantic product embeddings.** Sentence
+   Transformer product embeddings; category/brand affinity; and, folded
+   in by later work, recency (time-decay) weighting of behavioral
+   signals and price-aware user/product features (effective price,
+   price tiers, category-relative price, a user price profile) -
+   `docs/data-mapping.md` §§14-15.
+4. **Neural Two-Tower retrieval model.** 128-D, L2-normalized user/item
+   embeddings. Current numeric encoder dimensions are **9 item-numeric /
+   9 user-numeric** (extended from 7/8 by the price-aware feature work
+   above); the 7/8-dimensional encoder is retained only as the BASE
+   condition of the controlled ablation experiment below.
+5. ANN retrieval: ScaNN (primary/production backend, Linux/Docker) +
+   FAISS (native-Windows dev fallback), both exact search over the same
+   embeddings.
+6. **Neural ranking** of VectorIndex candidates, richer than retrieval
+   features, evaluated (NDCG/Precision/Recall/HitRate/MRR) against a
+   raw-retrieval-score baseline. Current ranker uses **29 explicit
+   features** (extended from 23 by the price-aware feature work); the
+   23-feature vector is retained only as the BASE condition of the same
+   ablation experiment - `docs/data-mapping.md` §17.
+7. **Full serving pipeline:** three-level cold-start blending
+   (strong/sparse/no-history, now sized against five engagement
+   signals), dedup + category/brand diversity re-ranking, business
+   rules/eligibility (originally applied last, now a hard pre-retrieval
+   gate - see Phase 11). This is also the pipeline the temporal
+   future-purchase evaluation protocol runs point-in-time, per-user
+   cutoff, for its primary offline metrics - `docs/data-mapping.md`
+   §§8.1, 16.
+8. **Versioned (`/v1`) FastAPI recommendation API** - dependency-injected,
+   model artifacts loaded once at startup, thin wrapper over the Phase 7
+   pipeline (no duplicated logic). Current implementation also serves
+   persisted temporal offline metrics (`GET /v1/metrics/offline`) by
+   reading a batch-generated, provenance-validated report rather than
+   evaluating inside the request - `docs/data-mapping.md` §18.1.
+9. **Internal Streamlit dashboard** for demonstrating/debugging the
+   recommendation engine - user signals, cold-start tier, candidate-pool/
+   eligibility diagnostics, offline metrics. Current architecture is a
+   **pure HTTP client** of the FastAPI service
+   (`ui.api_client.RecommendationApiClient`); it originally reused the
+   API's `RecommendationService` in-process - `docs/data-mapping.md`
+   §18.
+10. Production hardening: multi-stage Docker (test/api/dashboard),
+    startup artifact validation, env-var config overrides, structured
+    observability, a full reliability pass, Windows + Docker/Linux
+    integration verification, and this documentation - see
+    `docs/production-readiness.md` for the critical review (a Phase 10
+    snapshot, annotated where later work superseded it).
+11. Mentor-reviewed architecture change: hard PRE-retrieval eligibility
+    (isActive/stockQuantity gate candidate generation itself, via
+    `retrieval.index.eligibility_filter.EligibilityRestrictedIndex` for
+    the VectorIndex path) plus a final lightweight eligibility
+    re-validation as a defense-in-depth safety net - no Two-Tower/ranker
+    retraining or VectorIndex rebuild required when catalog/stock state
+    changes.
