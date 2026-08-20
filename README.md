@@ -428,11 +428,25 @@ to already be running (see Inference workflow above).
 ## Testing
 
 ```bash
-pytest                                    # native Windows - 387 passed, 3 skipped (ScaNN: no Windows wheel)
-docker run --rm grocery-recs-test         # Docker/Linux - 404 passed, 0 skipped (ScaNN runs for real)
+pytest                                    # native Windows - full suite passes (609 passed, 4 skipped as of 2026-08-20)
+docker run --rm grocery-recs-test         # Docker/Linux - full suite passes, ScaNN-specific tests run for real too
 ```
 
-The difference is exactly the ScaNN-specific tests - the `test_scann_index.py` module (skipped as a single collection unit via `pytest.importorskip`) plus two individually-skipped ScaNN tests in `test_eligibility_restricted_index.py` (Phase 11) - all executed for real, including the FAISS-vs-ScaNN cross-backend agreement tests, in Docker.
+The native-Windows pass/skip counts above are a snapshot from a real
+`pytest -q` run against this repository state, not a fixed target to
+keep byte-exact - the suite has grown as later phases/mentor-driven work
+added test files, so re-run `pytest -q` (or `pytest --collect-only -q`
+for a pure item count, which is a *different*, larger number since it
+counts collected test items rather than pass/fail outcomes - currently
+611) for the current figure rather than citing this one indefinitely.
+The skips are exactly the ScaNN-specific tests that need a Linux wheel:
+the `test_scann_index.py` and `test_step7_scann_sqlite_integration.py`
+modules (each skipped as a single collection unit via
+`pytest.importorskip`) plus two individually-skipped ScaNN tests in
+`test_eligibility_restricted_index.py` (Phase 11) - all executed for
+real, including the FAISS-vs-ScaNN cross-backend agreement tests, in
+Docker (Docker figures not independently re-run this session - re-run
+`docker run --rm grocery-recs-test` for a current count there too).
 
 ## Configuration
 
@@ -469,12 +483,30 @@ protocol) - kept as historical Phase 10/11 evidence, not re-verified
 against the current default SQLite-backed dataset. For the CURRENT
 `data/sqlite/backend_shaped_synthetic.db` dataset, temporal
 future-purchase metrics for the current RECENCY+PRICE configuration
-(`models/sqlite_baseline/`, Phases 3/4/6) are in
-`docs/data-mapping.md` §17 (e.g. test Recall@20: 0.088 → 0.402, test
-NDCG@20: 0.048 → 0.299 vs. the ablation experiment's BASE condition) and
-are also available live via `GET /v1/metrics/offline` (see "Offline
-metrics architecture" below) or by re-running
-`python scripts/generate_offline_report.py`.
+(`models/sqlite_baseline/`, Phases 3/4/6) exist in two DIFFERENT,
+non-interchangeable evaluation configurations - see
+`docs/data-mapping.md` §17 for the full provenance trace of why they
+differ:
+
+- **The controlled BASE-vs-RECENCY+PRICE ablation experiment**
+  (`scripts/run_ablation.py`, evaluated at that script's own
+  `TOP_N=20`, not the live-serving default): test Recall@20 0.088 →
+  0.402, test NDCG@20 0.048 → 0.299, test MRR 0.036 → 0.268 vs. the
+  ablation's BASE condition - evidence recency+price helped, under a
+  fair, controlled comparison.
+- **The current persisted, live-served baseline**
+  (`models/sqlite_baseline/offline_report.json`, what
+  `GET /v1/metrics/offline` actually returns, evaluated at the real
+  live-serving default `top_n=10`): test Recall@20 ≈ 0.3775, test
+  NDCG@20 ≈ 0.3086, test MRR ≈ 0.2856 - lower only because a 10-item
+  served list structurally can't exceed what Recall@10 already
+  captures (Recall@20 there equals Recall@10 by construction), not
+  because of a different model, dataset, or configuration - it is the
+  identical trained model as the ablation's IMPROVED condition.
+
+Re-run `python scripts/generate_offline_report.py` to regenerate the
+persisted figures, or query `GET /v1/metrics/offline` directly (see
+"Offline metrics architecture" below).
 
 From the most recent full pipeline evaluation (`scripts/run_pipeline.py`,
 162 held-out leave-one-out eval users, real trained artifacts, SAME

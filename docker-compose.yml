@@ -7,10 +7,14 @@
 #   docker compose --profile train run --rm train-ranker
 #   docker compose up api dashboard
 #
-# The dashboard does NOT call the api over HTTP (see
-# src/recommendation/ui/service_loader.py) - both simply share the same
-# mounted models/ volume and run independently; there is no `depends_on`
-# runtime dependency between them, only a suggested startup order.
+# Phase 9 architecture: the dashboard IS a pure HTTP client of the api
+# service (see src/recommendation/ui/api_client.py / service_loader.py) -
+# it never loads a model artifact or touches the mounted models/ volume
+# itself. There is still no `depends_on` declared between the two
+# services below, so their listing order here is only a suggested
+# startup order, not an enforced one - start api before dashboard if you
+# want the dashboard usable immediately rather than showing connection
+# errors until api is ready.
 
 services:
   train-two-tower:
@@ -55,10 +59,11 @@ services:
     ports:
       - "8501:8501"
     volumes:
+      # Vestigial since the Phase 9 HTTP-client rewiring: the dashboard
+      # never loads a model artifact and never reads/writes the
+      # embedding cache itself (all of that lives in the api container
+      # now) - kept mounted only for parity with the api service's
+      # compose block above, not because this container uses them.
       - ./models:/app/models:ro
-      # Read-write (not :ro): Phase 3's product-embedding cache
-      # (data/processed/product_embeddings.npz, content-hash validated)
-      # is written here on first startup and reused on restart, avoiding
-      # a full Sentence Transformer re-encode of the catalog every time.
       - ./data:/app/data
     restart: unless-stopped

@@ -1388,6 +1388,39 @@ diversity, fill rate) stayed comparable between conditions - no
 diversity collapse. Latency stayed comparable (~245ms vs. ~248ms mean,
 same environment) - no serving-time regression.
 
+**Evaluation `top_n` - a setting specific to this experiment, not the
+live-serving default**: `scripts/run_ablation.py` hardcodes `TOP_N = 20`
+(with `K_VALUES = [5, 10, 20]`) for both conditions - deliberately
+larger than the live API's `top_n=10` default
+(`config.api.default_recommendation_count`), so its K=20 metrics reflect
+a genuinely 20-item ranked list rather than a 10-item list re-sliced,
+and so `candidate_pool_size` (which scales with `limit`) gives both
+conditions a comparably generous candidate pool during this comparison.
+BASE was trained fresh for this run (`run_id 20260818T040854`);
+RECENCY+PRICE reused the already-trained `models/sqlite_baseline/`
+artifacts (`run_id 20260818T023813` - the identical model
+`GET /v1/metrics/offline` serves live), evaluated here at `TOP_N=20`
+specifically for this fair BASE-vs-IMPROVED comparison.
+
+**This is a different evaluation configuration from the persisted
+`models/sqlite_baseline/offline_report.json`** (what
+`GET /v1/metrics/offline` actually serves live - §18.1), which evaluates
+that same RECENCY+PRICE model at `top_n=10`, the live-serving default.
+At `top_n=10`, `generate_recommendations` never returns more than 10
+items, so Recall@20/NDCG@20 there are numerically identical to
+Recall@10/NDCG@10 by construction (a 10-item list sliced to `[:20]` is
+unchanged) - **test Recall@20 = 0.3775, test NDCG@20 = 0.3086, test MRR
+= 0.2856 there, not 0.402/0.299/0.268**. Do not cite the two figure sets
+interchangeably: **0.402/0.299/0.268 (test Recall/NDCG@20, MRR) is this
+ablation experiment's own `TOP_N=20` BASE-vs-IMPROVED comparison
+figure**, evidence that recency+price improved the system under a
+controlled, fair comparison; **0.3775/0.3086/0.2856 is the
+current-live-serving-configuration figure**, at the actual default
+`top_n=10` a real API caller receives. Both are real, correctly-computed
+numbers for their own stated purpose against the identical underlying
+trained model (same `run_id`, same dataset fingerprint) - they are
+simply not the same measurement, and neither supersedes the other.
+
 **No causality claim**: this experiment changes recency AND price
 together. The valid conclusion is "recency + price-aware modeling
 together improved the system by the amounts above" - NOT "recency caused
