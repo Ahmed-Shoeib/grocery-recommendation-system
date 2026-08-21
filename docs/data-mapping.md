@@ -877,7 +877,7 @@ implementation of Phase N," not as an independent stage after Phase 11.
 | §14 Recency weighting (`features.recency`, `effective_weight`, `_signal_embedding_component`) | Phase 3 (historically tracked as STEP 5) |
 | §15 Price-aware derived features (`features.price`, `price_tier_id`/`PriceCatalogContext`/`UserPriceProfile`) | Phase 3 (features) / Phase 4 (Two-Tower encoder dims) / Phase 6 (ranker features) (historically tracked as STEP 6) |
 | §16 From-scratch SQLite training + temporal evaluation (`evaluation.temporal_training`, `models/sqlite_baseline/`, Docker/ScaNN verification) | Phase 2 (data source) / Phase 4 (retrained Two-Tower) / Phase 6 (retrained ranker) / Phase 7 (temporal training reuses the full pipeline) (historically tracked as STEP 7) |
-| §17 Controlled two-way ablation - BASE vs. RECENCY+PRICE (`include_price_features`, `scripts/run_ablation.py`, `models/ablation/base/`) | Not a phase - a controlled experiment validating the Phase 3/4/6 improvements above (historically tracked as STEP 8) |
+| §17 Controlled two-way ablation - BASE vs. RECENCY+PRICE (`include_price_features`; `scripts/run_ablation.py`/`models/ablation/base/` since removed - repository cleanup, results retained) | Not a phase - a controlled experiment validating the Phase 3/4/6 improvements above (historically tracked as STEP 8) |
 | §18 One serving path: Streamlit as a pure FastAPI HTTP client (`api.dependencies.build_recommendation_service` SQLite wiring fix, `ui.api_client.RecommendationApiClient`, `paths.data_source`/`dashboard.api_base_url` config) | Phase 9 (dashboard becomes a pure HTTP client) / Phase 8 (API-side wiring fix) (historically tracked as STEP 9) |
 | §18.1 Persisted offline-report architecture (`evaluation.offline_report`, `scripts/generate_offline_report.py`, provenance validation, `GET /v1/metrics/offline`) | Phase 8 (historically tracked as a STEP 9 follow-up fix) |
 
@@ -1315,6 +1315,16 @@ It is NOT a project phase - it is a controlled experiment validating the
 Phases 3/4/6 improvements above, kept as historical/scientific evidence
 - see §13.)*
 
+*(Repository cleanup note: `scripts/run_ablation.py` and the
+`models/ablation/base/` artifacts it produced were a one-off experiment
+runner/output and have since been removed from the repository - this
+section is retained as the historical record of what the experiment did
+and found. The `include_price_features` flag/`RANKING_FEATURE_NAMES_BASE`
+this experiment exercised remain in the codebase, since
+`serving.pipeline` still derives that flag from the loaded Two-Tower
+encoder on every request as a ranker/encoder dimension-safety
+mechanism - see the flag paragraph below.)*
+
 **Question answered**: does STEP 5 (recency) + STEP 6 (price-aware
 personalization) TOGETHER improve the controlled offline future-purchase
 evaluation over a faithful pre-STEP-6 baseline? This is a two-way
@@ -1428,12 +1438,15 @@ X" or "price caused Y" independently. An isolated ablation (recency-only,
 price-only) would require two additional controlled runs and is
 explicitly out of this experiment's scope.
 
-**Artifacts**: BASE written to the isolated `models/ablation/base/`
+**Artifacts**: BASE was written to the isolated `models/ablation/base/`
 (gitignored, same convention as `models/sqlite_baseline/`). RECENCY+PRICE
 was reused in place from `models/sqlite_baseline/` rather than duplicated
 into `models/ablation/recency_price/` - documented in the run's own
 console output rather than copying multi-hundred-MB artifacts
-unnecessarily.
+unnecessarily. `models/ablation/` and `scripts/run_ablation.py` have
+since been deleted (repository cleanup) now that this experiment's
+results are recorded above; the BASE condition can be reproduced by
+re-running the same procedure if ever needed again.
 
 ## 18. One serving path: Streamlit as a pure FastAPI HTTP client — Phase 9 (dashboard) / Phase 8 (API), current implementation
 

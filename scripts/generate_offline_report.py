@@ -5,7 +5,7 @@ before/after).
 
 Loads the ALREADY-TRAINED `models/sqlite_baseline/` Two-Tower + ranker
 artifacts (does NOT train or retrain anything - same "reuse, don't
-retrain" posture as `scripts/run_pipeline.py`/`run_ablation.py`) and runs
+retrain" posture as `scripts/run_pipeline.py`) and runs
 the APPROVED STEP 5/7/8 temporal future-purchase evaluation protocol
 (`evaluation.temporal_future_purchase.build_temporal_splits` +
 `evaluation.temporal_training.build_temporal_two_tower_examples` +

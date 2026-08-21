@@ -53,7 +53,7 @@ class RecommendationMeta(BaseModel):
     num_excluded_pre_retrieval: int = Field(description="Catalog products excluded by the hard PRE-retrieval eligibility gate (isActive/stockQuantity) before candidate generation ran")
     num_excluded_by_eligibility: int = Field(description="Candidates excluded by the FINAL lightweight eligibility validation (defense-in-depth safety net); normally 0 since pre-retrieval filtering already excludes ineligible products")
     api_version: str
-    model_version: str = Field(description="Ranker model version that produced these scores (see models/ranker/metadata.json)")
+    model_version: str = Field(description="Ranker model version that produced these scores (see models/sqlite_baseline/ranker/metadata.json)")
     generated_at: datetime
     latency_ms: float = Field(description="Server-side pipeline latency only (pre-retrieval eligibility -> Two-Tower -> VectorIndex -> Ranker -> Re-ranking -> final eligibility validation) - NOT full HTTP round-trip time")
 

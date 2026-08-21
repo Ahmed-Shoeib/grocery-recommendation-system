@@ -81,10 +81,12 @@ sections 14-18.1 for the full rationale behind each:
   retrain or an index rebuild.
 - **`models/sqlite_baseline/`** is the current SQLite-serving artifact
   root (Two-Tower + ranker + FAISS index + the persisted offline
-  report), distinct from the legacy top-level `models/two_tower`/
-  `models/ranker` (pre-price-feature-era, synthetic-V1 only) and
-  `models/ablation/base/` (the ablation experiment's BASE-condition
-  artifacts only).
+  report). The legacy top-level `models/two_tower`/`models/ranker`
+  (pre-price-feature-era, synthetic-V1 only, already rejected by startup
+  validation) and `models/ablation/base/` (the one-off ablation
+  experiment's BASE-condition artifacts, `docs/data-mapping.md` §17)
+  have been removed as stale, regenerable, gitignored build output -
+  neither was read by the current runtime.
 - **FastAPI is the single serving path**: it is the only process that
   ever constructs a `RecommendationService`, loads Two-Tower/ranker
   artifacts, builds the VectorIndex, or touches an adapter/SQLite
@@ -278,7 +280,7 @@ docs/
   erd.jpeg                  Source-of-truth backend ERD
   data-mapping.md            ERD reconciliation, V1/V2 scope, every design decision's rationale
   production-readiness.md    Phase 10 critical review (Ready now / Acceptable limitation / Must address / Future)
-models/                     Serialized model artifacts (gitignored - regenerable). sqlite_baseline/ = CURRENT SQLite-serving artifacts + the persisted offline report; top-level two_tower/ranker/ = LEGACY pre-price-feature-era synthetic-V1 artifacts; ablation/base/ = BASE-condition artifacts for the controlled ablation experiment only
+models/                     Serialized model artifacts (gitignored - regenerable). sqlite_baseline/ = CURRENT SQLite-serving artifacts + the persisted offline report. (The legacy top-level two_tower/ranker/ pre-price-feature-era synthetic-V1 artifacts and the one-off ablation/base/ artifacts have been removed - repository cleanup; see docs/data-mapping.md §17.)
 src/recommendation/
   data/
     adapters/                Backend + synthetic data adapters -> canonical schemas
@@ -478,9 +480,11 @@ the only "data" the system touches).
 
 **Scope note**: the table and latency figures below are from the
 ORIGINAL, smaller synthetic-V1 pipeline (`scripts/run_pipeline.py`,
-`models/two_tower`/`models/ranker`, non-temporal leave-one-out
-protocol) - kept as historical Phase 10/11 evidence, not re-verified
-against the current default SQLite-backed dataset. For the CURRENT
+formerly `models/two_tower`/`models/ranker` - those stale, pre-price-
+feature-era artifacts have since been removed as part of repository
+cleanup; the figures are kept as historical Phase 10/11 evidence, non-
+temporal leave-one-out protocol) - not re-verified against the current
+default SQLite-backed dataset. For the CURRENT
 `data/sqlite/backend_shaped_synthetic.db` dataset, temporal
 future-purchase metrics for the current RECENCY+PRICE configuration
 (`models/sqlite_baseline/`, Phases 3/4/6) exist in two DIFFERENT,
@@ -489,8 +493,9 @@ non-interchangeable evaluation configurations - see
 differ:
 
 - **The controlled BASE-vs-RECENCY+PRICE ablation experiment**
-  (`scripts/run_ablation.py`, evaluated at that script's own
-  `TOP_N=20`, not the live-serving default): test Recall@20 0.088 →
+  (run via `scripts/run_ablation.py`, since removed after producing this
+  recorded result - `docs/data-mapping.md` §17 - evaluated at that
+  script's own `TOP_N=20`, not the live-serving default): test Recall@20 0.088 →
   0.402, test NDCG@20 0.048 → 0.299, test MRR 0.036 → 0.268 vs. the
   ablation's BASE condition - evidence recency+price helped, under a
   fair, controlled comparison.
