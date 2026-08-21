@@ -254,7 +254,6 @@ def build_temporal_ranking_dataset(
     vector_index: VectorIndex,
     pool_size: int,
     ranking_config: RankingConfig,
-    include_price_features: bool = True,
 ) -> tuple[list[RankingExample], list[RankingExample]]:
     """Returns `(train_ranking_examples, val_loss_ranking_examples)`.
 
@@ -265,17 +264,11 @@ def build_temporal_ranking_dataset(
     [user_id]` - every product this user EVER purchases, past or future
     relative to this example's cutoff - so a future purchase can never
     become a mislabeled hard negative (module docstring).
-
-    `include_price_features` (STEP 8, docs/data-mapping.md section 17):
-    forwarded unchanged to `build_ranking_feature_vector` - `True`
-    (default) reproduces STEP 6/7 exactly; `False` builds the pre-STEP-6
-    23-feature vector for the controlled ablation's BASE condition.
     """
 
     def _feature_row(user_features: UserFeatures, pid: int, score: float, rank: int) -> np.ndarray:
         return build_ranking_feature_vector(
             user_features, product_features[pid], product_embeddings.get(pid), score, rank, pool_size, tt_encoder.max_price,
-            include_price_features=include_price_features,
         )
 
     train_out: list[RankingExample] = []

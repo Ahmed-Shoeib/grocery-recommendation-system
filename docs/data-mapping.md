@@ -1319,11 +1319,17 @@ Phases 3/4/6 improvements above, kept as historical/scientific evidence
 `models/ablation/base/` artifacts it produced were a one-off experiment
 runner/output and have since been removed from the repository - this
 section is retained as the historical record of what the experiment did
-and found. The `include_price_features` flag/`RANKING_FEATURE_NAMES_BASE`
-this experiment exercised remain in the codebase, since
-`serving.pipeline` still derives that flag from the loaded Two-Tower
-encoder on every request as a ranker/encoder dimension-safety
-mechanism - see the flag paragraph below.)*
+and found. A second cleanup pass then removed the reduced-feature code
+path itself - `RANKING_FEATURE_NAMES_BASE` and the `include_price_features
+=False` branches in `TwoTowerFeatureEncoder`/`build_item_tower`/
+`build_user_tower`/`build_ranking_feature_vector` - since nothing in the
+current architecture ever constructs that shape any more; the current
+code always builds the full 29-feature/9-9-dim price-aware
+representation unconditionally. `include_price_features` remains as a
+plain reported field on `TwoTowerFeatureEncoder` (always `True` for the
+current architecture) since it's exposed through
+`evaluation.offline_report`/`GET /v1/metrics/offline`/the dashboard -
+see the flag paragraph below.)*
 
 **Question answered**: does STEP 5 (recency) + STEP 6 (price-aware
 personalization) TOGETHER improve the controlled offline future-purchase
@@ -1331,27 +1337,33 @@ evaluation over a faithful pre-STEP-6 baseline? This is a two-way
 comparison ONLY - it does not and cannot isolate recency's contribution
 from price's. See "no causality claim" below.
 
-**`include_price_features` flag** (`TwoTowerFeatureEncoder`,
-`build_ranking_feature_vector`, both default `True`): the mechanism that
-makes a faithful pre-STEP-6 BASE condition possible without forking the
-pipeline or deleting STEP 6. `True` reproduces STEP 6/7 byte-for-byte
-(verified: the full pre-existing test suite passes unchanged with the
-flag added); `False` removes the STEP-6-INTRODUCED price inputs
-entirely - not zeroed, ABSENT - from both towers (no `price_tier_id`
-input at all) and the ranker vector (23 features, not 29 with zeros)
-while PRESERVING the pre-existing basic product price/discount fields
-(`normalized_price`/`discount_fraction`/`item_normalized_price`/
-`item_discount_fraction`) that existed before STEP 6 - the baseline is
-not artificially crippled. A real bug was caught while building this:
-`serving.pipeline._personalized_candidates` unconditionally built
-29-feature ranking vectors regardless of which ranker it was scoring,
-which would have crashed a BASE ranker (23 features) with a shape
-mismatch - fixed by deriving `include_price_features` from the SAME
-`tt_encoder.include_price_features` already passed in (a Two-Tower/
-ranker pair for one condition is always trained together with the same
-flag, so this can never drift out of sync) - see
-`tests/test_step8_ablation_dimensions
-.py::test_generate_recommendations_uses_matching_feature_dim_for_base_ranker`.
+**`include_price_features` flag (historical mechanism, since simplified)**:
+at the time of this experiment, `TwoTowerFeatureEncoder`/
+`build_ranking_feature_vector` both took an `include_price_features`
+flag (default `True`) that let a faithful pre-STEP-6 BASE condition be
+built without forking the pipeline or deleting STEP 6 - `True` reproduced
+STEP 6/7 byte-for-byte; `False` removed the STEP-6-INTRODUCED price
+inputs entirely - not zeroed, ABSENT - from both towers (no
+`price_tier_id` input at all) and the ranker vector (23 features, not 29
+with zeros) while PRESERVING the pre-existing basic product
+price/discount fields (`normalized_price`/`discount_fraction`/
+`item_normalized_price`/`item_discount_fraction`) that existed before
+STEP 6 - the baseline was not artificially crippled. A real bug was
+caught while building this: `serving.pipeline._personalized_candidates`
+unconditionally built 29-feature ranking vectors regardless of which
+ranker it was scoring, which would have crashed a BASE ranker (23
+features) with a shape mismatch - fixed at the time by deriving
+`include_price_features` from the SAME `tt_encoder.include_price_features`
+already passed in. Once the ablation concluded and its BASE-condition
+tooling was removed (see the note above), the `False` branches this
+mechanism protected became unreachable in every current path, so a
+follow-up cleanup removed them outright rather than leave dead branching
+in currently-executing production code - `build_ranking_feature_vector`
+now always builds the 29-feature vector unconditionally, eliminating the
+bug class entirely rather than just deriving around it. The now-obsolete
+regression test (`test_generate_recommendations_uses_matching_feature_dim_for_base_ranker`)
+was removed for the same reason; current price-aware coverage lives in
+`tests/test_price_aware_features.py`.
 
 **BASE condition**: `features.recency` disabled
 (`RecencyConfig(enabled=False)`) AND `price_context=None` passed to

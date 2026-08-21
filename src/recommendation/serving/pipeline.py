@@ -165,18 +165,6 @@ def _personalized_candidates(
         [
             build_ranking_feature_vector(
                 user_features, product_features[pid], product_embeddings.get(pid), score, rank, pool_size, tt_encoder.max_price,
-                # STEP 8 (docs/data-mapping.md section 17): the ranker's
-                # feature dimension must match the Two-Tower encoder it's
-                # paired with - `tt_encoder.include_price_features` is the
-                # SAME flag that determined the ranker's own training-time
-                # feature dimension (both towers/ranker for one condition
-                # are always trained together), so deriving it from the
-                # already-passed encoder (rather than a new parameter)
-                # keeps a BASE-condition ranker (23 features) and an
-                # IMPROVED-condition ranker (29 features) each fed exactly
-                # the shape they expect, with zero risk of the two ever
-                # drifting out of sync.
-                include_price_features=tt_encoder.include_price_features,
             )
             for rank, (pid, score) in enumerate(valid)
         ]

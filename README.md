@@ -64,10 +64,13 @@ sections 14-18.1 for the full rationale behind each:
   the Two-Tower (Phase 4), 29 explicit features feeding the ranker
   (Phase 6) - the RECENCY+PRICE configuration served by default,
   validated by a controlled ablation experiment (`docs/data-mapping.md`
-  §17). A 23-feature variant (`RANKING_FEATURE_NAMES_BASE`, 7
-  item-numeric/8 user-numeric encoder dims) exists ONLY as the BASE
-  condition of that ablation experiment - it is not what's currently
-  served.
+  §17) against a 23-feature/no-price BASE condition. That ablation has
+  since been run, its runner/artifacts removed, and its reduced-feature
+  code path (`RANKING_FEATURE_NAMES_BASE`, the 7 item-numeric/8
+  user-numeric encoder shape) removed from the codebase - the current
+  architecture always builds the full 29-feature/9-9-dim price-aware
+  shape; `include_price_features` remains only as a reported metadata
+  field (always `True`), not a branching flag.
 - **Pre-retrieval eligibility + final safety check**: `isActive`/
   `stockQuantity` gate candidate generation itself - before Two-Tower/
   VectorIndex retrieval and every fallback source ever runs - plus a

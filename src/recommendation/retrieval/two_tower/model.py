@@ -60,25 +60,20 @@ def build_item_tower(encoder: TwoTowerFeatureEncoder, config: TwoTowerConfig) ->
         encoder.brand_vocab.size, config.brand_embedding_dim, name="item_brand_embedding"
     )(brand_in)
 
-    inputs = {"semantic_embedding": semantic_in, "category_id": category_in, "brand_id": brand_in, "numeric": numeric_in}
-    concat_parts = [semantic_in, category_emb, brand_emb]
-
     # STEP 6 (docs/data-mapping.md section 15): BUDGET/MID/PREMIUM + an
     # "unknown" bucket as a LEARNED embedding, not an ordinal 0/1/2 number
     # - a categorical tier has no inherent numeric distance the model
-    # should be forced to assume. STEP 8 (section 17): omitted entirely
-    # when `encoder.include_price_features` is False, so the controlled
-    # ablation's BASE condition faithfully reproduces the pre-STEP-6
-    # architecture (no price input at all), not a price input fed zeros.
-    if encoder.include_price_features:
-        price_tier_in = tf.keras.Input(shape=(), dtype="int32", name="price_tier_id")
-        price_tier_emb = tf.keras.layers.Embedding(
-            encoder.price_tier_vocab.size, config.price_tier_embedding_dim, name="item_price_tier_embedding"
-        )(price_tier_in)
-        inputs["price_tier_id"] = price_tier_in
-        concat_parts.append(price_tier_emb)
+    # should be forced to assume.
+    price_tier_in = tf.keras.Input(shape=(), dtype="int32", name="price_tier_id")
+    price_tier_emb = tf.keras.layers.Embedding(
+        encoder.price_tier_vocab.size, config.price_tier_embedding_dim, name="item_price_tier_embedding"
+    )(price_tier_in)
 
-    concat_parts.append(numeric_in)
+    inputs = {
+        "semantic_embedding": semantic_in, "category_id": category_in, "brand_id": brand_in,
+        "price_tier_id": price_tier_in, "numeric": numeric_in,
+    }
+    concat_parts = [semantic_in, category_emb, brand_emb, price_tier_emb, numeric_in]
     concat = tf.keras.layers.Concatenate(name="item_concat")(concat_parts)
     output = _projection_mlp(concat, config, "item")
 
@@ -100,31 +95,25 @@ def build_user_tower(encoder: TwoTowerFeatureEncoder, config: TwoTowerConfig) ->
         encoder.age_group_vocab.size, config.age_group_embedding_dim, name="user_age_group_embedding"
     )(age_group_in)
 
+    # Same fixed BUDGET/MID/PREMIUM/unknown vocabulary as the item tower
+    # (`encoder.price_tier_vocab` is shared) - the user's DERIVED price
+    # tier (`UserFeatures.price_profile.price_tier`), not the age_group-
+    # style opaque label - see `features.price.build_user_price_profile`.
+    price_tier_in = tf.keras.Input(shape=(), dtype="int32", name="price_tier_id")
+    price_tier_emb = tf.keras.layers.Embedding(
+        encoder.price_tier_vocab.size, config.price_tier_embedding_dim, name="user_price_tier_embedding"
+    )(price_tier_in)
+
     inputs = {
         "semantic_embedding": semantic_in,
         "preferred_category_id": preferred_category_in,
         "age_group_id": age_group_in,
         "category_affinity": category_affinity_in,
         "brand_affinity": brand_affinity_in,
+        "price_tier_id": price_tier_in,
         "numeric": numeric_in,
     }
-    concat_parts = [semantic_in, preferred_category_emb, age_group_emb]
-
-    # Same fixed BUDGET/MID/PREMIUM/unknown vocabulary as the item tower
-    # (`encoder.price_tier_vocab` is shared) - the user's DERIVED price
-    # tier (`UserFeatures.price_profile.price_tier`), not the age_group-
-    # style opaque label - see `features.price.build_user_price_profile`.
-    # STEP 8 (section 17): omitted entirely when
-    # `encoder.include_price_features` is False - see `build_item_tower`.
-    if encoder.include_price_features:
-        price_tier_in = tf.keras.Input(shape=(), dtype="int32", name="price_tier_id")
-        price_tier_emb = tf.keras.layers.Embedding(
-            encoder.price_tier_vocab.size, config.price_tier_embedding_dim, name="user_price_tier_embedding"
-        )(price_tier_in)
-        inputs["price_tier_id"] = price_tier_in
-        concat_parts.append(price_tier_emb)
-
-    concat_parts += [category_affinity_in, brand_affinity_in, numeric_in]
+    concat_parts = [semantic_in, preferred_category_emb, age_group_emb, price_tier_emb, category_affinity_in, brand_affinity_in, numeric_in]
     concat = tf.keras.layers.Concatenate(name="user_concat")(concat_parts)
     output = _projection_mlp(concat, config, "user")
 

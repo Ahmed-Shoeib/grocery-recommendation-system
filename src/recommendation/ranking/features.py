@@ -83,16 +83,6 @@ RANKING_FEATURE_NAMES = (
     + RANKING_FEATURE_NAMES_CROSS_PRICE_EXTRA
     + RANKING_FEATURE_NAMES_RETRIEVAL
 )
-# STEP 8 (docs/data-mapping.md section 17): the pre-STEP-6 23-feature
-# vector, for the controlled ablation's BASE condition - see
-# `build_ranking_feature_vector`'s `include_price_features` parameter.
-RANKING_FEATURE_NAMES_BASE = (
-    RANKING_FEATURE_NAMES_USER + RANKING_FEATURE_NAMES_ITEM_BASE + RANKING_FEATURE_NAMES_CROSS_BASE + RANKING_FEATURE_NAMES_RETRIEVAL
-)
-
-
-def ranking_feature_names(include_price_features: bool = True) -> list[str]:
-    return RANKING_FEATURE_NAMES if include_price_features else RANKING_FEATURE_NAMES_BASE
 
 
 def _cosine_similarity(a: np.ndarray | None, b: np.ndarray | None) -> tuple[float, bool]:
@@ -112,19 +102,13 @@ def build_ranking_feature_vector(
     retrieval_rank: int,
     pool_size: int,
     max_price: float,
-    include_price_features: bool = True,
 ) -> np.ndarray:
     """`retrieval_rank` is 0-indexed (0 = top of the retrieved list);
     `pool_size` is the number of candidates the VectorIndex was asked to
     retrieve (used only to normalize rank to [0, 1], not to filter).
 
-    `include_price_features` (STEP 8, docs/data-mapping.md section 17):
-    `True` (default) reproduces the STEP 6/7 29-feature vector byte-for-
-    byte; `False` drops the 6 STEP-6 price entries entirely, reproducing
-    the pre-STEP-6 23-feature vector (`RANKING_FEATURE_NAMES_BASE`) -
-    exists only to let the STEP 8 controlled ablation's BASE condition
-    faithfully rebuild the pre-STEP-6 architecture, not to change default
-    behavior for any other caller.
+    Builds the current 29-entry `RANKING_FEATURE_NAMES` vector, including
+    the STEP 6 price-aware entries (docs/data-mapping.md section 15).
     """
     semantic_similarity, has_similarity = _cosine_similarity(user_features.semantic_embedding, item_semantic_embedding)
 
@@ -155,31 +139,28 @@ def build_ranking_feature_vector(
         1.0 if product_features.average_rating is not None else 0.0,
         np.log1p(product_features.stock_quantity),
         1.0 if product_features.is_active else 0.0,
+        product_features.category_relative_price,
+        1.0 if product_features.is_discounted else 0.0,
     ]
-
-    if include_price_features:
-        values += [product_features.category_relative_price, 1.0 if product_features.is_discounted else 0.0]
 
     values += [category_match, brand_match, preferred_match, semantic_similarity, 1.0 if has_similarity else 0.0]
 
-    if include_price_features:
-        # STEP 6 (docs/data-mapping.md section 15): all degrade to neutral
-        # (0.0) when the user has no price profile at all (an old call
-        # site that didn't build/pass `price_context` to
-        # `build_user_features`) - `user_has_price_profile` is what lets
-        # the model tell that apart from a genuine "price matches
-        # exactly" (distance=0) case.
-        price_profile = user_features.price_profile
-        user_normalized_typical_price = 0.0
-        price_tier_match = 0.0
-        if price_profile is not None:
-            if max_price > 0:
-                user_normalized_typical_price = min(price_profile.typical_price / max_price, 1.0)
-            price_tier_match = 1.0 if price_profile.price_tier == product_features.price_tier else 0.0
-        price_distance = price_relative_distance(
-            product_features.effective_price, price_profile.typical_price if price_profile is not None else None
-        )
-        values += [user_normalized_typical_price, 1.0 if price_profile is not None else 0.0, price_distance, price_tier_match]
+    # STEP 6 (docs/data-mapping.md section 15): all degrade to neutral
+    # (0.0) when the user has no price profile at all (an old call site
+    # that didn't build/pass `price_context` to `build_user_features`) -
+    # `user_has_price_profile` is what lets the model tell that apart
+    # from a genuine "price matches exactly" (distance=0) case.
+    price_profile = user_features.price_profile
+    user_normalized_typical_price = 0.0
+    price_tier_match = 0.0
+    if price_profile is not None:
+        if max_price > 0:
+            user_normalized_typical_price = min(price_profile.typical_price / max_price, 1.0)
+        price_tier_match = 1.0 if price_profile.price_tier == product_features.price_tier else 0.0
+    price_distance = price_relative_distance(
+        product_features.effective_price, price_profile.typical_price if price_profile is not None else None
+    )
+    values += [user_normalized_typical_price, 1.0 if price_profile is not None else 0.0, price_distance, price_tier_match]
 
     values += [retrieval_score, retrieval_rank / max(pool_size - 1, 1)]
 
