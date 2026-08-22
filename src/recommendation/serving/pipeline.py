@@ -79,7 +79,7 @@ from recommendation.serving.fallback import (
     top_affinity_category,
     waterfall_candidates,
 )
-from recommendation.utils.config import AppConfig
+from recommendation.utils.config import AppConfig, RetrievalConfig
 from recommendation.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -135,6 +135,7 @@ def _personalized_candidates(
     vector_index: VectorIndex,
     pool_size: int,
     eligible_ids: set[int],
+    retrieval_config: RetrievalConfig,
 ) -> list[RankedCandidate]:
     user_batch = tt_encoder.encode_user_batch([user_features])
     user_embedding = user_tower.predict(user_batch, verbose=0)
@@ -144,7 +145,9 @@ def _personalized_candidates(
     # .EligibilityRestrictedIndex`. This restricts *results*, not the
     # index structure, so no rebuild/retrain is triggered by eligibility
     # changing.
-    [result] = EligibilityRestrictedIndex(vector_index).search(user_embedding, k=pool_size, allowed_ids=eligible_ids)
+    [result] = EligibilityRestrictedIndex(vector_index, retrieval_config).search(
+        user_embedding, k=pool_size, allowed_ids=eligible_ids
+    )
 
     # A VectorIndex candidate missing from the current product_features
     # would mean the index and the live catalog have drifted apart (e.g.
@@ -235,7 +238,7 @@ def generate_recommendations(
     personalized: list[RankedCandidate] = []
     if tier in (HistoryTier.STRONG, HistoryTier.SPARSE):
         personalized = _personalized_candidates(
-            user_features, product_features, product_embeddings, tt_encoder, user_tower, ranker_model, vector_index, pool_size, eligible_ids
+            user_features, product_features, product_embeddings, tt_encoder, user_tower, ranker_model, vector_index, pool_size, eligible_ids, config.retrieval
         )
 
     if tier is HistoryTier.STRONG:

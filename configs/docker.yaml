@@ -114,11 +114,38 @@ two_tower:
   random_seed: 42
 
 # Phase 5: ANN retrieval. ScaNN is the primary/production backend, run
-# here inside Linux/Docker (see docs/data-mapping.md section 10).
+# here inside Linux/Docker (see docs/data-mapping.md section 10). Both
+# backends do genuine approximate nearest-neighbor search (FAISS: HNSW;
+# ScaNN: tree partitioning + asymmetric hashing + reorder) - see
+# retrieval/index/faiss_index.py and scann_index.py for what each field
+# below controls.
 retrieval:
   backend: "scann"
   candidate_pool_multiplier: 5   # ScaNN/FAISS retrieves limit * multiplier candidates, capped by catalog size
   min_candidate_pool: 50
+
+  # FAISS HNSW
+  faiss_hnsw_m: 32
+  faiss_hnsw_ef_construction: 200
+  faiss_hnsw_ef_search: 128
+
+  # ScaNN tree + asymmetric hashing + reorder
+  scann_leaves_multiplier: 2.0
+  scann_min_leaves: 20
+  scann_max_leaves: 2000
+  scann_leaves_to_search_fraction: 0.1
+  scann_ah_dims_per_block: 2
+  scann_aq_threshold: 0.2
+  scann_training_sample_size: 100000
+  scann_reorder_k: 200
+
+  # Eligibility-restricted search: oversample + progressive widening
+  # instead of scanning the full index every query - see
+  # retrieval/index/eligibility_filter.py.
+  eligibility_oversample_factor: 3
+  eligibility_oversample_floor: 20
+  eligibility_widen_multiplier: 2
+  eligibility_max_widen_attempts: 4
 
 # Phase 7: three-level personalization / cold-start strategy.
 cold_start:

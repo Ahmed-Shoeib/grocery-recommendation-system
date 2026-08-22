@@ -107,17 +107,18 @@ def test_scann_product_id_mapping_is_correct(two_tower_artifacts):
         assert result.scores[0] == pytest.approx(1.0, abs=1e-3)
 
 
-# --- ScaNN vs FAISS exact-search agreement on the STEP 7 embeddings --------
+# --- ScaNN vs FAISS ANN recall agreement on the STEP 7 embeddings ----------
 
 def test_scann_and_faiss_agree_on_step7_embeddings(two_tower_artifacts):
-    """Both backends are configured for EXACT search over these
-    L2-normalized embeddings (`ScannVectorIndex` uses
-    `score_brute_force(quantize=False)`; `FaissVectorIndex` uses
-    `IndexFlatIP`) - for identical input they must return the same
-    neighbor SET (order may differ by a hair on exact floating-point ties)
-    and near-identical scores, over a representative random sample of the
-    real 1,200-item STEP 7 catalog (not the small synthetic fixture
-    `test_scann_index.py` already covers).
+    """Both backends now do genuinely APPROXIMATE search over these
+    L2-normalized embeddings (`ScannVectorIndex`: tree partitioning +
+    asymmetric hashing + reorder; `FaissVectorIndex`: HNSW) - for
+    identical input they're expected to substantially agree on the
+    neighbor set (high recall overlap, both should recover the true
+    nearest neighbor), not reproduce each other's exact ranking/scores,
+    over a representative random sample of the real 1,200-item STEP 7
+    catalog (not the small synthetic fixture `test_scann_index.py`
+    already covers).
     """
     from recommendation.retrieval.index.faiss_index import FaissVectorIndex
     from recommendation.retrieval.index.scann_index import ScannVectorIndex
@@ -134,16 +135,14 @@ def test_scann_and_faiss_agree_on_step7_embeddings(two_tower_artifacts):
     sample_positions = rng.choice(len(item_ids), size=25, replace=False)
     queries = embeddings[sample_positions]
 
-    faiss_results = faiss_index.search(queries, k=20)
-    scann_results = scann_index.search(queries, k=20)
+    k = 20
+    faiss_results = faiss_index.search(queries, k=k)
+    scann_results = scann_index.search(queries, k=k)
+    overlaps = []
     for faiss_result, scann_result in zip(faiss_results, scann_results):
-        assert set(faiss_result.item_ids) == set(scann_result.item_ids)
-        # Compare scores id-aligned (not position-aligned) since exact
-        # floating-point ties can permute otherwise-identical scores.
-        faiss_by_id = dict(zip(faiss_result.item_ids, faiss_result.scores))
-        scann_by_id = dict(zip(scann_result.item_ids, scann_result.scores))
-        for pid in faiss_by_id:
-            assert faiss_by_id[pid] == pytest.approx(scann_by_id[pid], abs=1e-3)
+        overlaps.append(len(set(faiss_result.item_ids) & set(scann_result.item_ids)) / k)
+        assert faiss_result.item_ids[0] == scann_result.item_ids[0]  # both recover the true nearest neighbor (self-match)
+    assert (sum(overlaps) / len(overlaps)) >= 0.6  # generous bar - two different ANN algorithms, not required to match exactly
 
 
 # --- eligibility still excludes inactive/out-of-stock ----------------------

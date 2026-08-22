@@ -1,13 +1,25 @@
 """FAISS `VectorIndex` backend - default, native on Windows.
 
-Uses `IndexFlatIP` (exact, brute-force inner-product search) wrapped in
-`IndexIDMap2` so the index stores real product ids directly rather than
-requiring a separate row-index <-> product-id mapping to save/reload
-alongside it. At the current V1 catalog scale (~50 products) brute-force
-is both exact and fast enough that an approximate structure (IVF/HNSW)
-would only add complexity for no measurable latency benefit; swapping to
-one later is a change inside this class, not to the `VectorIndex`
-interface.
+Uses `IndexHNSWFlat` (approximate nearest-neighbor search over a
+navigable small-world graph) wrapped in `IndexIDMap2` so the index stores
+real product ids directly rather than requiring a separate row-index <->
+product-id mapping to save/reload alongside it. HNSW was chosen over
+IVF/IVF-PQ because it needs no training step - `add_with_ids` builds the
+graph incrementally exactly like a flat index would, so it is correct
+both at today's ~1,200-item catalog and at a much larger future one,
+whereas IVF's k-means clustering step is unstable when `nlist` is large
+relative to a small catalog. `M`/`efConstruction`/`efSearch` are
+config-driven (`RetrievalConfig.faiss_hnsw_*`, see `utils/config.py`),
+not hard-coded, so tuning never requires a code change. `efSearch` is
+additionally floored at `k * 2` per query in `search()` below so recall
+stays adequate as callers request larger pools (see
+`retrieval.index.eligibility_filter.EligibilityRestrictedIndex`'s
+oversampling), not just whatever the static config value happens to be.
+
+`METRIC_INNER_PRODUCT` must be passed explicitly when constructing the
+HNSW index - FAISS defaults to L2, and silently getting that wrong would
+turn "nearest by cosine similarity" into "nearest by Euclidean distance,"
+a real similarity-semantics bug, not just an approximation-quality one.
 
 Embeddings must already be L2-normalized (Phase 4's Two-Tower output is);
 this class does not renormalize them, so normalized inner product here is
@@ -22,11 +34,19 @@ import faiss
 import numpy as np
 
 from recommendation.retrieval.index.base import SearchResult, VectorIndex
+from recommendation.utils.config import RetrievalConfig
 
 
 class FaissVectorIndex(VectorIndex):
-    def __init__(self) -> None:
+    def __init__(self, config: RetrievalConfig | None = None) -> None:
+        self._config = config or RetrievalConfig()
         self._index: faiss.IndexIDMap2 | None = None
+        # A separate reference to the inner HNSW index, kept because
+        # `IndexIDMap2.index` only exposes the generic base `faiss.Index`
+        # type (no `.hnsw` attribute) - `faiss.downcast_index` recovers
+        # the concrete `IndexHNSWFlat` type after `load()`, mirroring how
+        # `build()` already has direct access to it before wrapping.
+        self._hnsw: faiss.IndexHNSWFlat | None = None
         self._dim: int | None = None
 
     def build(self, item_ids: list[int], embeddings: np.ndarray) -> None:
@@ -41,7 +61,9 @@ class FaissVectorIndex(VectorIndex):
         self._dim = embeddings.shape[1]
         ids = np.asarray(item_ids, dtype=np.int64)
 
-        self._index = faiss.IndexIDMap2(faiss.IndexFlatIP(self._dim))
+        self._hnsw = faiss.IndexHNSWFlat(self._dim, self._config.faiss_hnsw_m, faiss.METRIC_INNER_PRODUCT)
+        self._hnsw.hnsw.efConstruction = self._config.faiss_hnsw_ef_construction
+        self._index = faiss.IndexIDMap2(self._hnsw)
         self._index.add_with_ids(embeddings, ids)
 
     def search(self, query_embeddings: np.ndarray, k: int) -> list[SearchResult]:
@@ -57,6 +79,11 @@ class FaissVectorIndex(VectorIndex):
             raise ValueError(f"query dim ({query_embeddings.shape[1]}) does not match index dim ({self._dim})")
 
         effective_k = min(k, self.size)
+        # Adaptive floor, not just the static config value: a caller
+        # asking for a larger k (e.g. EligibilityRestrictedIndex's
+        # oversampling) needs a correspondingly wider HNSW candidate list
+        # to have a chance of finding that many good matches at all.
+        self._hnsw.hnsw.efSearch = max(self._config.faiss_hnsw_ef_search, effective_k * 2)
         scores, ids = self._index.search(query_embeddings, effective_k)
 
         results = []
@@ -79,6 +106,7 @@ class FaissVectorIndex(VectorIndex):
         if not path.exists():
             raise FileNotFoundError(f"no FAISS index found at {path}")
         self._index = faiss.read_index(str(path))
+        self._hnsw = faiss.downcast_index(self._index.index)
         self._dim = self._index.d
 
     @property

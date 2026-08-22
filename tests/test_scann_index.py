@@ -5,6 +5,13 @@ on native Windows via `importorskip` below. It runs for real inside the
 Linux/Docker image built from the repo-root `Dockerfile`, which is the
 only place this project's primary/production retrieval backend is
 actually exercised - see docs/data-mapping.md section 10.
+
+Fixture catalog bumped from 5 to 300 synthetic items (2026-08-22, ANN
+migration): ScaNN's tree partitioning + asymmetric-hashing quantization
+need enough points for `.tree()`/`.score_ah()` to do something
+non-degenerate - at 5 items, `num_leaves` collapses to `scann_min_leaves`
+and every leaf is effectively the whole catalog, which wouldn't actually
+exercise the approximate path this file is meant to verify.
 """
 
 import numpy as np
@@ -13,6 +20,7 @@ import pytest
 pytest.importorskip("scann")
 
 from recommendation.retrieval.index.scann_index import ScannVectorIndex  # noqa: E402
+from recommendation.utils.config import RetrievalConfig  # noqa: E402
 
 
 def _l2_normalize(x: np.ndarray) -> np.ndarray:
@@ -22,8 +30,8 @@ def _l2_normalize(x: np.ndarray) -> np.ndarray:
 @pytest.fixture
 def catalog() -> tuple[list[int], np.ndarray]:
     rng = np.random.default_rng(0)
-    item_ids = [10, 20, 30, 40, 50]
-    embeddings = _l2_normalize(rng.normal(size=(5, 8)).astype(np.float32))
+    item_ids = list(range(10, 3010, 10))
+    embeddings = _l2_normalize(rng.normal(size=(300, 8)).astype(np.float32))
     return item_ids, embeddings
 
 
@@ -53,13 +61,106 @@ def test_search_returns_self_as_top_match_with_score_one(index, catalog):
     assert result.scores[0] == pytest.approx(1.0, abs=1e-4)
 
 
-def test_search_matches_brute_force_cosine_similarity(index, catalog):
+def test_search_recall_against_brute_force_cosine_similarity(index, catalog):
+    """ScaNN is now approximate (tree + AH + reorder), so its top-k is no
+    longer guaranteed to exactly reproduce brute-force order/scores -
+    checked as a high recall bar (set overlap over a generous top-30 out
+    of 300) rather than brittle exact equality.
+    """
     item_ids, embeddings = catalog
     query = embeddings[2]
-    [result] = index.search(query.reshape(1, -1), k=len(item_ids))
-    expected_ids, expected_scores = brute_force_top_k(query, item_ids, embeddings, len(item_ids))
-    assert result.item_ids == expected_ids
-    assert result.scores == pytest.approx(expected_scores, abs=1e-4)
+    k = 30
+    [result] = index.search(query.reshape(1, -1), k=k)
+    expected_ids, _ = brute_force_top_k(query, item_ids, embeddings, k)
+    overlap = len(set(result.item_ids) & set(expected_ids))
+    assert overlap / k >= 0.7  # generous bar for a 300-item fixture catalog, not a tuned production threshold
+
+
+def test_build_uses_tree_and_ah_not_brute_force(catalog, monkeypatch):
+    """Proves the builder chain actually changed from
+    `.score_brute_force(...)` to `.tree(...).score_ah(...).reorder(...)`
+    - intercepts ScaNN's own builder (not our code) so this is a direct
+    check of what `ScannVectorIndex.build` calls, independent of the
+    installed scann version's actual search-quality behavior.
+    """
+    import scann
+
+    item_ids, embeddings = catalog
+    calls: list[tuple[str, dict]] = []
+
+    class _FakeBuilder:
+        def tree(self, **kwargs):
+            calls.append(("tree", kwargs))
+            return self
+
+        def score_ah(self, **kwargs):
+            calls.append(("score_ah", kwargs))
+            return self
+
+        def score_brute_force(self, *args, **kwargs):
+            calls.append(("score_brute_force", kwargs))
+            return self
+
+        def reorder(self, *args, **kwargs):
+            calls.append(("reorder", {"args": args}))
+            return self
+
+        def build(self):
+            calls.append(("build", {}))
+            return None
+
+    monkeypatch.setattr(scann.scann_ops_pybind, "builder", lambda *a, **kw: _FakeBuilder())
+
+    idx = ScannVectorIndex()
+    idx.build(item_ids, embeddings)
+
+    method_names = [name for name, _ in calls]
+    assert method_names == ["tree", "score_ah", "reorder", "build"]
+    assert "score_brute_force" not in method_names
+
+
+def test_ann_params_are_config_driven(catalog, monkeypatch):
+    """Two different RetrievalConfig ScaNN parameter sets must produce
+    different builder kwargs - proves leaf count / AH block size are not
+    hard-coded.
+    """
+    import scann
+
+    item_ids, embeddings = catalog
+    captured: dict = {}
+
+    class _FakeBuilder:
+        def tree(self, **kwargs):
+            captured["tree"] = kwargs
+            return self
+
+        def score_ah(self, **kwargs):
+            captured["score_ah"] = kwargs
+            return self
+
+        def reorder(self, *args, **kwargs):
+            captured["reorder"] = args
+            return self
+
+        def build(self):
+            return None
+
+    monkeypatch.setattr(scann.scann_ops_pybind, "builder", lambda *a, **kw: _FakeBuilder())
+
+    small_cfg = RetrievalConfig(scann_leaves_multiplier=1.0, scann_min_leaves=5, scann_ah_dims_per_block=1, scann_reorder_k=50)
+    idx_small = ScannVectorIndex(small_cfg)
+    idx_small.build(item_ids, embeddings)
+    small_tree, small_ah, small_reorder = dict(captured["tree"]), dict(captured["score_ah"]), captured["reorder"]
+
+    captured.clear()
+    large_cfg = RetrievalConfig(scann_leaves_multiplier=5.0, scann_min_leaves=5, scann_ah_dims_per_block=4, scann_reorder_k=250)
+    idx_large = ScannVectorIndex(large_cfg)
+    idx_large.build(item_ids, embeddings)
+    large_tree, large_ah, large_reorder = dict(captured["tree"]), dict(captured["score_ah"]), captured["reorder"]
+
+    assert small_tree["num_leaves"] != large_tree["num_leaves"]
+    assert small_ah["dimensions_per_block"] != large_ah["dimensions_per_block"]
+    assert small_reorder != large_reorder
 
 
 def test_search_results_are_sorted_descending_by_score(index, catalog):
@@ -115,7 +216,8 @@ def test_search_rejects_dim_mismatch(index):
 def test_save_and_load_round_trip_preserves_search_results(index, catalog, tmp_path):
     item_ids, embeddings = catalog
     query = embeddings[1].reshape(1, -1)
-    expected = index.search(query, k=len(item_ids))
+    k = 20
+    expected = index.search(query, k=k)
 
     save_path = tmp_path / "scann_index"
     index.save(save_path)
@@ -125,10 +227,13 @@ def test_save_and_load_round_trip_preserves_search_results(index, catalog, tmp_p
     reloaded.load(save_path)
     assert reloaded.size == len(item_ids)
 
-    [actual] = reloaded.search(query, k=len(item_ids))
+    [actual] = reloaded.search(query, k=k)
     [expected_result] = expected
-    assert actual.item_ids == expected_result.item_ids
-    assert actual.scores == pytest.approx(expected_result.scores, abs=1e-4)
+    # Approximate search over a reloaded (re-deserialized) searcher isn't
+    # guaranteed bit-identical to the pre-save searcher - reloading must
+    # still recover a near-identical top-k, not an exact one.
+    overlap = len(set(actual.item_ids) & set(expected_result.item_ids))
+    assert overlap / k >= 0.9
 
 
 def test_load_missing_path_raises(tmp_path):
@@ -143,10 +248,12 @@ def test_save_before_build_raises(tmp_path):
         idx.save(tmp_path / "scann_index")
 
 
-def test_faiss_and_scann_agree_on_top_k_ordering_and_scores(catalog):
-    """Cross-backend agreement check: both are exact search over the same
-    normalized-inner-product space, so for identical input they must
-    return the same ranking and (near-)identical scores.
+def test_faiss_and_scann_agree_on_top_k_recall(catalog):
+    """Cross-backend consistency check: both are now independently
+    approximate over the same normalized-inner-product space (FAISS
+    HNSW, ScaNN tree+AH+reorder), so for identical input they're expected
+    to substantially agree on the top-k, not reproduce each other's exact
+    ranking/scores.
     """
     from recommendation.retrieval.index.faiss_index import FaissVectorIndex
 
@@ -158,8 +265,10 @@ def test_faiss_and_scann_agree_on_top_k_ordering_and_scores(catalog):
     scann_index.build(item_ids, embeddings)
 
     query = embeddings[3].reshape(1, -1)
-    [faiss_result] = faiss_index.search(query, k=len(item_ids))
-    [scann_result] = scann_index.search(query, k=len(item_ids))
+    k = 20
+    [faiss_result] = faiss_index.search(query, k=k)
+    [scann_result] = scann_index.search(query, k=k)
 
-    assert faiss_result.item_ids == scann_result.item_ids
-    assert faiss_result.scores == pytest.approx(scann_result.scores, abs=1e-4)
+    overlap = len(set(faiss_result.item_ids) & set(scann_result.item_ids))
+    assert overlap / k >= 0.6  # generous bar - two different ANN algorithms, not required to match exactly
+    assert faiss_result.item_ids[0] == scann_result.item_ids[0]  # both should still recover the true nearest neighbor

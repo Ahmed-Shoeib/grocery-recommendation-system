@@ -20,15 +20,19 @@ def build_vector_index(config: RetrievalConfig) -> VectorIndex:
     (`configs/docker.yaml` selects it) and is imported lazily here so that
     selecting `"faiss"` never requires it to be installed. `"faiss"` is
     the native-Windows development fallback - fast local iteration without
-    Docker, exact search via `IndexFlatIP`, same cosine-equivalent
-    normalized-inner-product semantics as ScaNN.
+    Docker, same cosine-equivalent normalized-inner-product semantics as
+    ScaNN. Both backends now do genuine approximate nearest-neighbor
+    search (FAISS: HNSW; ScaNN: tree + asymmetric hashing + reorder) -
+    `config` is passed straight through to the backend constructor so
+    each backend reads its own ANN tuning fields (`RetrievalConfig.
+    faiss_hnsw_*` / `scann_*`, see `utils/config.py`).
     """
     if config.backend == "scann":
         from recommendation.retrieval.index.scann_index import ScannVectorIndex
 
-        return ScannVectorIndex()
+        return ScannVectorIndex(config)
     if config.backend == "faiss":
-        return FaissVectorIndex()
+        return FaissVectorIndex(config)
     raise ValueError(f"unknown retrieval backend: {config.backend!r}")
 
 

@@ -18,7 +18,7 @@ from typing import Callable, TypeVar
 from recommendation.ranking.features import RANKING_FEATURE_NAMES
 from recommendation.ranking.serialization import RankerArtifacts
 from recommendation.retrieval.two_tower.serialization import TwoTowerArtifacts
-from recommendation.utils.config import AppConfig
+from recommendation.utils.config import AppConfig, RetrievalConfig
 
 T = TypeVar("T")
 
@@ -99,4 +99,49 @@ def validate_vector_index_compatibility(vector_index_size: int, expected_catalog
             f"VectorIndex was built with {vector_index_size} items but the Two-Tower artifacts "
             f"describe a {expected_catalog_size}-item catalog - the index build is inconsistent "
             "with the embeddings it was built from."
+        )
+
+
+def validate_retrieval_config(config: RetrievalConfig) -> None:
+    """Bounds sanity check on the ANN/eligibility-widening tuning fields
+    (`faiss_hnsw_*`, `scann_*`, `eligibility_*` - see `RetrievalConfig`),
+    so a misconfigured YAML (e.g. `eligibility_max_widen_attempts: 0`,
+    which would silently make eligibility filtering never widen past its
+    first, possibly-too-small oversample) fails loudly at startup instead
+    of degrading recommendation quality/fill-rate at first request.
+    Deliberately NOT a deep check of the on-disk index's actual ANN
+    structure against this config - the index is rebuilt fresh from
+    Two-Tower embeddings at every startup (`api.dependencies
+    .build_recommendation_service` calls `vector_index.build(...)`, never
+    `.load()`s a saved artifact for live serving), so there is no
+    config/disk drift to catch there.
+    """
+    positive_int_fields = (
+        "faiss_hnsw_m",
+        "faiss_hnsw_ef_construction",
+        "faiss_hnsw_ef_search",
+        "scann_min_leaves",
+        "scann_max_leaves",
+        "scann_ah_dims_per_block",
+        "scann_training_sample_size",
+        "scann_reorder_k",
+        "eligibility_oversample_factor",
+        "eligibility_oversample_floor",
+        "eligibility_widen_multiplier",
+        "eligibility_max_widen_attempts",
+    )
+    for field_name in positive_int_fields:
+        value = getattr(config, field_name)
+        if value <= 0:
+            raise ArtifactValidationError(f"config.retrieval.{field_name} must be positive, got {value}.")
+
+    if config.scann_max_leaves < config.scann_min_leaves:
+        raise ArtifactValidationError(
+            f"config.retrieval.scann_max_leaves ({config.scann_max_leaves}) must be >= "
+            f"scann_min_leaves ({config.scann_min_leaves})."
+        )
+    if not (0.0 < config.scann_leaves_to_search_fraction <= 1.0):
+        raise ArtifactValidationError(
+            f"config.retrieval.scann_leaves_to_search_fraction must be in (0, 1], got "
+            f"{config.scann_leaves_to_search_fraction}."
         )

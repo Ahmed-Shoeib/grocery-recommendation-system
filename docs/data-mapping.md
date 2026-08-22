@@ -712,20 +712,34 @@ longer unused/reserved).
 **Revised 2026-08-12** (supersedes the original "FAISS default, ScaNN
 optional in Phase 10" design): ScaNN is the **primary, production-
 intended** `VectorIndex` backend, implemented in Phase 5, not deferred.
-Two backends, both exact (brute-force) normalized-inner-product search
-over the L2-normalized 128-D Two-Tower embeddings - i.e. exactly cosine
-similarity - sufficient for the ~50-item synthetic catalog, with
-approximate variants (FAISS IVF/HNSW, ScaNN tree+AH) available without an
-interface change when the catalog grows:
+
+**Revised 2026-08-22** (supersedes the exact-brute-force description
+below): both backends now do genuine APPROXIMATE nearest-neighbor search
+over the L2-normalized 128-D Two-Tower embeddings, not exact brute-force
+- this was originally deferred as a "when the catalog grows" future
+optimization (see the paragraph this revision replaces, kept below for
+historical context up to the "sufficient for the ~50-item synthetic
+catalog" framing, which is what changed); it was brought forward ahead of
+that catalog growth specifically so retrieval doesn't need a second
+redesign later. Both are still exactly cosine similarity (unit-norm
+embeddings), and `EligibilityRestrictedIndex` (below) no longer scans the
+full index per query:
 
 - **ScaNN** - the intended production backend. Confirmed Linux-only, no
   Windows wheel exists or is planned upstream (verified against
   PyPI/GitHub; `scann==1.4.2` ships `cp313-manylinux_2_27_x86_64`
   wheels). Runs inside the Docker/Linux image (repo-root `Dockerfile`;
   a minimal ScaNN-only variant in Phase 5, superseded by the full
-  multi-stage production image in Phase 10 - see section 10.1). Uses
-  `score_brute_force(quantize=False)` - exact, unquantized dot-product
-  search - the ScaNN equivalent of FAISS's `IndexFlatIP`.
+  multi-stage production image in Phase 10 - see section 10.1). Uses a
+  `.tree(...).score_ah(...).reorder(...)` builder chain - tree
+  partitioning to prune the catalog to a handful of leaves per query,
+  asymmetric-hashing (AH) quantization to score within them cheaply, and
+  exact-float reordering of the AH-quantized top candidates before
+  returning, so returned scores for reordered candidates are still exact
+  dot products, not quantized approximations. Leaf count and how many
+  leaves are searched per query are derived from catalog size at build
+  time (`RetrievalConfig.scann_leaves_multiplier` etc.), not hard-coded
+  for one specific catalog size - see `retrieval.index.scann_index`.
 
   **ScaNN/TensorFlow ABI compatibility (Phase 10 finding)**: `scann`'s
   compiled ops extension is NOT ABI-compatible with an arbitrary
@@ -745,30 +759,46 @@ interface change when the catalog grows:
 - **FAISS** (`faiss-cpu`) - the native-Windows **development fallback**.
   Has genuine Windows wheels (verified: PyPI ships `cp313-win_amd64`
   builds), so local dev/tests/training run natively on this Windows
-  machine without Docker. `IndexFlatIP` over the same embeddings.
+  machine without Docker. `IndexHNSWFlat` (`METRIC_INNER_PRODUCT`)
+  wrapped in `IndexIDMap2` over the same embeddings - chosen over
+  IVF/IVF-PQ because it needs no k-means training step (unstable when
+  `nlist` is large relative to a small catalog), so one code path stays
+  correct from today's ~1,200-item catalog to a much larger future one.
+  `M`/`efConstruction`/`efSearch` are config-driven
+  (`RetrievalConfig.faiss_hnsw_*`); `efSearch` is additionally floored at
+  `k * 2` per query in `search()` so recall scales with however large a
+  pool a caller (including the eligibility wrapper's oversampling below)
+  actually requests.
 
 Selected via `retrieval.backend` in `configs/base.yaml` (`faiss` - native
 Windows dev default) or `configs/docker.yaml` (`scann` - what the Docker
 image loads via `RECS_CONFIG_PATH`).
 
-**Pre-retrieval eligibility restriction (Phase 11)**: neither backend's
-`build`/index structure changes for this - `isActive`/`stockQuantity` are
-serving-time catalog state, not something either backend's index needs to
-know about internally. `retrieval.index.eligibility_filter
-.EligibilityRestrictedIndex` wraps an already-built `VectorIndex` (either
-backend) and restricts `search()` results to a caller-supplied eligible-
-id set at query time - it asks the wrapped index for everything it has
-(`index.size`, cheap at exact-brute-force V1 scale) and filters/truncates
-in Python. This was chosen over backend-specific filtering (e.g. FAISS's
-native `IDSelector`) specifically because ScaNN's brute-force pybind
-searcher used here has no equivalent per-query id-filtering hook - one
-backend-agnostic post-filter keeps both backends behaving identically
-(both exact, both filtered the same way) rather than diverging into two
-different filtering code paths with potentially different edge-case
-behavior. If either backend switches to an approximate/partitioned
-structure later (see above), this wrapper's "ask for everything" strategy
-would need to become an adaptive oversampling strategy - noted, not
-solved now, since it isn't a concern at V1's catalog scale.
+**Pre-retrieval eligibility restriction (Phase 11, revised 2026-08-22)**:
+neither backend's `build`/index structure changes for this - `isActive`/
+`stockQuantity` are serving-time catalog state, not something either
+backend's index needs to know about internally. `retrieval.index
+.eligibility_filter.EligibilityRestrictedIndex` wraps an already-built
+`VectorIndex` (either backend) and restricts `search()` results to a
+caller-supplied eligible-id set at query time. It no longer asks the
+wrapped index for everything it has on every query - now that both
+backends are genuinely approximate over a catalog sized to grow well
+beyond V1's scale, that would defeat the point of an ANN structure.
+Instead it oversamples (`RetrievalConfig.eligibility_oversample_factor`,
+floored at `eligibility_oversample_floor`), filters to `allowed_ids`,
+and - only if still short of `k` - widens the request
+(`eligibility_widen_multiplier`) and retries, up to
+`eligibility_max_widen_attempts` times, each attempt capped at the
+index's actual size so it always terminates. An inactive/out-of-stock
+item is never returned at any width; if eligible items are genuinely
+scarce this honestly returns fewer than `k` rather than padding or
+looping forever (see `serving.pipeline.RecommendationResult.fill_rate`).
+This was chosen over backend-specific filtering (e.g. FAISS's native
+`IDSelector`) specifically because ScaNN's pybind searcher used here has
+no equivalent per-query id-filtering hook - one backend-agnostic widening
+loop, working entirely through the existing `VectorIndex.search(query,
+k)` interface, keeps both backends behaving identically rather than
+diverging into two different filtering code paths.
 
 ## 11. Neural ranking (Phase 6)
 

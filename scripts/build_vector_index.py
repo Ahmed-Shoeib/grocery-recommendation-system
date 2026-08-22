@@ -1,8 +1,15 @@
 """Build the configured Phase 5 `VectorIndex` backend (ScaNN inside
 Docker via configs/docker.yaml, FAISS natively on Windows via
-configs/base.yaml) from the Phase 4 item embeddings, verify it against
-brute-force cosine similarity, and report build time, on-disk size, and
-retrieval latency.
+configs/base.yaml) from the Phase 4 item embeddings, sanity-check its
+recall against brute-force cosine similarity, and report build time,
+on-disk size, and retrieval latency.
+
+Both backends now do genuine approximate nearest-neighbor search (see
+retrieval/index/faiss_index.py, scann_index.py), so their top-k results
+are no longer expected to match a brute-force reference exactly - this
+script checks RECALL against that reference (see also
+scripts/evaluate_ann_recall.py for a more rigorous recall/latency
+evaluation over the real trained catalog).
 
 Usage:
     python scripts/build_vector_index.py
@@ -64,26 +71,31 @@ def main() -> None:
     index.save(out_path)
     size_kb = path_size_bytes(out_path) / 1024.0
     print(f"\nBuilt {config.retrieval.backend} VectorIndex over {index.size} items in {build_time_ms:.2f}ms -> saved to {out_path} ({size_kb:.1f} KB on disk)")
-    print("NOTE: ~50 items is far below the scale ANN indexes are built for - build time, on-disk size, and")
-    print("      latency below are sanity-check numbers, not a production-scale ANN benchmark (see docs/data-mapping.md).")
+    print("For a rigorous ANN-vs-exact recall/latency evaluation over the real trained catalog,")
+    print("see scripts/evaluate_ann_recall.py - the check below is a quick sanity check only.")
 
-    # --- Correctness: configured backend's top-k vs. brute-force numpy cosine similarity ---
+    # --- Recall sanity check: configured (approximate) backend's top-k vs.
+    # brute-force numpy cosine similarity. Both backends are now genuinely
+    # approximate, so exact ID/score equality is no longer the right bar -
+    # this checks that the ANN backend's top-k overlaps heavily with the
+    # exact top-k, not that it reproduces it exactly.
     k = min(10, index.size)
     rng = np.random.default_rng(config.random_seed)
     sample_rows = rng.choice(len(item_ids), size=min(10, len(item_ids)), replace=False)
 
-    print(f"\n=== Correctness check: {config.retrieval.backend} vs. brute-force cosine (top-{k}) ===")
-    all_match = True
+    print(f"\n=== Recall sanity check: {config.retrieval.backend} vs. brute-force cosine (top-{k}) ===")
+    recalls = []
     for row in sample_rows:
         query = embeddings[row]
         [result] = index.search(query.reshape(1, -1), k)
-        expected_ids, expected_scores = brute_force_top_k(query, item_ids, embeddings, k)
-        ids_match = result.item_ids == expected_ids
-        scores_match = np.allclose(result.scores, expected_scores, atol=1e-5)
-        all_match &= ids_match and scores_match
-        if not (ids_match and scores_match):
-            print(f"  MISMATCH for query item {item_ids[row]}: {config.retrieval.backend}={result.item_ids} expected={expected_ids}")
-    print("  All sampled queries match exactly." if all_match else "  Mismatches found - see above.")
+        expected_ids, _ = brute_force_top_k(query, item_ids, embeddings, k)
+        overlap = len(set(result.item_ids) & set(expected_ids))
+        recall = overlap / k
+        recalls.append(recall)
+        if recall < 1.0:
+            print(f"  item {item_ids[row]}: recall={recall:.2f} ({config.retrieval.backend} top-{k} overlaps {overlap}/{k} with exact)")
+    mean_recall = float(np.mean(recalls))
+    print(f"  Mean top-{k} recall over {len(sample_rows)} sampled queries: {mean_recall:.3f}")
 
     top1_scores = [index.search(embeddings[row].reshape(1, -1), 1)[0].scores[0] for row in sample_rows]
     print(f"  Self-match top-1 score range: [{min(top1_scores):.6f}, {max(top1_scores):.6f}] (expect ~1.0, exact cosine of a vector with itself)")

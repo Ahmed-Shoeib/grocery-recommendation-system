@@ -77,11 +77,14 @@ sections 14-18.1 for the full rationale behind each:
   final lightweight re-validation immediately before the response is
   built, as defense-in-depth, not the primary mechanism.
 - **FAISS (native Windows dev) / ScaNN (Docker/Linux, primary)** - both
-  exact brute-force search over the same L2-normalized 128-D embeddings;
-  `EligibilityRestrictedIndex` restricts which retrieved ids may enter
-  the candidate pool at query time - it does not rebuild either
-  backend's index structure, so a stock/active change never triggers a
-  retrain or an index rebuild.
+  do genuine approximate nearest-neighbor (ANN) search over the same
+  L2-normalized 128-D embeddings (FAISS: HNSW; ScaNN: tree partitioning +
+  asymmetric-hashing quantization + exact-score reordering - `retrieval
+  .index.faiss_index`/`scann_index`). `EligibilityRestrictedIndex`
+  restricts which retrieved ids may enter the candidate pool at query
+  time via bounded oversampling + progressive widening (not a full-index
+  scan) - it does not rebuild either backend's index structure, so a
+  stock/active change never triggers a retrain or an index rebuild.
 - **`models/sqlite_baseline/`** is the current SQLite-serving artifact
   root (Two-Tower + ranker + FAISS index + the persisted offline
   report). The legacy top-level `models/two_tower`/`models/ranker`
@@ -252,26 +255,37 @@ signal count (`configs/base.yaml: cold_start.*`):
 `VectorIndex` backend - confirmed Linux-only (no Windows wheel exists or
 is planned upstream), so it runs inside Docker. FAISS (`faiss-cpu`, real
 Windows wheels) is the native-Windows **development fallback**, so local
-dev/tests/training run without Docker. Both do exact
-(brute-force) normalized-inner-product search over the same
-L2-normalized 128-D embeddings - mathematically identical to cosine
-similarity - and are verified to produce numerically identical results
-for the same request (see `docs/production-readiness.md`). At the
-current ~50-item catalog, exact search is both correct and effectively
-free; both backends are structured so switching to an approximate
-variant (FAISS IVF/HNSW, ScaNN tree+AH) later is a change inside one
-class, not an interface change. Full rationale: `docs/data-mapping.md` §10.
+dev/tests/training run without Docker. Both do genuine APPROXIMATE
+nearest-neighbor search over the same L2-normalized 128-D embeddings -
+FAISS via `IndexHNSWFlat` (a navigable small-world graph, `METRIC_INNER_
+PRODUCT`), ScaNN via tree partitioning + asymmetric-hashing quantization
+with exact-score reordering of the top candidates - both still
+mathematically cosine similarity, since embeddings are unit-norm. Their
+top-k results are expected to overlap heavily but are no longer
+guaranteed bit-identical (see `scripts/evaluate_ann_recall.py` for a
+measured recall-vs-exact comparison). HNSW/ScaNN parameters (`M`/
+`efConstruction`/`efSearch`; leaf counts/AH quantization/reorder depth)
+are config-driven (`RetrievalConfig` in `utils/config.py`) and derived
+from catalog size where it matters, not hard-coded for one catalog size -
+switching FAISS to IVF/IVF-PQ or retuning ScaNN's tree/AH parameters
+later is still a change inside one class, not an interface change. Full
+rationale: `docs/data-mapping.md` §10.
 
 **Pre-retrieval eligibility restriction is backend-agnostic**: neither
 backend's index structure is filtered/rebuilt when stock or `isActive`
 changes - `retrieval.index.eligibility_filter.EligibilityRestrictedIndex`
 wraps either backend and restricts `search()` results to a caller-
-supplied eligible-id set at query time. ScaNN's brute-force pybind
-searcher has no native per-query id-filtering hook, so rather than give
-FAISS and ScaNN two different filtering code paths (native `IDSelector`
-for one, something else for the other), both go through this one
-backend-agnostic wrapper - the simplest abstraction that treats them
-identically. See `docs/data-mapping.md` §5 for the full rationale.
+supplied eligible-id set at query time via bounded oversampling +
+progressive widening (ask for a multiple of `k`, filter, widen and retry
+up to a capped number of attempts if still short) - never a full-index
+scan on the normal path, since that would defeat the point of an ANN
+backend as the catalog grows. ScaNN's pybind searcher has no native
+per-query id-filtering hook, so rather than give FAISS and ScaNN two
+different filtering code paths (native `IDSelector` for one, something
+else for the other), both go through this one backend-agnostic widening
+loop - the simplest abstraction that treats them identically, and it
+still guarantees an inactive/out-of-stock item is never returned. See
+`docs/data-mapping.md` §5 for the full rationale.
 
 ## Repository layout
 
@@ -689,8 +703,8 @@ exactly which STEP absorbed into which phase.
    above); the 7/8-dimensional encoder is retained only as the BASE
    condition of the controlled ablation experiment below.
 5. ANN retrieval: ScaNN (primary/production backend, Linux/Docker) +
-   FAISS (native-Windows dev fallback), both exact search over the same
-   embeddings.
+   FAISS (native-Windows dev fallback), both genuine approximate search
+   (FAISS HNSW, ScaNN tree+AH+reorder) over the same embeddings.
 6. **Neural ranking** of VectorIndex candidates, richer than retrieval
    features, evaluated (NDCG/Precision/Recall/HitRate/MRR) against a
    raw-retrieval-score baseline. Current ranker uses **29 explicit

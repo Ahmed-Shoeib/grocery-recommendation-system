@@ -14,10 +14,11 @@ from recommendation.serving.startup_validation import (
     load_or_raise,
     require_artifact_dir,
     validate_ranker_artifacts,
+    validate_retrieval_config,
     validate_two_tower_artifacts,
     validate_vector_index_compatibility,
 )
-from recommendation.utils.config import AppConfig, RankingConfig
+from recommendation.utils.config import AppConfig, RankingConfig, RetrievalConfig
 
 
 def _two_tower_artifacts(output_dim=8, encoder_embedding_dim=8, num_items=3) -> TwoTowerArtifacts:
@@ -133,6 +134,32 @@ def test_vector_index_compatibility_passes_when_sizes_match():
 def test_vector_index_compatibility_rejects_size_mismatch():
     with pytest.raises(ArtifactValidationError, match="VectorIndex"):
         validate_vector_index_compatibility(49, 50)
+
+
+# --- validate_retrieval_config ----------------------------------------------
+
+def test_retrieval_config_validation_passes_for_defaults():
+    validate_retrieval_config(RetrievalConfig())  # no raise
+
+
+def test_retrieval_config_validation_rejects_zero_max_widen_attempts():
+    with pytest.raises(ArtifactValidationError, match="eligibility_max_widen_attempts"):
+        validate_retrieval_config(RetrievalConfig(eligibility_max_widen_attempts=0))
+
+
+def test_retrieval_config_validation_rejects_non_positive_hnsw_m():
+    with pytest.raises(ArtifactValidationError, match="faiss_hnsw_m"):
+        validate_retrieval_config(RetrievalConfig(faiss_hnsw_m=0))
+
+
+def test_retrieval_config_validation_rejects_scann_max_leaves_below_min():
+    with pytest.raises(ArtifactValidationError, match="scann_max_leaves"):
+        validate_retrieval_config(RetrievalConfig(scann_min_leaves=100, scann_max_leaves=10))
+
+
+def test_retrieval_config_validation_rejects_out_of_range_leaves_to_search_fraction():
+    with pytest.raises(ArtifactValidationError, match="scann_leaves_to_search_fraction"):
+        validate_retrieval_config(RetrievalConfig(scann_leaves_to_search_fraction=1.5))
 
 
 # --- build_recommendation_service fails fast on missing artifacts ---------

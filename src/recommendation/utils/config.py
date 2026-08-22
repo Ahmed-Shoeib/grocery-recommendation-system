@@ -204,12 +204,61 @@ class RetrievalConfig(BaseModel):
     """`"scann"` is the primary/production ANN backend (Linux/Docker-only,
     see configs/docker.yaml); `"faiss"` is the native-Windows dev
     fallback used by the default config.base.yaml - see
-    docs/data-mapping.md section 10.
+    docs/data-mapping.md section 10. Both backends now do genuine
+    approximate nearest-neighbor search (FAISS: HNSW; ScaNN: tree
+    partitioning + asymmetric-hashing quantization + reordering) rather
+    than exact brute-force - the fields below tune that approximation and
+    are deliberately catalog-size-relative where it matters (e.g. ScaNN's
+    leaf count), not literals tuned for one specific catalog size.
     """
 
     backend: Literal["faiss", "scann"] = "faiss"
     candidate_pool_multiplier: int = 5
     min_candidate_pool: int = 50
+
+    # --- FAISS HNSW (see retrieval.index.faiss_index) ---
+    faiss_hnsw_m: int = 32  # bi-directional links per graph node; higher = better recall, more memory
+    faiss_hnsw_ef_construction: int = 200  # build-time candidate list size; higher = better graph quality, one-time cost
+    faiss_hnsw_ef_search: int = 128  # query-time candidate list size floor; search() also floors this at k*2 per call
+
+    # --- ScaNN tree + asymmetric hashing + reorder (see retrieval.index.scann_index) ---
+    scann_leaves_multiplier: float = 2.0  # num_leaves ~= multiplier * sqrt(catalog_size) - scales with catalog, not a literal
+    scann_min_leaves: int = 20
+    scann_max_leaves: int = 2000
+    scann_leaves_to_search_fraction: float = 0.1  # fraction of leaves searched per query - recall/latency knob
+    scann_ah_dims_per_block: int = 2  # asymmetric-hashing quantization block size (an embedding-dim property, not catalog-size-dependent)
+    scann_aq_threshold: float = 0.2  # anisotropic quantization threshold, ScaNN's recommended default for inner-product search
+    scann_training_sample_size: int = 100_000  # capped at catalog_size at build time if the catalog is smaller
+    # Reordering depth is fixed at BUILD time (ScaNN API constraint, not
+    # adjustable per query) - it re-scores the AH-quantized top
+    # `scann_reorder_k` candidates with exact float embeddings before
+    # returning, recovering most of the recall AH quantization would
+    # otherwise cost. Must stay >= the largest k ever passed to search()
+    # in this deployment, i.e. >= min_candidate_pool * candidate_pool_multiplier
+    # (times the eligibility oversample factor below), or queries asking
+    # for more than this many candidates silently can't get exact-reorder
+    # scores for all of them.
+    scann_reorder_k: int = 200
+
+    # --- Eligibility-restricted search oversampling (see
+    # retrieval.index.eligibility_filter.EligibilityRestrictedIndex) ---
+    # Requesting the whole index per query (the old behavior) defeats an
+    # ANN backend's sublinear-search benefit. Instead: ask for
+    # k * eligibility_oversample_factor (floored at
+    # eligibility_oversample_floor), filter to allowed_ids, and if still
+    # short of k, widen by eligibility_widen_multiplier and retry, up to
+    # eligibility_max_widen_attempts times - each attempt is capped at the
+    # index's actual size, so this always terminates in a bounded number
+    # of search calls. With these defaults, applied to this project's
+    # pool sizes, the sequence happens to reach the full catalog by the
+    # final attempt for a thin/scattered eligible set - but that's a
+    # property of these specific numbers, not a guarantee: a more
+    # aggressive config can plateau below full coverage first, honestly
+    # under-filling rather than falling back to an unbounded full scan.
+    eligibility_oversample_factor: int = 3
+    eligibility_oversample_floor: int = 20
+    eligibility_widen_multiplier: int = 2
+    eligibility_max_widen_attempts: int = 4
 
 
 class SparseBlendConfig(BaseModel):

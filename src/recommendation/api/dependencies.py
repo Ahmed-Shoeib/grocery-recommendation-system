@@ -55,6 +55,7 @@ from recommendation.serving.startup_validation import (
     load_or_raise,
     require_artifact_dir,
     validate_ranker_artifacts,
+    validate_retrieval_config,
     validate_two_tower_artifacts,
     validate_vector_index_compatibility,
 )
@@ -187,6 +188,7 @@ def build_recommendation_service(config: AppConfig) -> RecommendationService:
     validate_two_tower_artifacts(two_tower_artifacts, config)
     ranker_artifacts = load_or_raise("ranker", ranker_dir, load_ranker_artifacts)
     validate_ranker_artifacts(ranker_artifacts)
+    validate_retrieval_config(config.retrieval)
 
     vector_index = build_vector_index(config.retrieval)
     vector_index.build(two_tower_artifacts.item_ids, two_tower_artifacts.item_embeddings)

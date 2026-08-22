@@ -9,14 +9,26 @@ loop / FAISS tests) never requires it to be installed. `factory.py`
 mirrors this: it imports this module only when `retrieval.backend ==
 "scann"` is actually selected.
 
-Uses `score_brute_force(quantize=False)` - exact, unquantized dot-product
-search, no partitioning/quantization - rather than ScaNN's approximate
-tree + asymmetric-hashing (AH) configuration. At the current V1 catalog
-scale (~50 products) exact search is both correct and fast; this mirrors
-the FAISS backend's use of `IndexFlatIP` for the same reason (see
-`faiss_index.py`). Switching to `.tree(...).score_ah(...)` for a larger
-catalog is a change inside this class, not to the `VectorIndex`
-interface.
+Uses ScaNN's approximate tree-partitioning + asymmetric-hashing (AH)
+quantization pipeline, with exact-score reordering of the top candidates
+- `.tree(...)` prunes the catalog to a small number of partitions per
+query, `.score_ah(...)` scores within those partitions using a quantized
+approximation (fast, lossy), and `.reorder(...)` re-scores the surviving
+top candidates against the exact float embeddings before returning, so
+returned scores are exact dot products for whatever candidates make it
+through reordering - not quantized approximations. `num_leaves`/
+`num_leaves_to_search` are derived from the catalog size at build time
+(`RetrievalConfig.scann_leaves_multiplier` etc., see `utils/config.py`)
+rather than hard-coded, so this scales from today's ~1,200-item catalog
+to a much larger future one without a code change - mirrors the FAISS
+backend's `IndexHNSWFlat` migration for the same reason (see
+`faiss_index.py`).
+
+`scann_reorder_k` is fixed at BUILD time (a ScaNN API constraint - unlike
+FAISS's `efSearch`, it cannot vary per query) and must stay >= the
+largest `k` this deployment will ever pass to `search()`, or callers
+requesting a very large pool won't get exact-reorder scores for all of
+it - see the field's docstring in `RetrievalConfig`.
 
 Embeddings must already be L2-normalized (Phase 4's Two-Tower output is);
 `"dot_product"` as the distance measure over unit-norm vectors is then
@@ -27,15 +39,18 @@ exactly cosine similarity, and ScaNN returns neighbors sorted by
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 
 import numpy as np
 
 from recommendation.retrieval.index.base import SearchResult, VectorIndex
+from recommendation.utils.config import RetrievalConfig
 
 
 class ScannVectorIndex(VectorIndex):
-    def __init__(self) -> None:
+    def __init__(self, config: RetrievalConfig | None = None) -> None:
+        self._config = config or RetrievalConfig()
         self._searcher = None
         self._item_ids: list[int] | None = None
         self._dim: int | None = None
@@ -54,9 +69,21 @@ class ScannVectorIndex(VectorIndex):
         self._dim = embeddings.shape[1]
         self._item_ids = list(item_ids)
 
+        cfg = self._config
+        catalog_size = len(item_ids)
+        num_leaves = min(
+            catalog_size,
+            max(cfg.scann_min_leaves, min(cfg.scann_max_leaves, round(cfg.scann_leaves_multiplier * math.sqrt(catalog_size)))),
+        )
+        num_leaves_to_search = max(1, round(num_leaves * cfg.scann_leaves_to_search_fraction))
+        training_sample_size = min(catalog_size, cfg.scann_training_sample_size)
+        reorder_k = min(catalog_size, cfg.scann_reorder_k)
+
         self._searcher = (
             scann.scann_ops_pybind.builder(embeddings, len(item_ids), "dot_product")
-            .score_brute_force(quantize=False)
+            .tree(num_leaves=num_leaves, num_leaves_to_search=num_leaves_to_search, training_sample_size=training_sample_size)
+            .score_ah(dimensions_per_block=cfg.scann_ah_dims_per_block, anisotropic_quantization_threshold=cfg.scann_aq_threshold)
+            .reorder(reorder_k)
             .build()
         )
 
