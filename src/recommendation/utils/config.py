@@ -223,9 +223,27 @@ class RetrievalConfig(BaseModel):
 
     # --- ScaNN tree + asymmetric hashing + reorder (see retrieval.index.scann_index) ---
     scann_leaves_multiplier: float = 2.0  # num_leaves ~= multiplier * sqrt(catalog_size) - scales with catalog, not a literal
-    scann_min_leaves: int = 20
+    # Density floor, not a leaf-count floor: num_leaves is capped so each
+    # partition averages at least this many catalog points. An earlier
+    # version used an unconditional MINIMUM leaf count instead - that
+    # padded a mid-size catalog (e.g. 50 items) up to 20 leaves regardless
+    # (~2.5 points/leaf), which made ScaNN's kmeans tree partitioner
+    # produce empty/zero-norm centroids and silently return NaN scores
+    # for items in the broken partition - confirmed via a real Docker/CI
+    # run, where it NaN-poisoned ranker training end-to-end. This field
+    # scales num_leaves DOWN for small catalogs instead.
+    scann_min_points_per_leaf: int = 20
     scann_max_leaves: int = 2000
-    scann_leaves_to_search_fraction: float = 0.1  # fraction of leaves searched per query - recall/latency knob
+    # Fraction of leaves searched per query - recall/latency knob. 0.3 is
+    # empirically validated (not a guess) against the real trained
+    # 1,200-item/128-D catalog in Docker/CI: at 0.1-0.15 the tree
+    # partitioning missed the query's own point's leaf often enough to
+    # fail self-match and drop Recall@10 to ~0.88; 0.3 recovers self-match
+    # 200/200 and Recall@10=0.956 / Recall@20=0.919 over 200 sampled
+    # queries (measured with scann_min_points_per_leaf=20 below) - see
+    # scripts/evaluate_ann_recall.py to re-measure after any change to
+    # this, scann_leaves_multiplier, or scann_min_points_per_leaf.
+    scann_leaves_to_search_fraction: float = 0.3
     scann_ah_dims_per_block: int = 2  # asymmetric-hashing quantization block size (an embedding-dim property, not catalog-size-dependent)
     scann_aq_threshold: float = 0.2  # anisotropic quantization threshold, ScaNN's recommended default for inner-product search
     scann_training_sample_size: int = 100_000  # capped at catalog_size at build time if the catalog is smaller

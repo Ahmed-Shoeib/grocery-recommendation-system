@@ -24,9 +24,9 @@ def test_retrieval_ann_config_defaults():
     assert retrieval.faiss_hnsw_ef_construction == 200
     assert retrieval.faiss_hnsw_ef_search == 128
     assert retrieval.scann_leaves_multiplier == 2.0
-    assert retrieval.scann_min_leaves == 20
+    assert retrieval.scann_min_points_per_leaf == 20
     assert retrieval.scann_max_leaves == 2000
-    assert retrieval.scann_leaves_to_search_fraction == 0.1
+    assert retrieval.scann_leaves_to_search_fraction == 0.3
     assert retrieval.scann_ah_dims_per_block == 2
     assert retrieval.scann_reorder_k == 200
     assert retrieval.eligibility_oversample_factor == 3

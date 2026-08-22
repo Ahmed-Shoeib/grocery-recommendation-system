@@ -131,9 +131,9 @@ retrieval:
 
   # ScaNN tree + asymmetric hashing + reorder
   scann_leaves_multiplier: 2.0
-  scann_min_leaves: 20
+  scann_min_points_per_leaf: 20  # density floor, not a leaf-count floor - see utils/config.py RetrievalConfig
   scann_max_leaves: 2000
-  scann_leaves_to_search_fraction: 0.1
+  scann_leaves_to_search_fraction: 0.3  # empirically validated in Docker/CI against the real 1,200-item catalog - see utils/config.py RetrievalConfig
   scann_ah_dims_per_block: 2
   scann_aq_threshold: 0.2
   scann_training_sample_size: 100000

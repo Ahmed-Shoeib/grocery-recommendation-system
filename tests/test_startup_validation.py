@@ -152,9 +152,9 @@ def test_retrieval_config_validation_rejects_non_positive_hnsw_m():
         validate_retrieval_config(RetrievalConfig(faiss_hnsw_m=0))
 
 
-def test_retrieval_config_validation_rejects_scann_max_leaves_below_min():
-    with pytest.raises(ArtifactValidationError, match="scann_max_leaves"):
-        validate_retrieval_config(RetrievalConfig(scann_min_leaves=100, scann_max_leaves=10))
+def test_retrieval_config_validation_rejects_non_positive_scann_min_points_per_leaf():
+    with pytest.raises(ArtifactValidationError, match="scann_min_points_per_leaf"):
+        validate_retrieval_config(RetrievalConfig(scann_min_points_per_leaf=0))
 
 
 def test_retrieval_config_validation_rejects_out_of_range_leaves_to_search_fraction():

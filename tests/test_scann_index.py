@@ -9,9 +9,9 @@ actually exercised - see docs/data-mapping.md section 10.
 Fixture catalog bumped from 5 to 300 synthetic items (2026-08-22, ANN
 migration): ScaNN's tree partitioning + asymmetric-hashing quantization
 need enough points for `.tree()`/`.score_ah()` to do something
-non-degenerate - at 5 items, `num_leaves` collapses to `scann_min_leaves`
-and every leaf is effectively the whole catalog, which wouldn't actually
-exercise the approximate path this file is meant to verify.
+non-degenerate - at 5 items, `num_leaves` collapses to 1 and the whole
+catalog is effectively one partition, which wouldn't actually exercise
+the approximate path this file is meant to verify.
 """
 
 import numpy as np
@@ -119,6 +119,28 @@ def test_build_uses_tree_and_ah_not_brute_force(catalog, monkeypatch):
     assert "score_brute_force" not in method_names
 
 
+def test_tiny_catalog_falls_back_to_brute_force_instead_of_crashing():
+    """ScaNN's asymmetric hashing (`hash_type="lut16"`, the default) has
+    a hard, non-configurable floor: `num_clusters_per_block` is fixed at
+    16, and AH training raises `RuntimeError` if the catalog has fewer
+    than 16 points - confirmed against the real installed scann package.
+    Below that floor, `build()` must fall back to
+    `.score_brute_force(...)` (exact search) rather than crash - this is
+    a real production edge case (a brand-new/tiny catalog), not just a
+    test-fixture concern.
+    """
+    rng = np.random.default_rng(0)
+    item_ids = [10, 20, 30, 40, 50]
+    embeddings = _l2_normalize(rng.normal(size=(5, 8)).astype(np.float32))
+
+    idx = ScannVectorIndex()
+    idx.build(item_ids, embeddings)  # must not raise
+
+    [result] = idx.search(embeddings[0].reshape(1, -1), k=1)
+    assert result.item_ids[0] == item_ids[0]
+    assert result.scores[0] == pytest.approx(1.0, abs=1e-4)
+
+
 def test_ann_params_are_config_driven(catalog, monkeypatch):
     """Two different RetrievalConfig ScaNN parameter sets must produce
     different builder kwargs - proves leaf count / AH block size are not
@@ -147,13 +169,13 @@ def test_ann_params_are_config_driven(catalog, monkeypatch):
 
     monkeypatch.setattr(scann.scann_ops_pybind, "builder", lambda *a, **kw: _FakeBuilder())
 
-    small_cfg = RetrievalConfig(scann_leaves_multiplier=1.0, scann_min_leaves=5, scann_ah_dims_per_block=1, scann_reorder_k=50)
+    small_cfg = RetrievalConfig(scann_leaves_multiplier=1.0, scann_min_points_per_leaf=5, scann_ah_dims_per_block=1, scann_reorder_k=50)
     idx_small = ScannVectorIndex(small_cfg)
     idx_small.build(item_ids, embeddings)
     small_tree, small_ah, small_reorder = dict(captured["tree"]), dict(captured["score_ah"]), captured["reorder"]
 
     captured.clear()
-    large_cfg = RetrievalConfig(scann_leaves_multiplier=5.0, scann_min_leaves=5, scann_ah_dims_per_block=4, scann_reorder_k=250)
+    large_cfg = RetrievalConfig(scann_leaves_multiplier=5.0, scann_min_points_per_leaf=5, scann_ah_dims_per_block=4, scann_reorder_k=250)
     idx_large = ScannVectorIndex(large_cfg)
     idx_large.build(item_ids, embeddings)
     large_tree, large_ah, large_reorder = dict(captured["tree"]), dict(captured["score_ah"]), captured["reorder"]
@@ -170,9 +192,38 @@ def test_search_results_are_sorted_descending_by_score(index, catalog):
 
 
 def test_search_k_is_capped_to_catalog_size(index, catalog):
+    """Never returns MORE than the catalog holds, and never a phantom/
+    NaN-scored entry - but unlike FAISS (whose `efSearch` floor makes a
+    k=catalog_size request reliably reach the whole graph), ScaNN's tree
+    partitioning only visits `num_leaves_to_search` of `num_leaves`
+    partitions (fixed at build time), so it can legitimately return FEWER
+    than the full catalog even when asked for everything - confirmed via
+    a real Docker/CI run, where a naive "must equal catalog size"
+    assertion failed on real embeddings despite `search()` behaving
+    correctly (see its own docstring on why NaN-scored slots are
+    filtered rather than kept). `EligibilityRestrictedIndex`'s widening
+    loop is designed around exactly this - see its module docstring.
+    """
     item_ids, embeddings = catalog
     [result] = index.search(embeddings[0].reshape(1, -1), k=1000)
-    assert len(result.item_ids) == len(item_ids)
+    assert 0 < len(result.item_ids) <= len(item_ids)
+    assert not any(np.isnan(s) for s in result.scores)
+
+
+def test_search_never_returns_nan_scores_or_phantom_ids(index, catalog):
+    """Regression test for a real bug found in Docker/CI: requesting more
+    neighbors than the tree-partitioned search actually visited caused
+    ScaNN to pad the tail with NaN scores (and along with them,
+    non-matching ids) rather than truncating - which silently NaN-
+    poisoned ranker training end-to-end via the retrieval_score feature.
+    `item_ids` and `scores` must always be the same (possibly truncated)
+    length, with no NaN anywhere.
+    """
+    item_ids, embeddings = catalog
+    results = index.search(embeddings, k=len(item_ids))
+    for result in results:
+        assert len(result.item_ids) == len(result.scores)
+        assert not any(np.isnan(s) for s in result.scores)
 
 
 def test_search_handles_batch_of_queries(index, catalog):

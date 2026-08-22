@@ -47,6 +47,20 @@ import numpy as np
 from recommendation.retrieval.index.base import SearchResult, VectorIndex
 from recommendation.utils.config import RetrievalConfig
 
+# ScaNN's asymmetric hashing has a hard floor, not a tunable one:
+# `.score_ah(..., hash_type="lut16")` (the default, used here) fixes
+# `num_clusters_per_block` at 16 - AH training raises a RuntimeError if
+# the catalog has fewer than 16 points to train those clusters on
+# ("Number of clusters per block (16) is greater than asymmetric hashing
+# training data size (N)"), independent of every other config knob in
+# this module. This is far below any real production catalog (V1's is
+# ~1,200 items) but is a real crash risk for a brand-new/tiny catalog, so
+# `build()` falls back to `.score_brute_force(quantize=False)` - exact
+# search, ScaNN's own pre-migration behavior - below this floor rather
+# than let AH training raise. The genuine ANN path (tree + AH + reorder)
+# is unconditional at and above this size.
+_MIN_CATALOG_SIZE_FOR_ASYMMETRIC_HASHING = 16
+
 
 class ScannVectorIndex(VectorIndex):
     def __init__(self, config: RetrievalConfig | None = None) -> None:
@@ -71,21 +85,46 @@ class ScannVectorIndex(VectorIndex):
 
         cfg = self._config
         catalog_size = len(item_ids)
-        num_leaves = min(
-            catalog_size,
-            max(cfg.scann_min_leaves, min(cfg.scann_max_leaves, round(cfg.scann_leaves_multiplier * math.sqrt(catalog_size)))),
-        )
-        num_leaves_to_search = max(1, round(num_leaves * cfg.scann_leaves_to_search_fraction))
-        training_sample_size = min(catalog_size, cfg.scann_training_sample_size)
-        reorder_k = min(catalog_size, cfg.scann_reorder_k)
+        builder = scann.scann_ops_pybind.builder(embeddings, len(item_ids), "dot_product")
 
-        self._searcher = (
-            scann.scann_ops_pybind.builder(embeddings, len(item_ids), "dot_product")
-            .tree(num_leaves=num_leaves, num_leaves_to_search=num_leaves_to_search, training_sample_size=training_sample_size)
-            .score_ah(dimensions_per_block=cfg.scann_ah_dims_per_block, anisotropic_quantization_threshold=cfg.scann_aq_threshold)
-            .reorder(reorder_k)
-            .build()
-        )
+        if catalog_size < _MIN_CATALOG_SIZE_FOR_ASYMMETRIC_HASHING:
+            # Small-catalog fallback (see module-level constant docstring)
+            # - exact search, not a change to the production ANN path.
+            self._searcher = builder.score_brute_force(quantize=False).build()
+        else:
+            # num_leaves is the min of THREE independent caps: the
+            # sqrt(catalog_size)-scaling target (`raw_leaves` - the "how
+            # many partitions does a catalog this size deserve" signal),
+            # a hard ceiling (`scann_max_leaves`), and a density floor
+            # (`density_capped_leaves`) that keeps at least
+            # `scann_min_points_per_leaf` points per partition on
+            # average. That last cap matters more than it looks: without
+            # it (an earlier version of this code used an unconditional
+            # `scann_min_leaves` FLOOR instead), a mid-size catalog (e.g.
+            # 50 items) got padded up to 20 leaves regardless - only ~2.5
+            # points/leaf - and ScaNN's kmeans tree partitioner degrades
+            # to empty/zero-norm centroids at that point ("Could not
+            # normalize centroid due to zero norm or empty or zero-weight
+            # partition"), which silently produces NaN scores for items
+            # assigned to the broken partition. Confirmed via a real
+            # Docker/CI run: this exact failure mode NaN-poisoned ranker
+            # training end-to-end (retrieval_score feature -> loss -> all
+            # weights). `scann_min_points_per_leaf` fixes that by scaling
+            # num_leaves DOWN for small catalogs instead of up.
+            raw_leaves = max(1, round(cfg.scann_leaves_multiplier * math.sqrt(catalog_size)))
+            density_capped_leaves = max(1, catalog_size // cfg.scann_min_points_per_leaf)
+            num_leaves = min(catalog_size, cfg.scann_max_leaves, raw_leaves, density_capped_leaves)
+            num_leaves_to_search = max(1, round(num_leaves * cfg.scann_leaves_to_search_fraction))
+            training_sample_size = min(catalog_size, cfg.scann_training_sample_size)
+            reorder_k = min(catalog_size, cfg.scann_reorder_k)
+
+            self._searcher = (
+                builder
+                .tree(num_leaves=num_leaves, num_leaves_to_search=num_leaves_to_search, training_sample_size=training_sample_size)
+                .score_ah(dimensions_per_block=cfg.scann_ah_dims_per_block, anisotropic_quantization_threshold=cfg.scann_aq_threshold)
+                .reorder(reorder_k)
+                .build()
+            )
 
     def search(self, query_embeddings: np.ndarray, k: int) -> list[SearchResult]:
         if self._searcher is None:
@@ -104,8 +143,27 @@ class ScannVectorIndex(VectorIndex):
 
         results = []
         for row_neighbors, row_scores in zip(neighbor_rows, scores):
-            item_ids = [self._item_ids[i] for i in row_neighbors]
-            results.append(SearchResult(item_ids=item_ids, scores=[float(s) for s in row_scores]))
+            # ScaNN's tree partitioning only visits `num_leaves_to_search`
+            # of `num_leaves` partitions (fixed at build time) - if a
+            # query asks for more neighbors than that visited subset
+            # actually contains (most likely at large k, e.g. k close to
+            # or equal to the full catalog size), it pads the tail of
+            # `scores` with NaN rather than shrinking the result, with
+            # `row_neighbors` for those slots not a genuine match either
+            # (confirmed empirically: NaN scores + otherwise-valid-looking
+            # ids, both only in the low-relevance tail). FAISS signals the
+            # equivalent "fewer matches than k" case with an int id of -1
+            # (filtered above via `faiss_index.py`'s `row_ids != -1`) -
+            # ScaNN has no id-level sentinel, so the score's NaN is the
+            # only signal; drop those slots the same way, or a phantom
+            # entry with a fabricated score/rank can leak into a
+            # downstream feature (this NaN-poisoned ranker training
+            # end-to-end before this filter was added - confirmed via a
+            # real Docker/CI run, not a hypothetical).
+            valid = ~np.isnan(row_scores)
+            item_ids = [self._item_ids[i] for i, ok in zip(row_neighbors, valid) if ok]
+            valid_scores = [float(s) for s, ok in zip(row_scores, valid) if ok]
+            results.append(SearchResult(item_ids=item_ids, scores=valid_scores))
         return results
 
     def save(self, path: str | Path) -> None:

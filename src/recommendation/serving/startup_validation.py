@@ -120,7 +120,7 @@ def validate_retrieval_config(config: RetrievalConfig) -> None:
         "faiss_hnsw_m",
         "faiss_hnsw_ef_construction",
         "faiss_hnsw_ef_search",
-        "scann_min_leaves",
+        "scann_min_points_per_leaf",
         "scann_max_leaves",
         "scann_ah_dims_per_block",
         "scann_training_sample_size",
@@ -135,11 +135,6 @@ def validate_retrieval_config(config: RetrievalConfig) -> None:
         if value <= 0:
             raise ArtifactValidationError(f"config.retrieval.{field_name} must be positive, got {value}.")
 
-    if config.scann_max_leaves < config.scann_min_leaves:
-        raise ArtifactValidationError(
-            f"config.retrieval.scann_max_leaves ({config.scann_max_leaves}) must be >= "
-            f"scann_min_leaves ({config.scann_min_leaves})."
-        )
     if not (0.0 < config.scann_leaves_to_search_fraction <= 1.0):
         raise ArtifactValidationError(
             f"config.retrieval.scann_leaves_to_search_fraction must be in (0, 1], got "
