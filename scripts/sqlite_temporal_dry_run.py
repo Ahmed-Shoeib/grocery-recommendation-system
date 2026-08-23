@@ -5,20 +5,20 @@ Does NOT train, retrain, or touch any model artifact - this only exercises
 `recommendation.evaluation.temporal_future_purchase`'s split construction,
 point-in-time truncation, eligibility partitioning, and leakage audit
 against the real (entirely synthetic) SQLite dataset, and reports the
-statistics/example timelines/audit results requested for this phase.
+resulting statistics, example timelines, and audit results.
 
 Computing actual Top-N recommendation metrics (Recall/NDCG/etc. from a
-real ranked list) is intentionally NOT part of this script: doing so
+real ranked list) is intentionally not part of this script: doing so
 meaningfully would require the Two-Tower item tower to encode this
 database's 1,200-product catalog and a VectorIndex built over those
 embeddings - the currently-trained artifacts under `models/` were fit
-against the OLD 50-product synthetic catalog (different product ids,
-different brand vocabulary) and rebuilding the index is explicitly out of
-scope for this phase. The metric FUNCTIONS themselves (`evaluation
+against the original, smaller synthetic catalog (different product ids,
+different brand vocabulary), so rebuilding the index for this dataset is
+out of scope here. The metric functions themselves (`evaluation
 .retrieval_metrics`) are proven correct against hand-computed worked
-examples in `tests/test_retrieval_metrics.py`, including the exact multi-
-relevant-item example this phase's spec described - they are ready to be
-plugged into real Top-N output once retraining happens.
+examples in `tests/test_retrieval_metrics.py`, including a multi-relevant-
+item case - they are ready to be plugged into real Top-N output once
+retraining happens against this catalog.
 """
 
 from __future__ import annotations

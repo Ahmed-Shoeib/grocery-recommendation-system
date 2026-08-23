@@ -2,9 +2,9 @@
 in this module, so every function here is unit-testable without a
 Streamlit runtime.
 
-STEP 9 (docs/data-mapping.md section 18): these functions now run
-SERVER-SIDE only, called from `api.routes`'s STEP 9 endpoints
-(`GET /v1/users`, `GET /v1/users/{id}/profile`) - the Streamlit dashboard
+These functions run SERVER-SIDE only (docs/data-mapping.md section 18),
+called from `api.routes`'s read-only endpoints (`GET /v1/users`,
+`GET /v1/users/{id}/profile`) - the Streamlit dashboard
 no longer imports this module or `RecommendationService` at all; it goes
 through `ui.api_client.RecommendationApiClient` (HTTP) instead. This
 module still never reimplements recommendation/ranking/feature-
@@ -70,7 +70,7 @@ class UserDetail:
 def load_user_detail(service: RecommendationService, user_id: int) -> UserDetail | None:
     """Returns None for a genuinely unknown user_id (no `UserProfile`) -
     the same distinction `api.errors.UnknownUserError` draws (see
-    docs/data-mapping.md section 3's Phase 8 note).
+    docs/data-mapping.md section 3's note).
     """
     profile = service.bundle.users.get_user_profile(user_id)
     if profile is None:

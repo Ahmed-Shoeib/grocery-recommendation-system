@@ -1,9 +1,9 @@
-"""Train the Phase 6 neural ranker end to end and report results.
+"""Train the neural ranker end to end and report results.
 
-Reuses the ALREADY-TRAINED Phase 4 Two-Tower model from
-`models/two_tower/` (does not retrain it) and Phase 5's `VectorIndex`
-abstraction to source candidates - run `scripts/train_two_tower.py`
-first if those artifacts don't exist yet.
+Reuses the already-trained Two-Tower model from `models/two_tower/`
+(does not retrain it) and the `VectorIndex` abstraction to source
+candidates - run `scripts/train_two_tower.py` first if those artifacts
+don't exist yet.
 
 Usage:
     python scripts/train_ranker.py
@@ -65,7 +65,7 @@ def main() -> None:
 
     result = train_ranker(bundle, feature_result, two_tower_artifacts, config, st_encoder=st_encoder)
 
-    print("\n=== Phase 6 Ranker Training Report ===")
+    print("\n=== Ranker Training Report ===")
     print(f"Training examples: {result.num_train_examples} ({result.num_train_positive} positive / {result.num_train_negative} negative)")
     print(f"Validation-loss examples: {result.num_val_loss_examples}")
     print(f"Evaluable users (val+test targets): {result.num_eval_users}")

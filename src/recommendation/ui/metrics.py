@@ -1,20 +1,20 @@
-"""Offline evaluation for the PRE-STEP-9 dashboard's Metrics/Debug section -
-reuses Phase 4/6/7's own evaluation machinery unchanged (`retrieval
-.two_tower.splitting`/`.examples`, `serving.pipeline`, `serving.evaluation`),
-the exact same non-temporal leave-one-out protocol `scripts/run_pipeline.py`
-reports. Nothing here invents a new metric or a production/online metric
-(CTR, impressions, conversion) - V1 has no event-tracking pipeline to
-compute those from (docs/data-mapping.md section 7/8). Every value this
-module returns is an OFFLINE, synthetic-dataset metric.
+"""Offline evaluation for the dashboard's legacy Metrics/Debug section -
+reuses the Two-Tower/ranker/pipeline evaluation machinery unchanged
+(`retrieval.two_tower.splitting`/`.examples`, `serving.pipeline`,
+`serving.evaluation`), the exact same non-temporal leave-one-out protocol
+`scripts/run_pipeline.py` reports. Nothing here invents a new metric or a
+production/online metric (CTR, impressions, conversion) - there is no
+event-tracking pipeline to compute those from (docs/data-mapping.md
+section 7/8). Every value this module returns is an OFFLINE,
+synthetic-dataset metric.
 
-**Legacy / not on the live serving path (as of STEP 9's offline-report
-follow-up, docs/data-mapping.md section 18.1).** `GET /v1/metrics/offline`
-no longer calls `compute_offline_metrics` synchronously per request - that
-was ~88s against the SQLite baseline and reported the OLD non-temporal
-protocol, not the STEP 5/7/8-approved temporal future-purchase protocol
-the currently-served `models/sqlite_baseline/` artifacts are actually
-trained/evaluated against. The route now does a cheap read of a report
-PERSISTED by `scripts/generate_offline_report.py`
+**Legacy / not on the live serving path** (docs/data-mapping.md section
+18.1). `GET /v1/metrics/offline` no longer calls `compute_offline_metrics`
+synchronously per request - that was ~88s against the SQLite baseline and
+reported the OLD non-temporal protocol, not the temporal future-purchase
+protocol the currently-served `models/sqlite_baseline/` artifacts are
+actually trained/evaluated against. The route now does a cheap read of a
+report PERSISTED by `scripts/generate_offline_report.py`
 (`evaluation.offline_report`); `api.routes`/`ui.dashboard` no longer import
 this module. Kept as-is (not deleted or refactored) - this file and its
 test (`tests/test_ui_metrics.py`) still exercise the non-temporal

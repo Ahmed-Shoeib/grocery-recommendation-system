@@ -1,8 +1,8 @@
-"""Build the configured Phase 5 `VectorIndex` backend (ScaNN inside
-Docker via configs/docker.yaml, FAISS natively on Windows via
-configs/base.yaml) from the Phase 4 item embeddings, sanity-check its
-recall against brute-force cosine similarity, and report build time,
-on-disk size, and retrieval latency.
+"""Build the configured `VectorIndex` backend (ScaNN inside Docker via
+configs/docker.yaml, FAISS natively on Windows via configs/base.yaml)
+from the trained item embeddings, sanity-check its recall against
+brute-force cosine similarity, and report build time, on-disk size, and
+retrieval latency.
 
 Both backends now do genuine approximate nearest-neighbor search (see
 retrieval/index/faiss_index.py, scann_index.py), so their top-k results

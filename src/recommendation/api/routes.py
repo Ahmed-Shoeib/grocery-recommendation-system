@@ -1,28 +1,16 @@
 """V1 recommendation API routes. Every handler is a thin translation
-layer: validate/parse -> call `RecommendationService` (which itself only
-calls `serving.pipeline.recommend`, no logic duplicated here) -> map the
-result onto the versioned `api.schemas` wire contract. Eligibility
-filtering (hard pre-retrieval gate + final lightweight validation)
-happens entirely inside the pipeline - nothing here re-filters or
-reorders results.
+layer: validate/parse -> call `RecommendationService` (which only calls
+`serving.pipeline.recommend`; no logic is duplicated here) -> map onto
+the versioned `api.schemas` wire contract. Eligibility filtering (hard
+pre-retrieval gate + final lightweight validation) happens entirely
+inside the pipeline, so nothing here re-filters or reorders results.
 
-STEP 9 (docs/data-mapping.md section 18) additions:
-`/users/{id}/recommendations`'s items are now enriched with display
-fields (`ui.data_access.format_recommendation_table`, unchanged, just
-called from here instead of from `dashboard.py` directly) so a client
-never needs its own separate catalog access. `/users`, `/users/{id}
-/profile` are small, generally-useful read-only endpoints - NOT
-recommendation generation - added so the Streamlit dashboard (now a pure
-HTTP client) can still browse users/engagement data without instantiating
-a `RecommendationService` itself; they reuse `ui.data_access` unchanged,
-no new business logic.
-
-`/metrics/offline` (STEP 9 follow-up fix, see `evaluation.offline_report`
-module docstring) is a cheap READ of a report PERSISTED by
-`scripts/generate_offline_report.py` - it never runs an evaluation pass
-itself, so unlike the endpoints above it does not touch `RecommendationService`'s
-pipeline-facing methods at all, only `service.config`/`service
-.ranker_model_version`/`service.ranker_metadata` (already-loaded values).
+`/users` and `/users/{id}/profile` are read-only browsing endpoints for
+the Streamlit dashboard, reusing `ui.data_access` unchanged; `/metrics
+/offline` is a cheap read of a report persisted by
+`scripts/generate_offline_report.py`, never a live evaluation run - it
+only touches already-loaded `service.config`/`service
+.ranker_model_version`/`service.ranker_metadata`, not the pipeline.
 """
 
 from __future__ import annotations
@@ -214,9 +202,9 @@ async def get_user_profile(user_id: int, service: RecommendationService = Depend
 @router.get("/metrics/offline", response_model=OfflineMetricsResponse)
 async def get_offline_metrics(service: RecommendationService = Depends(get_service)) -> OfflineMetricsResponse:
     """Cheap READ of the PERSISTED offline evaluation report produced by
-    `scripts/generate_offline_report.py` (the APPROVED STEP 5/7/8 temporal
-    future-purchase protocol - see `evaluation.offline_report` module
-    docstring). Never runs `generate_recommendations`/an evaluation pass
+    `scripts/generate_offline_report.py` (the temporal future-purchase
+    protocol - see `evaluation.offline_report` module docstring). Never
+    runs `generate_recommendations`/an evaluation pass
     itself - this handler does not call the pipeline at all.
 
     Fails clearly (409) rather than silently falling back to a live

@@ -1,5 +1,5 @@
-"""Recency diagnostics for STEP 5 (recency weighting - see
-docs/data-mapping.md section 14).
+"""Recency diagnostics (recency weighting - see docs/data-mapping.md
+section 14).
 
 Does NOT train or evaluate anything - purely illustrative:
 

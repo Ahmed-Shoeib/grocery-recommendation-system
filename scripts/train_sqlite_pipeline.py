@@ -1,12 +1,12 @@
-"""STEP 7: train the COMPLETE recommendation pipeline FROM SCRATCH against
-`data/sqlite/backend_shaped_synthetic.db`, using the temporal future-
-purchase protocol (STEP 5) for train/validation/test separation and the
-current (STEP 6) recency+price-aware feature set - see docs/data-mapping.md
-section 16 for the full design writeup.
+"""Train the complete recommendation pipeline from scratch against
+`data/sqlite/backend_shaped_synthetic.db`, using the temporal
+future-purchase protocol for train/validation/test separation and the
+recency+price-aware feature set - see docs/data-mapping.md section 16 for
+the full design writeup.
 
-Produces NEW artifacts under `models/sqlite_baseline/` - the pre-existing
-`models/two_tower`/`models/ranker` (trained on the old synthetic
-7/8/23-dimension feature set) are NEVER read or overwritten by this
+Produces new artifacts under `models/sqlite_baseline/` - the pre-existing
+`models/two_tower`/`models/ranker` (trained on the original synthetic
+7/8/23-dimension feature set) are never read or overwritten by this
 script.
 
 Usage:
@@ -170,7 +170,7 @@ def main() -> None:
 
     events_by_user = group_events_by_user(all_events)
 
-    # History-tier distribution (STEP 7 diagnostic - full current visible history, not point-in-time).
+    # History-tier distribution (diagnostic - full current visible history, not point-in-time).
     tier_counts: Counter[HistoryTier] = Counter()
     for uid in user_ids:
         n_events = len(events_by_user.get(uid, []))
@@ -222,10 +222,10 @@ def main() -> None:
 
     product_lookup = {p.id: p for p in products}
 
-    # ================= SECTION: leakage audit (reused from STEP 5) =================
+    # ================= SECTION: leakage audit =================
     print()
     print("=" * 78)
-    print("SECTION: leakage audit (reused STEP 5 audit, unmodified)")
+    print("SECTION: leakage audit (reused, unmodified)")
     print("=" * 78)
     total_checked, total_failed = 0, 0
     for s in splits.values():

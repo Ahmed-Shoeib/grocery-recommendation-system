@@ -1,6 +1,6 @@
 """Builds ranking training/validation examples and evaluation cases from
-retrieval-stage output (the trained Two-Tower model + a Phase 5
-`VectorIndex`), applying the same target-leakage discipline as Phase 4's
+retrieval-stage output (the trained Two-Tower model + a trained
+`VectorIndex`), applying the same target-leakage discipline as
 `retrieval.two_tower.examples` (leave-one-out per positive) and reusing
 the SAME `UserSplit`s as Two-Tower training so held-out val/test targets
 are identical between retrieval and ranking evaluation - required for the

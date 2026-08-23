@@ -5,7 +5,7 @@
 #
 # Which file loads: RECS_CONFIG_PATH env var (defaults to this file).
 # Individual settings can then be overridden on top, without editing any
-# YAML file - useful for containers/deployment (Phase 10):
+# YAML file - useful for containers/deployment:
 #   RECS_MODELS_DIR              -> paths.models_dir
 #   RECS_LOG_LEVEL                -> log_level
 #   RECS_RETRIEVAL_BACKEND        -> retrieval.backend ("faiss" | "scann")
@@ -27,12 +27,12 @@ paths:
   # Backend-shaped synthetic integration dataset (see
   # scripts/generate_backend_shaped_sqlite.py) - read-only.
   data_sqlite: "data/sqlite/backend_shaped_synthetic.db"
-  # STEP 9 (docs/data-mapping.md section 18): "sqlite" is the current POC
-  # live-serving source - the approved STEP 7/8 RECENCY+PRICE pipeline
-  # trained against backend_shaped_synthetic.db (models/sqlite_baseline/).
-  # "synthetic" remains available for backward compatibility only - its
-  # artifacts (models/two_tower, models/ranker) predate STEP 6's dimension
-  # change and startup validation will reject them.
+  # "sqlite" is the current live-serving source (docs/data-mapping.md
+  # section 18) - the recency+price pipeline trained against
+  # backend_shaped_synthetic.db (models/sqlite_baseline/). "synthetic"
+  # remains available for backward compatibility only - its artifacts
+  # (models/two_tower, models/ranker) predate the current feature
+  # dimension change and startup validation will reject them.
   data_source: "sqlite"
 
 # Phase 2 synthetic dataset generation.
@@ -217,8 +217,8 @@ ranking:
   random_seed: 42
 
 # Phase 8: recommendation API. host/port overridable via RECS_API_HOST /
-# RECS_API_PORT (see utils/config.py: _ENV_OVERRIDES, Phase 10) - useful
-# in containers without editing this file.
+# RECS_API_PORT (see utils/config.py: _ENV_OVERRIDES) - useful in
+# containers without editing this file.
 api:
   model_version: "v1"
   default_recommendation_count: 10
@@ -226,7 +226,7 @@ api:
   host: "0.0.0.0"
   port: 8000
 
-# Phase 9 / STEP 9: internal dashboard. Streamlit is a pure HTTP client of
+# Phase 9: internal dashboard. Streamlit is a pure HTTP client of
 # FastAPI (src/recommendation/ui/api_client.py, ui/service_loader.py) - it
 # never instantiates RecommendationService, loads model artifacts, or
 # touches SQLite/synthetic adapters itself (docs/data-mapping.md section

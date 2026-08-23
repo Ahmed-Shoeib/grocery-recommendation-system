@@ -1,35 +1,19 @@
 """Wires the SQLite-backed adapters together into an `AdapterBundle`.
 
-This is the SQLite counterpart of `adapters.factory.build_synthetic_adapters`
-- same return type (`AdapterBundle`), same downstream consumers (feature
-engineering, Two-Tower, the ranker, serving, the dashboard). Nothing
-downstream of this function needs to know or care that the data came from
-`data/sqlite/backend_shaped_synthetic.db` rather than the in-memory
-synthetic generators:
-
-    Today (synthetic V1):
-      synthetic generators -> build_synthetic_adapters -> AdapterBundle -> ...
-
-    This phase (SQLite integration):
-      backend_shaped_synthetic.db -> build_sqlite_adapters -> AdapterBundle -> ...
-
-    Later (real backend):
-      real backend DB/API -> a new build_<real>_adapters -> AdapterBundle -> ...
-
-Reuses the EXISTING `InMemoryProductCatalogAdapter`/`InMemoryUserAdapter`/
-`InMemoryReviewAdapter` (fed with rows loaded from SQLite instead of the
-synthetic generators) and the EXISTING `UserEventsAdapter`/
-`build_user_events_adapters` (already built for exactly this "unified
-event log -> five per-signal adapter roles" purpose) - no new adapter
-classes were needed, only the SQL-to-Raw-object mapping in `data.sqlite
-.loader`.
+SQLite counterpart of `adapters.factory.build_synthetic_adapters`: same
+return type and downstream consumers (feature engineering, Two-Tower, the
+ranker, serving, the dashboard), which don't need to know or care that
+the data came from `data/sqlite/backend_shaped_synthetic.db` rather than
+the in-memory synthetic generators. Reuses the existing
+`InMemoryProductCatalogAdapter`/`InMemoryUserAdapter`/
+`InMemoryReviewAdapter`/`UserEventsAdapter` classes, adding only the
+SQL-to-Raw-object mapping in `data.sqlite.loader`.
 
 Purchase/cart double-counting note: this factory never reads `Cart`/
 `Cart_Item` or `"Order"`/`Order_Item` - `User_events` (ADD_TO_CART/
-PURCHASE rows) is the sole engagement-truth source consumed here, exactly
-per the integration contract. Those four backend tables exist in the
-database (and remain available for a future non-recommendation use), they
-are simply never queried by this adapter path.
+PURCHASE rows) is the sole engagement-truth source consumed here. Those
+four backend tables exist in the database but are never queried by this
+adapter path.
 """
 
 from __future__ import annotations

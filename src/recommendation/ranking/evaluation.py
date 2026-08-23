@@ -7,7 +7,7 @@ out targets `retrieval.two_tower.evaluation` reports Recall@K/HitRate@K
 against, so ranker vs. Two-Tower-only-retrieval is an apples-to-apples
 comparison, not two different tasks.
 
-At the current ~50-item V1 catalog, `pool_size` (`retrieval.index.factory
+At the current ~50-item catalog, `pool_size` (`retrieval.index.factory
 .candidate_pool_size`) equals the full catalog, so ranking here is
 effectively "re-rank the whole catalog," not "re-rank a genuinely
 truncated ANN shortlist" - a real test of ranking-under-truncation needs
@@ -43,8 +43,8 @@ class RankingEvalReport:
 
 
 def baseline_scores(case: RankingEvalCase) -> np.ndarray:
-    """The Phase 5 baseline: candidates are already retrieval-score-sorted
-    (`VectorIndex.search`'s own output order), so scoring by
+    """The retrieval-only baseline: candidates are already retrieval-score-
+    sorted (`VectorIndex.search`'s own output order), so scoring by
     `retrieval_scores` unchanged reproduces that ordering exactly.
     """
     return np.asarray(case.retrieval_scores)

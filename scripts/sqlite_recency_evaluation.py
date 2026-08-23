@@ -1,44 +1,37 @@
-"""STEP 5 evaluation: does recency weighting improve future-purchase
+"""Evaluates whether recency weighting improves future-purchase
 recommendation quality, measured on the temporal future-purchase protocol
-(commit 6689983, `evaluation.temporal_future_purchase`) over
-`data/sqlite/backend_shaped_synthetic.db`?
+(`evaluation.temporal_future_purchase`) over
+`data/sqlite/backend_shaped_synthetic.db`.
 
-Compares, on IDENTICAL evaluation points (same users, same temporal
+Compares, on identical evaluation points (same users, same temporal
 splits, same targets, same eligibility, same candidate pool):
 
-  A. BASELINE  - `features.recency` disabled (`RecencyConfig(enabled=False)`),
-     i.e. the pre-this-phase feature behavior.
-  B. RECENCY   - the same config, EXCEPT `recency.enabled=True` at
+  A. BASELINE - `features.recency` disabled (`RecencyConfig(enabled=False)`).
+  B. RECENCY  - the same config, except `recency.enabled=True` at
      `config.features.recency.half_life_days` (default from
      configs/base.yaml, 21 days).
 
 Everything else (signal weights, embedding model, eligibility rules,
 candidate pool, scoring mechanism, k values) is held fixed between arms -
-the ONLY intended difference is recency (docs/data-mapping.md section 14,
-"fair comparison" requirement).
+the only intended difference is recency (docs/data-mapping.md section 14).
 
-**Scope decision - why cosine-similarity retrieval, not Two-Tower/ranker
-retraining:** `scripts/sqlite_temporal_dry_run.py` (the prior phase)
-explicitly deferred computing real Top-N metrics on this dataset because
-the currently-trained Two-Tower/ranker artifacts under `models/` were fit
-against the OLD 50-product synthetic catalog (different product ids/
-vocabulary) - retraining them for THIS catalog is a large, separate
-undertaking this phase is not scoped to do (this phase is about recency
-in FEATURE CONSTRUCTION - see the phase's own scope note: "do not
-redesign the whole recommender"). Instead, this script scores candidates
-by cosine similarity between each user's `semantic_embedding` (exactly
-the feature this phase modifies) and the SAME frozen Sentence Transformer
-product embeddings both arms use - a direct, honest, retraining-free way
-to isolate and measure the effect of THIS phase's change specifically,
-restricted to the same pre-retrieval eligibility gate
-(`serving.eligibility`) real serving uses. It is NOT a stand-in for the
+**Why cosine-similarity retrieval, not Two-Tower/ranker retraining:** the
+currently-trained Two-Tower/ranker artifacts under `models/` were fit
+against the original, smaller synthetic catalog (different product ids/
+vocabulary) - retraining them against this larger SQLite catalog would
+conflate a model change with the recency effect this script isolates.
+Instead, this script scores candidates by cosine similarity between each
+user's `semantic_embedding` (exactly the feature recency weighting
+modifies) and the same frozen Sentence Transformer product embeddings
+both arms use - a direct, retraining-free way to isolate and measure
+recency's effect, restricted to the same pre-retrieval eligibility gate
+(`serving.eligibility`) real serving uses. It is not a stand-in for the
 production ANN/Two-Tower/ranker stack's ranking quality - only for
 whether recency-weighted features pull a user's representation toward
 their actual future purchases.
 
 No randomness anywhere in this script (deterministic cosine-similarity
-ranking, no sampling) - "same seed" from the fairness requirement is
-therefore trivially satisfied.
+ranking, no sampling), so results are fully reproducible run to run.
 """
 
 from __future__ import annotations
@@ -79,10 +72,9 @@ from recommendation.utils.config import RecencyConfig, get_config, resolve_path
 
 K_VALUES = [5, 10, 20]
 TOP_N = 20
-# Kept isolated from the synthetic V1 cache (configs/base.yaml:
-# embedding.cache_path) per this phase's artifact-isolation requirement -
-# this is a different (1,200-product) catalog, never conflated with the
-# V1/synthetic 50-product one.
+# Kept isolated from the original synthetic-dataset embedding cache
+# (configs/base.yaml: embedding.cache_path) - this is a different, larger
+# (1,200-product) catalog, never conflated with the smaller synthetic one.
 SQLITE_EMBEDDING_CACHE = "data/processed/product_embeddings_sqlite.npz"
 
 

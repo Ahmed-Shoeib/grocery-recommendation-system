@@ -264,8 +264,8 @@ def build_user_price_profile(
 def price_relative_distance(candidate_price: float, user_typical_price: float | None, epsilon: float = 1e-6) -> float:
     """`|candidate_price - user_typical_price| / max(user_typical_price,
     epsilon)` - scale-invariant (a $5 gap means something different for a
-    $6 shopper vs. a $60 shopper), the compact interpretable cross-feature
-    docs/data-mapping.md section 15 asks for. `0.0` (neutral - not a
+    $6 shopper vs. a $60 shopper), a compact, interpretable cross-feature
+    (docs/data-mapping.md section 15). `0.0` (neutral - not a
     perfect-match claim; callers should also check a `has_price_profile`
     flag, see `ranking.features`) when there is no user price signal at all.
     """

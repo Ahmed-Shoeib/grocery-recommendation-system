@@ -1,19 +1,16 @@
-"""API request/response schemas (Phase 8, extended STEP 9) - deliberately
-separate from the internal domain/model schemas (`data.schemas`, `features
-.product_features.ProductFeatures`, `serving.pipeline
-.RecommendationResult`): this is the wire contract, versioned and stable
-independent of internal refactors. `RecommendationItem` carries a small,
-deliberately-chosen set of APPLICATION-level display fields (product
-name/category/brand/price) - not the full catalog record, and never any
-internal model tensor/feature (embeddings, ranking feature vectors,
-recency weights, price-tier ids, ...) - see docs/data-mapping.md section
-18's "preserve the API contract" note.
+"""API request/response schemas - deliberately separate from the internal
+domain/model schemas (`data.schemas`, `features.product_features
+.ProductFeatures`, `serving.pipeline.RecommendationResult`): this is the
+wire contract, versioned and stable independent of internal refactors.
+`RecommendationItem` carries a small, deliberately-chosen set of
+APPLICATION-level display fields (product name/category/brand/price) -
+not the full catalog record, and never any internal model tensor/feature
+(embeddings, ranking feature vectors, recency weights, price-tier ids).
 
-The STEP 9 user-listing/profile/offline-metrics schemas below exist
-because the Streamlit dashboard (docs/data-mapping.md section 18) is now
-a pure HTTP client with no other way to reach this data - they reuse
-`ui.data_access`'s existing formatting functions server-side rather than
-reimplementing anything.
+The user-listing/profile/offline-metrics schemas below exist because the
+Streamlit dashboard is a pure HTTP client with no other way to reach this
+data - they reuse `ui.data_access`'s existing formatting functions
+server-side rather than reimplementing anything.
 """
 
 from __future__ import annotations
@@ -78,7 +75,7 @@ class ReadinessResponse(BaseModel):
     model_version: str | None = None
 
 
-# --- STEP 9: small, generally-useful read-only endpoints (docs/data-mapping.md section 18) ---
+# --- Small, generally-useful read-only endpoints ---
 # Not recommendation generation (that stays exclusively the endpoint
 # above) - user/catalog browsing and offline-diagnostic data any client
 # might reasonably want, moved behind the API so Streamlit never needs
@@ -152,10 +149,10 @@ class OfflineMetricsProvenance(BaseModel):
 
 
 class OfflineMetricsResponse(BaseModel):
-    """Offline, SQLite-dataset evaluation metrics ONLY (the APPROVED STEP
-    5/7/8 temporal future-purchase protocol - see `evaluation
-    .offline_report` module docstring) - never a production/online
-    metric. This is a cheap READ of a report persisted by
+    """Offline, SQLite-dataset evaluation metrics ONLY (the temporal
+    future-purchase protocol - see `evaluation.offline_report` module
+    docstring) - never a production/online metric. This is a cheap READ
+    of a report persisted by
     `scripts/generate_offline_report.py`; the endpoint itself never runs
     an evaluation pass.
     """

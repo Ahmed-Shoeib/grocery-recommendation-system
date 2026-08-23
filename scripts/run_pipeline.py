@@ -1,12 +1,11 @@
-"""Run and evaluate the full V1 serving pipeline end to end (Phase 7,
-re-architected Phase 11):
+"""Run and evaluate the full serving pipeline end to end:
 
 Hard pre-retrieval eligibility -> Two-Tower -> VectorIndex retrieval
 (eligible products only) -> Neural Ranker -> Re-ranking -> remaining
 business rules -> final lightweight eligibility validation -> Final Top-N
 
-Reuses the ALREADY-TRAINED Phase 4 Two-Tower and Phase 6 ranker artifacts
-(does not retrain either) - run scripts/train_two_tower.py and
+Reuses the already-trained Two-Tower and ranker artifacts (does not
+retrain either) - run scripts/train_two_tower.py and
 scripts/train_ranker.py first if those don't exist yet.
 
 Usage:
@@ -164,10 +163,10 @@ def main() -> None:
     )
     _print_example("No-history user (constructed, preferredCategory set)", product_lookup, no_history_result)
 
-    # --- Eligibility demonstration (Phase 11): pre-retrieval eligibility is
-    # a hard, GLOBAL catalog gate, so the exclusion count is identical for
-    # every user - show it once, plus confirm the final validation stage
-    # (the safety net, not the primary mechanism) has nothing left to catch. ---
+    # --- Eligibility demonstration: pre-retrieval eligibility is a hard,
+    # global catalog gate, so the exclusion count is identical for every
+    # user - show it once, plus confirm the final validation stage (the
+    # safety net, not the primary mechanism) has nothing left to catch. ---
     print("\n\n=== Eligibility demonstration (hard pre-retrieval gate + final validation) ===")
     demo_uid, demo_profile = next(iter(engagement_profiles.items()))
     demo_user_features = build_user_features(demo_profile, product_lookup, product_embeddings, config.features)

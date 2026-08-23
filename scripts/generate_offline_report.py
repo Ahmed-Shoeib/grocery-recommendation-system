@@ -1,18 +1,17 @@
-"""STEP 9 fix: produce the PERSISTED offline evaluation report artifact
-that `GET /v1/metrics/offline` reads (docs/data-mapping.md section 18
-follow-up - see `evaluation.offline_report` module docstring for the full
-before/after).
+"""Produce the persisted offline evaluation report artifact that
+`GET /v1/metrics/offline` reads (see `evaluation.offline_report` module
+docstring for the endpoint-side history).
 
-Loads the ALREADY-TRAINED `models/sqlite_baseline/` Two-Tower + ranker
+Loads the already-trained `models/sqlite_baseline/` Two-Tower + ranker
 artifacts (does NOT train or retrain anything - same "reuse, don't
-retrain" posture as `scripts/run_pipeline.py`) and runs
-the APPROVED STEP 5/7/8 temporal future-purchase evaluation protocol
+retrain" posture as `scripts/run_pipeline.py`) and runs the same temporal
+future-purchase evaluation protocol
 (`evaluation.temporal_future_purchase.build_temporal_splits` +
 `evaluation.temporal_training.build_temporal_two_tower_examples` +
-`.evaluate_primary_pipeline`) UNCHANGED - the exact same evaluation
-`scripts/train_sqlite_pipeline.py` runs right after training. This script
-only adds: writing the full per-K breakdown (not just the few scalar
-summary fields already in ranker/metadata.json) plus provenance to
+`.evaluate_primary_pipeline`) that `scripts/train_sqlite_pipeline.py` runs
+right after training. This script only adds: writing the full per-K
+breakdown (not just the few scalar summary fields already in
+ranker/metadata.json) plus provenance to
 `models/sqlite_baseline/offline_report.json`.
 
 Usage:
@@ -88,8 +87,8 @@ def main() -> None:
     if config.paths.data_source != "sqlite":
         raise SystemExit(
             f"paths.data_source={config.paths.data_source!r} - this script only supports the 'sqlite' "
-            "data source (the approved STEP 5/7/8 temporal future-purchase protocol requires event "
-            "timestamps the synthetic V1 generator does not provide)."
+            "data source (the temporal future-purchase protocol requires event timestamps the "
+            "synthetic generator does not provide)."
         )
 
     models_root = resolve_models_root(config)

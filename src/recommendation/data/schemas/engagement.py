@@ -2,24 +2,18 @@
 
 These are the five V1 signals (clicks, purchases, cart, search, chatbot)
 plus reviews and the user profile, in the shape feature engineering
-consumes. Adapters (Phase 2) are responsible for producing these from
-either the real ERD tables, the confirmed future `User_events`
-activity-log table (`adapters.user_events_adapter.UserEventsAdapter`), or
-a synthetic provider - model/feature code downstream never sees the
-source distinction.
+consumes. Adapters produce these from either the real ERD tables, the
+`User_events` activity-log table (`adapters.user_events_adapter
+.UserEventsAdapter`), or a synthetic provider - model/feature code
+downstream never sees the source distinction.
 
 Raw timestamp fields (`order_created_at`, `review_created_at`,
-`action_time`) are kept where a source actually has them (ERD
-Order.CreationDate/Review.CreationDate, or `User_events.action_time`) so
-the canonical schema doesn't lie about what the backend provides. As of
-this phase, feature engineering (`features.user_features`) DOES derive a
-recency/time-decay weight from these fields where present - see
-`features.recency` and docs/data-mapping.md section 14 - superseding the
-earlier V1 scope decision (section 1/7) that deferred this. The synthetic
-V1 generators for click/cart/search do not produce real timestamps
-(there's nothing to derive them from), so `action_time` is `None` on
-synthetic-sourced records - these fall back to a neutral (unweighted)
-recency contribution rather than being dropped; a `UserEventsAdapter`-sourced
+`action_time`) are kept only where the source actually has them.
+`features.recency` derives a recency/time-decay weight from them where
+present (docs/data-mapping.md section 14). The synthetic V1 click/cart/
+search generators don't produce real timestamps, so `action_time` is
+`None` on those records and falls back to a neutral (unweighted) recency
+contribution rather than being dropped; a `UserEventsAdapter`-sourced
 record always populates it from `UserInteraction.action_time`
 (`data.schemas.events`).
 """

@@ -1,4 +1,4 @@
-"""The full V1 serving pipeline (Phase 7, re-architected Phase 11):
+"""The full serving pipeline.
 
 Catalog -> HARD PRE-RETRIEVAL ELIGIBILITY -> Two-Tower / VectorIndex
 retrieval (eligible products only) -> Neural Ranker -> Re-ranking
@@ -12,43 +12,30 @@ with held-out val/test excluded for evaluation - see `serving
 lookups itself, so it works identically whether called from a live
 `recommend()` request or from an offline evaluation loop.
 
-**Pre-retrieval eligibility (Phase 11)**: `isActive`/`stockQuantity` are
-hard, global catalog-eligibility gates - a mentor-reviewed architecture
-change from the original "filter last" design (docs/data-mapping.md §5).
-Before any candidate generation - personalized (Two-Tower/VectorIndex) or
-fallback (category/global popularity, cold-start waterfall) - the current
-eligible product id set is computed once from `product_features` and
-threaded through every candidate source, via `serving.eligibility
-.apply_eligibility` (the SAME predicate rules used at the final stage)
-and `retrieval.index.eligibility_filter.EligibilityRestrictedIndex` for
-the VectorIndex path specifically. Inactive/out-of-stock products never
-enter the ranker or re-ranking. This never touches the Two-Tower, the
-ranker, or the VectorIndex's built structure - `stockQuantity`/`isActive`
-are serving-time catalog state, not model knowledge, so nothing here is
-retrained or rebuilt when they change; only `product_features` (a plain
-dict, re-derived from current catalog state - see `features
-.product_features.build_product_features`) needs to reflect the current
-values. See module-level rationale below for exactly what would need
-refreshing.
+**Pre-retrieval eligibility**: `isActive`/`stockQuantity` are hard,
+global catalog-eligibility gates, not model knowledge, so they gate
+candidate generation itself rather than filtering results afterward
+(docs/data-mapping.md §5). Before any candidate generation -
+personalized (Two-Tower/VectorIndex) or fallback (category/global
+popularity, cold-start waterfall) - the current eligible product id set
+is computed once from `product_features` and threaded through every
+candidate source, via `serving.eligibility.apply_eligibility` (the SAME
+predicate rules used at the final stage) and `retrieval.index
+.eligibility_filter.EligibilityRestrictedIndex` for the VectorIndex path
+specifically. This never touches the Two-Tower, the ranker, or the
+VectorIndex's built structure - stock/active state changes only require
+refreshing `product_features`, never a retrain or index rebuild.
 
-**Final lightweight validation (Phase 11)**: even though candidate
-generation is already restricted to eligible products, `apply_eligibility`
-runs a SECOND time at the very end, over the full re-ranked pool, as a
-defense-in-depth safety net against a product becoming unavailable
-between pre-retrieval filtering and the final response (a real
-possibility in a live system where retrieval and final-response assembly
-can observe catalog state at different points in time) - see the
-`final_product_features` parameter below. In the common case, with
-pre-retrieval filtering already having excluded every ineligible
-product, this stage excludes nothing; it exists to make that an
-enforced invariant, not an assumption.
+**Final lightweight validation**: `apply_eligibility` runs a SECOND time
+at the very end, over the full re-ranked pool, as a defense-in-depth
+safety net against a product becoming unavailable between pre-retrieval
+filtering and the final response. In the common case this stage excludes
+nothing; it exists to make that an enforced invariant, not an assumption.
 
-Both eligibility stages still operate on the FULL candidate/re-ranked
-pool (not just the top requested N) - `pool_size` (config-driven,
-Phase 5's `candidate_pool_size`, now capped by the *eligible* catalog
-size rather than the full catalog size) - so that a late exclusion at
-the final stage still leaves as many eligible candidates as possible to
-fill the requested Top-N from.
+Both eligibility stages operate on the FULL candidate/re-ranked pool
+(not just the top requested N) - `pool_size` is capped by the *eligible*
+catalog size - so a late exclusion at the final stage still leaves as
+many eligible candidates as possible to fill the requested Top-N from.
 """
 
 from __future__ import annotations

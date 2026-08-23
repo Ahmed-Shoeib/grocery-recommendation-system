@@ -21,7 +21,7 @@ HNSW index - FAISS defaults to L2, and silently getting that wrong would
 turn "nearest by cosine similarity" into "nearest by Euclidean distance,"
 a real similarity-semantics bug, not just an approximation-quality one.
 
-Embeddings must already be L2-normalized (Phase 4's Two-Tower output is);
+Embeddings must already be L2-normalized (the Two-Tower's output is);
 this class does not renormalize them, so normalized inner product here is
 exactly cosine similarity.
 """

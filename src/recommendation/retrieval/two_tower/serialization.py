@@ -1,17 +1,18 @@
-"""Model artifact serialization: everything Phase 5 needs to build a
-FAISS index and serve Two-Tower retrieval without retraining.
+"""Model artifact serialization: everything needed to build a VectorIndex
+and serve Two-Tower retrieval without retraining.
 
 Written under `models/two_tower/` (gitignored - regenerable, not source):
 
   item_tower.keras        - Keras 3 native format
   user_tower.keras
-  feature_encoder.json    - vocabularies + normalization stats (Phase 5/8
+  feature_encoder.json    - vocabularies + normalization stats (serving
                              MUST use this exact encoder, not a freshly
                              fit one, or item/user ids stop matching
                              the trained embedding space)
   item_embeddings.npz     - precomputed, L2-normalized 128-D embeddings
                              for the full current catalog (product_ids +
-                             embeddings) - what Phase 5 loads into FAISS
+                             embeddings) - what gets loaded into the
+                             VectorIndex
   metadata.json           - model_version, config snapshot, dimensions
 """
 

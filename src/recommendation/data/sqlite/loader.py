@@ -96,9 +96,9 @@ def load_events(con: sqlite3.Connection) -> list[UserInteraction]:
     """Loads every `User_events` row - one row per action, per the
     confirmed backend contract - into a canonical `UserInteraction`.
     `action_time` is parsed into a real `datetime` here (not left as a raw
-    string) so it survives the adapter boundary as an actual datetime, per
-    the integration requirement - it is not used for scoring anywhere in
-    this phase.
+    string) so it survives the adapter boundary as an actual datetime;
+    downstream, `features.recency` and `evaluation.temporal_future_purchase`
+    both consume it.
     """
     rows = con.execute("SELECT id, user_id, product_id, action_time, action_type FROM User_events").fetchall()
     return [

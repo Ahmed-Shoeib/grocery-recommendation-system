@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 #
-# Multi-stage production image (Phase 10). ScaNN is the intended
-# production retrieval backend here (configs/docker.yaml, loaded via
+# Multi-stage production image. ScaNN is the intended production
+# retrieval backend here (configs/docker.yaml, loaded via
 # RECS_CONFIG_PATH below) - it has no Windows wheel, so this is the only
 # place it runs; FAISS remains the native-Windows dev fallback (see
 # docs/data-mapping.md section 10).
@@ -39,7 +39,7 @@ COPY src ./src
 # resolves the pyproject range's newest allowed release (2.21.0) here,
 # which is ABI-incompatible with scann's precompiled ops
 # (`undefined symbol: ...absl...internal_log_function...` at import
-# time) - discovered during Phase 10 Docker integration verification.
+# time) - discovered during Docker integration verification.
 # Windows dev is unaffected (no scann there, so no conflict to pin
 # around) and keeps the wider pyproject.toml range.
 RUN pip install --no-cache-dir --extra-index-url https://download.pytorch.org/whl/cpu \

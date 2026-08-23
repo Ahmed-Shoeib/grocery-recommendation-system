@@ -1,5 +1,5 @@
-"""Shared candidate type threaded through Phase 7: produced by
-`serving.pipeline` (from personalized ranking or a fallback/blend
+"""Shared candidate type threaded through the serving pipeline: produced
+by `serving.pipeline` (from personalized ranking or a fallback/blend
 source), consumed by `reranking.diversity`.
 """
 

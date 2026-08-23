@@ -38,9 +38,8 @@ class RecencyLeakageError(ValueError):
     to - if this fires, either a caller forgot to truncate history before
     the evaluation cutoff (a leakage bug) or passed a `reference_time`
     that doesn't actually bound the event set. Deliberately loud (an
-    exception, not a clamped weight) per this phase's requirement that a
-    future-relative event "should not be silently accepted" - see
-    `tests/test_recency.py`.
+    exception, not a clamped weight): a future-relative event must never
+    be silently accepted - see `tests/test_recency.py`.
     """
 
 

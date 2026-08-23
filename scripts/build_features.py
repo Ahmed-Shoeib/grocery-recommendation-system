@@ -1,5 +1,5 @@
-"""Generate the synthetic dataset, run the Phase 3 feature pipeline, and
-report stats: embedding cache behavior, feature shapes, example vectors.
+"""Generate the synthetic dataset, run the feature pipeline, and report
+stats: embedding cache behavior, feature shapes, example vectors.
 
 Usage:
     python scripts/build_features.py

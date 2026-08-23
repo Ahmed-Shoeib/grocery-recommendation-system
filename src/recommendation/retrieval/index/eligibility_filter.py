@@ -13,9 +13,10 @@ call is allowed to return, purely at query time, so eligibility changes
 never touch the index at all.
 
 Both backends now do genuine approximate nearest-neighbor search over a
-catalog sized to grow well beyond V1's ~1,200 items (see `faiss_index.py`
-/`scann_index.py`), so asking for the entire index on every query (the
-old behavior) would defeat the whole point of an ANN structure - it
+catalog sized to grow well beyond the current ~1,200 items (see
+`faiss_index.py`/`scann_index.py`), so asking for the entire index on
+every query (the old behavior) would defeat the whole point of an ANN
+structure - it
 would be O(catalog size) per request regardless of how sublinear the
 underlying search actually is. Instead, this wrapper oversamples: it asks
 the index for a multiple of `k` (`RetrievalConfig.eligibility_oversample_

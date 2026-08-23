@@ -1,11 +1,11 @@
 """End-to-end ranker training orchestrator.
 
 `train_ranker(bundle, feature_result, two_tower_artifacts, config)` loads
-an ALREADY-TRAINED Two-Tower model (Phase 4 artifacts, unmodified - this
-phase does not retrain or otherwise change the Two-Tower/VectorIndex
-architecture), builds a Phase 5 `VectorIndex` over its item embeddings,
-constructs leakage-safe ranking training/validation examples and
-evaluation cases (`ranking.examples`), trains the MLP ranker with early
+an ALREADY-TRAINED Two-Tower model (unmodified - this does not retrain or
+otherwise change the Two-Tower/VectorIndex architecture), builds a
+`VectorIndex` over its item embeddings, constructs leakage-safe ranking
+training/validation examples and evaluation cases (`ranking.examples`),
+trains the MLP ranker with early
 stopping on validation loss, and evaluates ranking quality (NDCG@K,
 Precision@K, Recall@K/HitRate@K, MRR) against both the ranker's own
 scores and the raw-retrieval-score baseline, on val and test splits.

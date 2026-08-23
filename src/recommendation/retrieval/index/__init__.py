@@ -6,9 +6,7 @@ Both backends do normalized-inner-product search over L2-normalized
 similarity. ScaNN is the intended production backend but has no Windows
 wheel, so it runs only inside the Docker/Linux image
 (`configs/docker.yaml` selects it); FAISS runs natively on this Windows
-dev machine. Both are implemented in Phase 5 - see
-`docs/data-mapping.md` section 10. Full production containerization
-(beyond the minimal ScaNN build/test image) lands in Phase 10.
+dev machine - see `docs/data-mapping.md` section 10.
 
 `ScannVectorIndex` is exported lazily (via `__getattr__` below) so that
 `import recommendation.retrieval.index` never requires the `scann`

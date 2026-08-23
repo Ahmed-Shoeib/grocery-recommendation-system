@@ -1,12 +1,12 @@
-"""Turns Phase 3's `UserFeatures`/`ProductFeatures` (+ Sentence Transformer
+"""Turns `UserFeatures`/`ProductFeatures` (+ Sentence Transformer
 embeddings) into fixed-size numpy tensors the Keras towers consume.
 
 `TwoTowerFeatureEncoder` is fit ONCE from the full product catalog (category
 names, brands - static catalog metadata, not user behavior, so fitting on
 the full catalog is not target leakage) plus the known age-group vocabulary,
 then reused to encode every item/user example. It is serialized alongside
-the model weights (Phase 5 needs the exact same vocab/normalization at
-serving time) - see `serialization.py`.
+the model weights (serving needs the exact same vocab/normalization at
+inference time) - see `serialization.py`.
 
 Index 0 in every `Vocabulary` is reserved for "unknown/missing" so a
 category, brand, or age group value not seen at fit time (or a genuinely
@@ -59,7 +59,7 @@ ITEM_NUMERIC_FEATURE_NAMES_BASE = [
     "normalized_price", "discount_fraction", "log_purchase_count",
     "log_cart_add_count", "log_review_count", "average_rating", "has_rating",
 ]
-# STEP 6 (docs/data-mapping.md section 15): `category_relative_price` is
+# docs/data-mapping.md section 15: `category_relative_price` is
 # already a [0,1] percentile (no extra normalization needed). `price_tier`
 # itself is NOT a numeric feature - it's a categorical (see `price_tier_id`/
 # `price_tier_vocab` below), not an ordinal number.
@@ -70,10 +70,10 @@ USER_NUMERIC_FEATURE_NAMES_BASE = [
     "log_purchase_count", "log_cart_item_count", "log_search_count", "log_total_engagement_events",
     "has_chatbot_context", "has_preferred_category", "has_age_group", "has_semantic_embedding",
 ]
-# STEP 6: the user's typical purchase price, normalized by the SAME catalog
+# The user's typical purchase price, normalized by the SAME catalog
 # `max_price` the item tower uses (consistent scale on both towers - docs/
 # data-mapping.md section 15). `0.0` when there is no `price_profile` at
-# all (an old call site that didn't pass `price_context`) - distinguishable
+# all (a call site that didn't pass `price_context`) - distinguishable
 # from a real $0-normalized value via `price_tier_id`'s dedicated "unknown"
 # embedding bucket in that case (every REAL profile, even a catalog-prior
 # fallback, gets a real budget/mid/premium tier - only a missing
@@ -90,12 +90,12 @@ class TwoTowerFeatureEncoder:
     brand_vocab: Vocabulary
     age_group_vocab: Vocabulary
     max_price: float  # catalog-level normalization stat, fit once (not leakage: item-side, static)
-    # STEP 6: a FIXED (not data-fit) 3-value vocabulary - see PRICE_TIERS
+    # A FIXED (not data-fit) 3-value vocabulary - see PRICE_TIERS
     # in `features.price` - defaulted so existing callers/tests
     # constructing a TwoTowerFeatureEncoder directly don't need updating.
     price_tier_vocab: Vocabulary = field(default_factory=lambda: Vocabulary.fit(PRICE_TIERS))
     # Reported/serialized metadata only (docs/data-mapping.md section 15):
-    # the STEP 6 price-aware inputs (item category_relative_price/
+    # the price-aware inputs (item category_relative_price/
     # is_discounted, user normalized_typical_price, the shared
     # price_tier_id categorical input on both towers) are always part of
     # the encoded representation - this field no longer branches encoding
@@ -241,13 +241,13 @@ class TwoTowerFeatureEncoder:
 
     @classmethod
     def from_dict(cls, data: dict) -> "TwoTowerFeatureEncoder":
-        # `price_tier_vocab` is a fixed vocabulary (STEP 6, PRICE_TIERS) -
-        # older serialized encoders saved before this phase won't have the
-        # key, so fall back to the same fixed default `fit()`/the
-        # dataclass default use, rather than a KeyError. A model
-        # RETRAINED after this phase always has the key (round-tripped
-        # via `to_dict`), so this only matters for a pre-STEP-6 artifact,
-        # which is already dimension-incompatible for other reasons (see
+        # `price_tier_vocab` is a fixed vocabulary (PRICE_TIERS) - older
+        # serialized encoders predating the price-aware features won't
+        # have the key, so fall back to the same fixed default `fit()`/the
+        # dataclass default, rather than a KeyError. A model retrained
+        # since then always has the key (round-tripped via `to_dict`), so
+        # this only matters for a pre-price-feature artifact, which is
+        # already dimension-incompatible for other reasons (see
         # docs/data-mapping.md section 15's "model artifact compatibility"
         # note) and must be retrained regardless.
         price_tier_vocab = (

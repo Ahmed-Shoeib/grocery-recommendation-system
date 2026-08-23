@@ -1,5 +1,4 @@
-"""Price-aware feature diagnostics for STEP 6 (docs/data-mapping.md
-section 15).
+"""Price-aware feature diagnostics (see docs/data-mapping.md section 15).
 
 Purely illustrative - does NOT train, retrain, or touch any model
 artifact. Prints, over `data/sqlite/backend_shaped_synthetic.db`:

@@ -1,13 +1,13 @@
-# Phase 10 orchestration. `models/` and `data/` are bind-mounted, never
-# baked into an image - train once (profile-gated, one-off), then bring
-# up api/dashboard against the resulting artifacts.
+# `models/` and `data/` are bind-mounted, never baked into an image -
+# train once (profile-gated, one-off), then bring up api/dashboard
+# against the resulting artifacts.
 #
 # Usage:
 #   docker compose --profile train run --rm train-two-tower
 #   docker compose --profile train run --rm train-ranker
 #   docker compose up api dashboard
 #
-# Phase 9 architecture: the dashboard IS a pure HTTP client of the api
+# Architecture: the dashboard IS a pure HTTP client of the api
 # service (see src/recommendation/ui/api_client.py / service_loader.py) -
 # it never loads a model artifact or touches the mounted models/ volume
 # itself. There is still no `depends_on` declared between the two
@@ -45,7 +45,7 @@ services:
       - "8000:8000"
     volumes:
       - ./models:/app/models:ro
-      # Read-write (not :ro): Phase 3's product-embedding cache
+      # Read-write (not :ro): the product-embedding cache
       # (data/processed/product_embeddings.npz, content-hash validated)
       # is written here on first startup and reused on restart, avoiding
       # a full Sentence Transformer re-encode of the catalog every time.
@@ -59,7 +59,7 @@ services:
     ports:
       - "8501:8501"
     volumes:
-      # Vestigial since the Phase 9 HTTP-client rewiring: the dashboard
+      # Vestigial since the HTTP-client rewiring: the dashboard
       # never loads a model artifact and never reads/writes the
       # embedding cache itself (all of that lives in the api container
       # now) - kept mounted only for parity with the api service's

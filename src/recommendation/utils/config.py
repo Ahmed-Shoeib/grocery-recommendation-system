@@ -41,7 +41,7 @@ class PathsConfig(BaseModel):
     # STEP 9 (docs/data-mapping.md section 18): which data source + trained
     # artifact set `api.dependencies.build_recommendation_service` uses for
     # LIVE serving. "sqlite" -> data_sqlite via build_sqlite_adapters,
-    # artifacts from `{models_dir}/sqlite_baseline/` (the approved STEP 7/8
+    # artifacts from `{models_dir}/sqlite_baseline/` (the current STEP 7/8
     # RECENCY+PRICE pipeline). "synthetic" -> the original synthetic V1
     # generator, artifacts from `{models_dir}/` directly - kept only for
     # backward compatibility (its artifacts predate STEP 6's dimension

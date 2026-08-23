@@ -38,7 +38,7 @@ def main() -> None:
         config.embedding.sentence_transformer_model, device=config.embedding.device, batch_size=config.embedding.encode_batch_size
     )
 
-    logger.info("Running Phase 3 feature pipeline (product embeddings + user/product features)...")
+    logger.info("Running feature pipeline (product embeddings + user/product features)...")
     feature_result = run_feature_pipeline(bundle, config, encoder=st_encoder)
 
     logger.info("Training Two-Tower model...")

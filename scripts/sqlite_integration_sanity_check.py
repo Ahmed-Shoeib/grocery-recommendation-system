@@ -8,6 +8,9 @@
 works end to end, and that the pre-retrieval eligibility gate sees correct
 isActive/stockQuantity values from this source. Does not train, retrain,
 rebuild any index, or write model artifacts.
+
+Usage:
+    python scripts/sqlite_integration_sanity_check.py
 """
 
 from __future__ import annotations

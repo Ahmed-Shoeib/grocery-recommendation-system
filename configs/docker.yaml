@@ -1,7 +1,7 @@
 # Docker/Linux configuration: identical to configs/base.yaml except
 # retrieval.backend (ScaNN - the primary, production-intended ANN backend,
 # Phase 5; no Windows wheel, so native Windows dev keeps base.yaml/FAISS)
-# and dashboard.api_base_url (STEP 9): inside Docker Compose's default
+# and dashboard.api_base_url: inside Docker Compose's default
 # network, "localhost" from the dashboard container's perspective is the
 # dashboard container itself, not the separate api container - Compose
 # makes each service reachable by its service NAME instead
@@ -13,8 +13,8 @@
 # mirror the change here.
 #
 # Individual settings can be overridden on top via env vars without
-# editing this file (Phase 10) - see utils/config.py: _ENV_OVERRIDES, or
-# the equivalent comment block at the top of base.yaml.
+# editing this file - see utils/config.py: _ENV_OVERRIDES, or the
+# equivalent comment block at the top of base.yaml.
 
 random_seed: 42
 log_level: "INFO"
@@ -186,8 +186,8 @@ ranking:
   random_seed: 42
 
 # Phase 8: recommendation API. host/port overridable via RECS_API_HOST /
-# RECS_API_PORT (see utils/config.py: _ENV_OVERRIDES, Phase 10) - useful
-# in containers without editing this file.
+# RECS_API_PORT (see utils/config.py: _ENV_OVERRIDES) - useful in
+# containers without editing this file.
 api:
   model_version: "v1"
   default_recommendation_count: 10
@@ -195,7 +195,7 @@ api:
   host: "0.0.0.0"
   port: 8000
 
-# Phase 9 / STEP 9: internal dashboard. Streamlit is a pure HTTP client of
+# Phase 9: internal dashboard. Streamlit is a pure HTTP client of
 # FastAPI (docs/data-mapping.md section 18) - "api" below is the
 # docker-compose.yml service name/hostname, not localhost (see this
 # file's header comment).

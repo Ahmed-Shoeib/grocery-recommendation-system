@@ -1,12 +1,12 @@
 """Loads only the precomputed `item_embeddings.npz` artifact written by
-Phase 4's `save_two_tower_artifacts` (`retrieval.two_tower.serialization`).
+`save_two_tower_artifacts` (`retrieval.two_tower.serialization`).
 
 Deliberately does not import TensorFlow, unlike
 `retrieval.two_tower.serialization` (which also loads the Keras tower
-models) - this is the only thing Phase 5's VectorIndex needs, so
-environments that only build/serve retrieval (notably the ScaNN Docker
-image) never need the ML stack (torch/tensorflow/sentence-transformers)
-installed at all.
+models) - this is the only thing `VectorIndex` needs, so environments
+that only build/serve retrieval (notably the ScaNN Docker image) never
+need the ML stack (torch/tensorflow/sentence-transformers) installed at
+all.
 """
 
 from __future__ import annotations

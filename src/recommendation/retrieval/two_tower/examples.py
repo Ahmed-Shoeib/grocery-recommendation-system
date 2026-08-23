@@ -1,6 +1,6 @@
 """Builds Two-Tower training pairs and evaluation-time user vectors from
-`UserSplit` + `EngagementProfile` + Phase 3 features, applying the target-
-leakage exclusion at every step (docs/data-mapping.md section 12).
+`UserSplit` + `EngagementProfile` + engineered features, applying the
+target-leakage exclusion at every step (docs/data-mapping.md section 12).
 
 Two distinct exclusion levels, both via `build_user_features`'s
 `exclude_product_ids`:

@@ -60,7 +60,7 @@ def build_item_tower(encoder: TwoTowerFeatureEncoder, config: TwoTowerConfig) ->
         encoder.brand_vocab.size, config.brand_embedding_dim, name="item_brand_embedding"
     )(brand_in)
 
-    # STEP 6 (docs/data-mapping.md section 15): BUDGET/MID/PREMIUM + an
+    # docs/data-mapping.md section 15: BUDGET/MID/PREMIUM + an
     # "unknown" bucket as a LEARNED embedding, not an ordinal 0/1/2 number
     # - a categorical tier has no inherent numeric distance the model
     # should be forced to assume.

@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "grocery-recommendation-system"
 version = "0.1.0"
-description = "Production-oriented personalized grocery recommendation service (synthetic V1)."
+description = "Production-oriented personalized grocery recommendation service."
 requires-python = ">=3.11,<3.14"
 readme = "README.md"
 

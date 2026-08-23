@@ -1,4 +1,4 @@
-"""Startup artifact/config validation (Phase 10).
+"""Startup artifact/config validation.
 
 Runs BEFORE a `RecommendationService` is considered usable
 (`api.dependencies.build_recommendation_service` calls every function

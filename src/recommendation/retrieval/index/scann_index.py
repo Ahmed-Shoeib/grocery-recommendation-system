@@ -1,5 +1,5 @@
 """ScaNN `VectorIndex` backend - the primary, production-intended ANN
-retrieval engine for this project (Phase 5).
+retrieval engine for this project.
 
 ScaNN has no Windows wheel (confirmed against PyPI - Linux-only manylinux
 wheels), so it only runs inside the Docker/Linux image. `scann` is
@@ -30,7 +30,7 @@ largest `k` this deployment will ever pass to `search()`, or callers
 requesting a very large pool won't get exact-reorder scores for all of
 it - see the field's docstring in `RetrievalConfig`.
 
-Embeddings must already be L2-normalized (Phase 4's Two-Tower output is);
+Embeddings must already be L2-normalized (the Two-Tower's output is);
 `"dot_product"` as the distance measure over unit-norm vectors is then
 exactly cosine similarity, and ScaNN returns neighbors sorted by
 *decreasing* dot product (most similar first) for this measure.
@@ -53,8 +53,9 @@ from recommendation.utils.config import RetrievalConfig
 # the catalog has fewer than 16 points to train those clusters on
 # ("Number of clusters per block (16) is greater than asymmetric hashing
 # training data size (N)"), independent of every other config knob in
-# this module. This is far below any real production catalog (V1's is
-# ~1,200 items) but is a real crash risk for a brand-new/tiny catalog, so
+# this module. This is far below any real production catalog (this
+# project's is ~1,200 items) but is a real crash risk for a brand-new/
+# tiny catalog, so
 # `build()` falls back to `.score_brute_force(quantize=False)` - exact
 # search, ScaNN's own pre-migration behavior - below this floor rather
 # than let AH training raise. The genuine ANN path (tree + AH + reorder)

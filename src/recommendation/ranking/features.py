@@ -16,12 +16,12 @@ MLP (`ranking.model`) - the classic "learned embeddings for recall, hand
 features (kept AVAILABLE to the ranker), not used to filter or exclude
 candidates here - eligibility filtering is the serving pipeline's job,
 not the ranker's (`serving.eligibility`, applied both as a hard
-pre-retrieval gate and a final lightweight validation since Phase 11,
-per docs/data-mapping.md section 5). Since every candidate the ranker
-scores is already pre-retrieval-eligible, `is_active` is effectively
-constant (`True`) and `stock_quantity` is always `> 0` for every row in
-V1 - the feature is still computed/passed through unchanged (no ranker
-redesign), it just carries less discriminative signal than before.
+pre-retrieval gate and a final lightweight validation - docs/data-mapping.md
+section 5). Since every candidate the ranker scores is already
+pre-retrieval-eligible, `is_active` is effectively constant (`True`) and
+`stock_quantity` is always `> 0` for every row - the feature is still
+computed/passed through unchanged, it just carries less discriminative
+signal than before the pre-retrieval gate existed.
 """
 
 from __future__ import annotations
@@ -41,7 +41,7 @@ RANKING_FEATURE_NAMES_USER = [
     "user_has_preferred_category",
     "user_has_age_group",
 ]
-# stock_quantity/is_active kept available, not a filter (Phase 7 does that, at the end).
+# stock_quantity/is_active kept available, not a filter - eligibility is serving's job (serving.eligibility).
 RANKING_FEATURE_NAMES_ITEM_BASE = [
     "item_normalized_price",
     "item_discount_fraction",
@@ -53,7 +53,7 @@ RANKING_FEATURE_NAMES_ITEM_BASE = [
     "item_log_stock_quantity",
     "item_is_active",
 ]
-# STEP 6 (docs/data-mapping.md section 15).
+# Price-aware extras (docs/data-mapping.md section 15).
 RANKING_FEATURE_NAMES_ITEM_PRICE_EXTRA = ["item_category_relative_price", "item_is_discounted"]
 # Explicit signals the Two-Tower embedding doesn't expose directly.
 RANKING_FEATURE_NAMES_CROSS_BASE = [
@@ -63,16 +63,15 @@ RANKING_FEATURE_NAMES_CROSS_BASE = [
     "semantic_cosine_similarity",
     "has_semantic_similarity",
 ]
-# STEP 6: mirrors the existing category/brand/preferred "affinity match"
-# pattern - a small, interpretable, non-redundant set (docs/data-mapping.md
-# section 15): a raw normalized reference point
-# (user_normalized_typical_price), the derived compatibility distance
-# (price_relative_distance), and a coarse tier match - NOT every possible
-# price-distance formulation.
+# Mirrors the existing category/brand/preferred "affinity match" pattern -
+# a small, interpretable, non-redundant set (docs/data-mapping.md section
+# 15): a raw normalized reference point (user_normalized_typical_price),
+# the derived compatibility distance (price_relative_distance), and a
+# coarse tier match - not every possible price-distance formulation.
 RANKING_FEATURE_NAMES_CROSS_PRICE_EXTRA = [
     "user_normalized_typical_price", "user_has_price_profile", "price_relative_distance", "price_tier_match",
 ]
-# What Phase 5's VectorIndex already computed for this candidate.
+# What VectorIndex already computed for this candidate.
 RANKING_FEATURE_NAMES_RETRIEVAL = ["retrieval_score", "retrieval_rank_normalized"]
 
 RANKING_FEATURE_NAMES = (
@@ -108,7 +107,7 @@ def build_ranking_feature_vector(
     retrieve (used only to normalize rank to [0, 1], not to filter).
 
     Builds the current 29-entry `RANKING_FEATURE_NAMES` vector, including
-    the STEP 6 price-aware entries (docs/data-mapping.md section 15).
+    the price-aware entries (docs/data-mapping.md section 15).
     """
     semantic_similarity, has_similarity = _cosine_similarity(user_features.semantic_embedding, item_semantic_embedding)
 
@@ -145,11 +144,12 @@ def build_ranking_feature_vector(
 
     values += [category_match, brand_match, preferred_match, semantic_similarity, 1.0 if has_similarity else 0.0]
 
-    # STEP 6 (docs/data-mapping.md section 15): all degrade to neutral
-    # (0.0) when the user has no price profile at all (an old call site
-    # that didn't build/pass `price_context` to `build_user_features`) -
-    # `user_has_price_profile` is what lets the model tell that apart
-    # from a genuine "price matches exactly" (distance=0) case.
+    # Price-aware cross features (docs/data-mapping.md section 15): all
+    # degrade to neutral (0.0) when the user has no price profile at all
+    # (a call site that didn't build/pass `price_context` to
+    # `build_user_features`) - `user_has_price_profile` is what lets the
+    # model tell that apart from a genuine "price matches exactly"
+    # (distance=0) case.
     price_profile = user_features.price_profile
     user_normalized_typical_price = 0.0
     price_tier_match = 0.0

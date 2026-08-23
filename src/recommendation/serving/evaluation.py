@@ -1,13 +1,13 @@
-"""Full-pipeline evaluation (Phase 7): reuses the SAME leave-one-out
-`EvalCase`s (`retrieval.two_tower.examples.build_eval_cases`) as Phase 4/6
-- one `generate_recommendations` call per case (using
+"""Full-pipeline evaluation: reuses the SAME leave-one-out `EvalCase`s
+(`retrieval.two_tower.examples.build_eval_cases`) as the Two-Tower/ranker
+evaluations - one `generate_recommendations` call per case (using
 `EvalCase.user_features`, which already excludes both held-out val AND
 test products) serves both the val report and the test report, exactly
-like Phase 4/6's own evaluation reused eval cases for both splits.
+like those evaluations reused eval cases for both splits.
 
 Reports the standard ranking metrics (reused unchanged from
-`evaluation.retrieval_metrics`) plus pipeline-specific ones requested for
-Phase 7: catalog coverage, intra-list category diversity, duplicate rate
+`evaluation.retrieval_metrics`) plus pipeline-specific ones: catalog
+coverage, intra-list category diversity, duplicate rate
 (expected to be exactly 0 - re-ranking dedupes unconditionally; kept as a
 live sanity check, not an assumption), fill rate (share of requested
 slots actually filled after eligibility filtering), and the cold-start
@@ -61,10 +61,10 @@ def evaluate_pipeline(
     use_pre_rerank: bool = False,
 ) -> PipelineEvalReport:
     """`use_pre_rerank=True` scores the ranker-only order (before
-    re-ranking/eligibility) from the SAME pipeline run - an apples-to-
-    apples "Phase 6 ranker equivalent" baseline for comparison, since it
-    shares identical retrieval and ranker scoring with the full-pipeline
-    report, differing only in whether re-ranking/eligibility ran.
+    re-ranking/eligibility) from the SAME pipeline run - a "ranker-only"
+    baseline for comparison, since it shares identical retrieval and
+    ranker scoring with the full-pipeline report, differing only in
+    whether re-ranking/eligibility ran.
     """
     if not eval_cases:
         return PipelineEvalReport(split_name, 0, {}, {}, {}, {}, 0.0, 0.0, 0.0, 0.0, 0.0, {})

@@ -1,11 +1,12 @@
 """Non-personalized fallback candidate sources and merge strategies for
 SPARSE_HISTORY (weighted blend) and NO_HISTORY (ordered waterfall) users
-(docs/data-mapping.md section 3, Phase 7).
+(docs/data-mapping.md section 3).
 
-"Popularity" is all-time purchase/cart volume, no recency/decay - V1 has
-no timestamps to compute a genuine "trending" signal (docs/data-mapping.md
-section 6). `category_popularity_ranking` is reused for two distinct
-fallback sources: `"preferred_category"` (the confirmed `UserProfile
+"Popularity" is all-time purchase/cart volume - this fallback path does
+not apply recency/decay, so it does not compute a genuine "trending"
+signal (docs/data-mapping.md section 6). `category_popularity_ranking`
+is reused for two distinct fallback sources: `"preferred_category"` (the
+confirmed `UserProfile
 .preferred_category` attribute) and `"category_popularity"` (the user's
 single highest-affinity category from `UserFeatures.category_affinity`,
 which factors in preferred_category plus whatever sparse purchase/cart/

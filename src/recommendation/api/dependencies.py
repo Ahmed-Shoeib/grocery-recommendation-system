@@ -1,26 +1,20 @@
 """The recommendation service: everything the API needs to serve
-requests, loaded ONCE (via `build_recommendation_service`, called from
-`api.app`'s FastAPI `lifespan`) and reused across every request - never
-rebuilt per-request. `RecommendationService` is a plain dataclass with no
-FastAPI dependency, so it can be constructed directly in tests (real or
-fake artifacts) and injected into `api.app.create_app(service=...)`
-without touching the app's startup wiring - the dependency-injection
-seam that keeps the pipeline testable.
+requests, loaded ONCE via `build_recommendation_service` (called from
+`api.app`'s FastAPI `lifespan`) and reused across every request. A plain
+dataclass with no FastAPI dependency, so it can be built directly in
+tests (real or fake artifacts) and injected into
+`api.app.create_app(service=...)` - the dependency-injection seam that
+keeps the pipeline testable. Delegates every recommendation decision to
+`serving.pipeline.recommend`; the only logic added here is the
+API-specific "does this user exist at all" check (`UnknownUserError`),
+deliberately NOT part of the pipeline since other callers (leave-one-out
+evaluation, the dashboard) may have different notions of "known user".
 
-Delegates every recommendation decision to `serving.pipeline.recommend`
-- no recommendation logic duplicated here. The only thing this layer
-adds is the API-specific "does this user exist at all" check
-(`UnknownUserError`), which is deliberately NOT part of the pipeline
-(the pipeline's own leave-one-out evaluation and the dashboard/other
-future callers may have different notions of "known user").
-
-STEP 9 (docs/data-mapping.md section 18): FastAPI is now the ONLY process
-that constructs a `RecommendationService` - the Streamlit dashboard is a
-plain HTTP client of the API (`ui.api_client.RecommendationApiClient`,
-`ui.service_loader.load_api_client`) and no longer imports this module,
-loads model artifacts, or touches SQLite/synthetic adapters itself. This
-class stays here (not moved to `serving`) since `api.routes` is still its
-only real caller.
+FastAPI is the only process that constructs a `RecommendationService` -
+the Streamlit dashboard is a plain HTTP client of the API
+(`ui.api_client.RecommendationApiClient`) and never loads model artifacts
+or touches SQLite/synthetic adapters itself. This class stays here (not
+moved to `serving`) since `api.routes` is still its only real caller.
 """
 
 from __future__ import annotations
@@ -152,13 +146,13 @@ def build_recommendation_service(config: AppConfig) -> RecommendationService:
     """Real production wiring for LIVE serving - loads the ALREADY-TRAINED
     artifacts (never retrains) and builds the Phase 5 VectorIndex.
 
-    STEP 9 (docs/data-mapping.md section 18): `config.paths.data_source`
-    selects BOTH the adapter bundle AND the matching trained-artifact
-    directory together, as one unit - "sqlite" (the current POC default)
-    uses `build_sqlite_adapters` + the approved STEP 7/8 RECENCY+PRICE
-    artifacts under `{models_dir}/sqlite_baseline/`; "synthetic" uses the
-    original synthetic V1 generator + `{models_dir}/` directly, kept only
-    for backward compatibility.
+    `config.paths.data_source` selects BOTH the adapter bundle AND the
+    matching trained-artifact directory together, as one unit (docs/
+    data-mapping.md section 18) - "sqlite" (the current default) uses
+    `build_sqlite_adapters` + the recency+price artifacts under
+    `{models_dir}/sqlite_baseline/`; "synthetic" uses the original
+    synthetic generator + `{models_dir}/` directly, kept only for
+    backward compatibility.
 
     Raises `serving.startup_validation.ArtifactValidationError` (a plain
     `RuntimeError`) on any missing/corrupt/incompatible artifact - by

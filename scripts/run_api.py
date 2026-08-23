@@ -1,9 +1,8 @@
-"""Run the Phase 8 recommendation API with uvicorn.
+"""Run the recommendation API with uvicorn.
 
-Loads the ALREADY-TRAINED Two-Tower (Phase 4) and ranker (Phase 6)
-artifacts once at startup (does not retrain either) - run
-scripts/train_two_tower.py and scripts/train_ranker.py first if those
-don't exist yet.
+Loads the already-trained Two-Tower and ranker artifacts once at startup
+(does not retrain either) - run scripts/train_two_tower.py and
+scripts/train_ranker.py first if those don't exist yet.
 
 Usage:
     python scripts/run_api.py

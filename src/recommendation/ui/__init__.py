@@ -1,5 +1,5 @@
-"""Internal Streamlit recommendation dashboard (Phase 9). A demonstration/
-debug tool for inspecting the recommendation engine, not the storefront.
+"""Internal Streamlit recommendation dashboard. A demonstration/debug
+tool for inspecting the recommendation engine, not the storefront.
 
 `dashboard.py` is a thin rendering layer only. All data access/formatting
 lives in `data_access.py`/`metrics.py` (plain functions, no Streamlit

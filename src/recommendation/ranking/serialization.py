@@ -4,8 +4,8 @@
 
   ranker.keras       - Keras 3 native format
   feature_names.json - RANKING_FEATURE_NAMES snapshot (column order the
-                        saved model expects; Phase 7/8 must build feature
-                        vectors in this exact order)
+                        saved model expects; the serving pipeline must
+                        build feature vectors in this exact order)
   metadata.json       - model_version, config snapshot, metrics summary
 """
 

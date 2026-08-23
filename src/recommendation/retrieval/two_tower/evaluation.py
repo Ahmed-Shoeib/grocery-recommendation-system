@@ -1,9 +1,9 @@
 """Exact (brute-force) retrieval evaluation for the Two-Tower model.
 
-Brute-force, not ANN: FAISS/ScaNN retrieval is explicitly Phase 5's job.
+Brute-force, not ANN: FAISS/ScaNN retrieval lives in `retrieval.index`.
 At ~50 catalog items this is trivial (one (n_users x 128) @ (128 x
-n_items) matmul) and gives an exact upper bound Phase 5's ANN retrieval
-can be compared against later.
+n_items) matmul) and gives an exact upper bound the ANN retrieval
+backends can be compared against.
 """
 
 from __future__ import annotations

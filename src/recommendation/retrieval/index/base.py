@@ -1,11 +1,10 @@
 """Backend-agnostic `VectorIndex` interface.
 
-Every backend (FAISS on native Windows dev, ScaNN in Docker/Linux - both
-Phase 5) does normalized-inner-product search over the L2-normalized
-128-D Two-Tower item embeddings produced in Phase 4 - since both query
-and item vectors are unit-norm, inner product and cosine similarity are
-the same quantity, so `search` returns cosine similarity scores
-regardless of backend.
+Every backend (FAISS on native Windows dev, ScaNN in Docker/Linux) does
+normalized-inner-product search over the L2-normalized 128-D Two-Tower
+item embeddings - since both query and item vectors are unit-norm, inner
+product and cosine similarity are the same quantity, so `search` returns
+cosine similarity scores regardless of backend.
 """
 
 from __future__ import annotations

@@ -1,6 +1,6 @@
 """HTTP client the Streamlit dashboard uses to reach FastAPI - the ONLY
 way `ui.dashboard` generates recommendations or reads user/catalog data
-(docs/data-mapping.md section 18, STEP 9). This module constructs HTTP
+(docs/data-mapping.md section 18). This module constructs HTTP
 requests, calls the API, and parses/validates responses into the same
 typed `api.schemas` wire-contract models FastAPI itself returns - nothing
 here reimplements recommendation, ranking, feature-engineering,
@@ -15,8 +15,8 @@ body) raises one of the typed exceptions below. `ui.dashboard` is required
 to catch these and render a clean message - it must NEVER fall back to
 building a `RecommendationService`/calling the pipeline directly (the
 explicit "DO NOT DO" item in docs/data-mapping.md section 18); a fallback
-would silently reintroduce the second serving path STEP 9 exists to
-eliminate.
+would silently reintroduce the second serving path this architecture
+eliminates.
 """
 
 from __future__ import annotations
@@ -132,7 +132,7 @@ class RecommendationApiClient:
 
     def get_offline_metrics(self) -> OfflineMetricsResponse:
         """Reads the persisted offline evaluation report via `GET
-        /v1/metrics/offline` - a cheap read (STEP 9 fix), no `top_n`
+        /v1/metrics/offline` - a cheap read, no `top_n`
         parameter since the report's own `top_n`/`k_values` are fixed at
         the time it was generated (`scripts/generate_offline_report.py`),
         not chosen per request.

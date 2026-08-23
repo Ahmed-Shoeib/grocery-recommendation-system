@@ -1,4 +1,4 @@
-"""Deduplication and diversity re-ranking (Phase 7).
+"""Deduplication and diversity re-ranking.
 
 `deduplicate` removes repeated product ids (a SPARSE-tier blend of
 personalized + fallback candidate lists can easily surface the same

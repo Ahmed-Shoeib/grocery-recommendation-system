@@ -5,8 +5,9 @@ used by both `scripts/train_two_tower.py` and tests: builds the leave-one-
 out split, fits the feature encoder, constructs leakage-safe training
 examples and eval cases, trains the model with early stopping on
 validation loss, evaluates Recall@K/HitRate@K on val and test, and
-precomputes L2-normalized embeddings for the full catalog (what Phase 5
-will index). Nothing here touches FAISS/ScaNN - that starts in Phase 5.
+precomputes L2-normalized embeddings for the full catalog (what the
+VectorIndex will index). Nothing here touches FAISS/ScaNN - that lives in
+`retrieval.index`.
 """
 
 from __future__ import annotations
@@ -112,17 +113,17 @@ def train_two_tower(
     )
     num_eval_users = sum(1 for s in splits.values() if s.is_evaluable)
 
-    # Phase 3's feature pipeline computed UserFeatures WITHOUT any
-    # exclusion (one static vector per user). Two-Tower training needs a
-    # DIFFERENT, per-example leave-one-out vector for every (user,
-    # product) pair, so user features are rebuilt here via
-    # `build_user_features(..., exclude_product_ids=...)` per example -
-    # cheap numpy arithmetic reusing the already-cached product/text
-    # embeddings, not a re-encode. The free-text embedding lookup itself
-    # (search terms without a matched product, chatbot summaries) IS a
-    # real Sentence Transformer call, but only once, over the small set of
-    # unique strings - consistent with Phase 3's "precompute once" cache
-    # philosophy. Callers that already loaded an encoder for the Phase 3
+    # The feature pipeline computed UserFeatures WITHOUT any exclusion
+    # (one static vector per user). Two-Tower training needs a DIFFERENT,
+    # per-example leave-one-out vector for every (user, product) pair, so
+    # user features are rebuilt here via `build_user_features(...,
+    # exclude_product_ids=...)` per example - cheap numpy arithmetic
+    # reusing the already-cached product/text embeddings, not a re-encode.
+    # The free-text embedding lookup itself (search terms without a
+    # matched product, chatbot summaries) IS a real Sentence Transformer
+    # call, but only once, over the small set of unique strings -
+    # consistent with the feature pipeline's "precompute once" cache
+    # philosophy. Callers that already loaded an encoder for that
     # pipeline should pass it in via `st_encoder` to avoid loading the
     # model twice.
     st_encoder = st_encoder or SentenceTransformerEncoder(
@@ -179,7 +180,7 @@ def train_two_tower(
     history = model.fit(train_ds, **fit_kwargs)
 
     # Precompute L2-normalized embeddings for the FULL current catalog -
-    # what Phase 5 loads into FAISS, and what evaluation ranks against.
+    # what gets loaded into the VectorIndex, and what evaluation ranks against.
     all_item_ids = [p.id for p in products]
     all_item_batch = encoder.encode_item_batch(all_item_ids, product_features, product_embeddings)
     all_item_embeddings = item_tower.predict(all_item_batch, verbose=0)

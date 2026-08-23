@@ -1,5 +1,5 @@
-"""Internal Streamlit recommendation dashboard (Phase 9, rewired by
-STEP 9 - docs/data-mapping.md section 18).
+"""Internal Streamlit recommendation dashboard (docs/data-mapping.md
+section 18).
 
 Streamlit → HTTP → FastAPI → `RecommendationService` → Pipeline is the
 ONE serving path: every recommendation and every piece of user/catalog
@@ -194,10 +194,10 @@ def _render_pipeline_debug(meta, items: list) -> None:
 def _render_metrics_section(client) -> None:
     st.subheader("6. Metrics / debug")
     st.caption(
-        "⚠️ These are OFFLINE metrics from the APPROVED STEP 5/7/8 temporal future-purchase evaluation "
+        "⚠️ These are OFFLINE metrics from the approved temporal future-purchase evaluation "
         "protocol, PERSISTED by `scripts/generate_offline_report.py` and served as a cheap read by "
         "`GET /v1/metrics/offline` (no evaluation pass runs on this request). They are NOT real "
-        "production/online metrics (CTR, conversion, real engagement) - V1 has no event-tracking pipeline to "
+        "production/online metrics (CTR, conversion, real engagement) - there is no event-tracking pipeline to "
         "compute those from."
     )
     try:

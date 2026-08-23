@@ -1,4 +1,4 @@
-"""Generate, validate, save, and report stats for the V1 synthetic dataset.
+"""Generate, validate, save, and report stats for the synthetic dataset.
 
 Usage:
     python scripts/generate_synthetic_dataset.py [--out data/synthetic]

@@ -326,7 +326,7 @@ was designed to absorb that change.
 
 ## 5. Eligibility / business rules - hard PRE-retrieval gate + final validation
 
-**Revised 2026-08-16** (mentor-reviewed architecture change, supersedes
+**Revised 2026-08-16** (architecture change, supersedes
 the 2026-08-12 "filter last" revision below): `isActive`/`stockQuantity`
 are HARD, global catalog-eligibility facts, not serving-time noise to
 defer - they now gate candidate generation itself, before retrieval:
@@ -884,7 +884,7 @@ genuinely temporal held-out split instead of this content-based heuristic.
 
 This project has ONE roadmap: the 11 phases in `README.md`'s
 "Development phases" section. Sections §14-18.1 below document later
-mentor-driven work that extended specific phases after the initial 10
+work that extended specific phases after the initial 10
 were complete; that work was historically tracked with its own "STEP"
 numbering (STEP 5-9) during development, but STEP is not a second
 roadmap - every STEP maps onto one or more of the 11 phases, listed in
@@ -896,7 +896,7 @@ implementation of Phase N," not as an independent stage after Phase 11.
 | §2 UserProfile fields | Phase 2 |
 | §3 Cold-start tiers | Phase 7 - originally four signals, now sized against five (click added to the canonical `User_events` contract, Phase 2) |
 | §4 Click/Search/Chatbot adapters; `User_events` contract, `UserInteraction`, `UserEventsAdapter` | Phase 2 - search/chatbot synthetic adapters, the confirmed `User_events` contract (click signal + synthetic adapter, `UserInteraction` canonical event, `UserEventsAdapter` future real-backend adapter, action_time preservation), and the backend-shaped SQLite integration (`backend_shaped_synthetic.db`, `adapters.sqlite_factory.build_sqlite_adapters`, `data.sqlite.*`) |
-| §5 Eligibility/business rules policy (hard pre-retrieval gate + final lightweight validation) | Phase 7 (policy interface, originally applied last) / Phase 11 (moved to a hard pre-retrieval gate, mentor-reviewed) |
+| §5 Eligibility/business rules policy (hard pre-retrieval gate + final lightweight validation) | Phase 7 (policy interface, originally applied last) / Phase 11 (moved to a hard pre-retrieval gate) |
 | §6 Popularity | Phase 2 (data) / Phase 7 (fallback ranking) |
 | §8 Offline evaluation | Phase 4 (Recall/HitRate) / Phase 5 (latency) / Phase 6 (Precision/NDCG/MRR) / Phase 7 (coverage/diversity/duplicate/fill-rate/cold-start/pipeline latency) / Phase 8 (HTTP end-to-end latency) |
 | §8.1 Temporal future-purchase evaluation protocol (`evaluation.temporal_future_purchase`, SQLite temporal splits, point-in-time truncation, leakage audit) | Phase 7 - the evaluation/splitting infrastructure reuses the same serving pipeline point-in-time (no retraining, no index rebuild); its metrics extend the same lineage as §8 (Phases 4/6) |
@@ -1226,7 +1226,7 @@ evaluation until an appropriately-dimensioned model exists for this
 catalog).
 
 **Revenue-aware metrics**: NOT implemented as part of this feature work
-(deliberately - see the mentor spec's §35: "prepare, don't optimize
+(deliberately - the guiding principle here is "prepare, don't optimize
 yet"). The
 primary offline ground truth is UNCHANGED and remains held-out FUTURE
 PURCHASE products (§8.1) - Precision/Recall/HitRate/NDCG/MRR@K continue
@@ -1691,7 +1691,7 @@ user 1 (SPARSE), user 24 (NO_HISTORY). All three returned HTTP 200, 10/10
 requested items, zero duplicate `product_id`s, zero ineligible
 (inactive/out-of-stock) products leaked into results, and
 tier-appropriate `source` values (`personalized` for STRONG/SPARSE,
-`preferred_category` for NO_HISTORY) - see the original mentor-review
+`preferred_category` for NO_HISTORY) - see the original verification
 report for the full per-user output. The server was then stopped; no
 training, retraining, or artifact regeneration occurred at any point.
 

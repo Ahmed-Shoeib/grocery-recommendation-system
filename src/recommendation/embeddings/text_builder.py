@@ -1,10 +1,10 @@
 """Builds the text string fed to the Sentence Transformer for one product.
 
 Combines name, brand, category, parent category, tags, description, and
-ingredients - the fields the prompt specifies for semantic product
-representation - into a single short passage. No price/stock/timestamp
-fields are included: those are structured features (`features.product_features`),
-not semantic-meaning inputs.
+ingredients into a single short passage for semantic product
+representation. No price/stock/timestamp fields are included: those are
+structured features (`features.product_features`), not semantic-meaning
+inputs.
 """
 
 from __future__ import annotations

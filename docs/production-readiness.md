@@ -10,7 +10,7 @@ a human decision, not quietly resolved.
 
 > **Snapshot notice**: this document is a point-in-time review written
 > at the end of Phase 10 and is NOT re-verified against the later
-> mentor-driven work that extended Phases 2, 3, 4, 6, 7, 8, and 9 since
+> work that extended Phases 2, 3, 4, 6, 7, 8, and 9 since
 > (recency weighting and price-aware features in Phase 3, the current
 > 9/9-dimensional Two-Tower in Phase 4, the 29-feature ranker in Phase 6,
 > the backend-shaped SQLite data source and five-signal `User_events`

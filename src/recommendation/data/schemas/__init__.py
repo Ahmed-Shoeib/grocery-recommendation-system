@@ -1,3 +1,8 @@
+"""Canonical pydantic schemas shared by every adapter, model, and service
+layer, independent of whether the data came from the synthetic generators
+or a real backend.
+"""
+
 from recommendation.data.schemas.category import Category
 from recommendation.data.schemas.engagement import (
     CartAffinityRecord,

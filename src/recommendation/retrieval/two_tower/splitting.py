@@ -1,8 +1,9 @@
 """Per-user leave-one-out train/val/test split over DISTINCT purchased
 product ids.
 
-NOT a temporal split - V1 has no usable timestamps (docs/data-mapping.md
-section 1/7), so this uses a config-seeded random holdout instead, which
+NOT a temporal split - the legacy synthetic dataset has no usable
+timestamps (docs/data-mapping.md section 1/7), so this uses a
+config-seeded random holdout instead, which
 is the standard evaluation protocol for implicit-feedback recommenders
 without timestamps (leave-one-out, as in He et al.'s NCF and much of the
 following literature) rather than a stand-in that quietly pretends to be

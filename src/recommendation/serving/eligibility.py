@@ -1,6 +1,6 @@
-"""Hard global catalog-eligibility policy (Phase 7, re-architected
-Phase 11) - `isActive`/`stockQuantity`, the fields the ERD actually has.
-No `isDeleted` or similar field is invented.
+"""Hard global catalog-eligibility policy - `isActive`/`stockQuantity`,
+the fields the ERD actually has. No `isDeleted` or similar field is
+invented.
 
 This one policy (`build_eligibility_rules` + `apply_eligibility`) is
 applied at TWO points in `serving.pipeline.generate_recommendations`,

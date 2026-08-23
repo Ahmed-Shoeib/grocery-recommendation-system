@@ -61,16 +61,13 @@ class ActionType(str, Enum):
 class UserInteraction(BaseModel):
     """One row of the future `User_events` table, canonicalized.
 
-    `action_time` is preserved here so a temporal split / recency feature /
-    event-sequence model doesn't require another data-contract change. As
-    of STEP 5/STEP 7-8, it IS consumed: `features.recency.effective_weight`
-    derives recency decay from it for every signal that carries a real
-    timestamp (the `User_events`/SQLite-sourced path), and
-    `evaluation.temporal_future_purchase` uses it for point-in-time history
-    truncation and future-PURCHASE target windows (see docs/data-mapping.md
-    section 4's "Timestamps" subsection and sections 8.1/14). Event-sequence
-    modeling beyond point-in-time truncation and recency decay remains out
-    of scope (section 7).
+    `action_time` is preserved so recency weighting and temporal splits
+    don't require another data-contract change: `features.recency
+    .effective_weight` derives decay from it for every signal that carries
+    a real timestamp, and `evaluation.temporal_future_purchase` uses it for
+    point-in-time history truncation and future-PURCHASE target windows
+    (docs/data-mapping.md section 4, 8.1, 14). Event-sequence modeling
+    beyond that remains out of scope (section 7).
     """
 
     user_id: int
