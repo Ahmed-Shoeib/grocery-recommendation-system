@@ -326,8 +326,18 @@ def recommend(
     Recency (docs/data-mapping.md section 14) is opt-in per
     `build_user_features` call (`features.user_features` docstring) - this
     is the live-request boundary, so it explicitly supplies
-    `reference_time=datetime.now()` (wall-clock "now" is legitimate here,
-    unlike in offline evaluation or the non-temporal training path).
+    `reference_time=` the current naive-UTC time (wall-clock "now" is
+    legitimate here, unlike in offline evaluation or the non-temporal
+    training path). Deliberately UTC, not the server process's local
+    clock (`datetime.now()`) - `data.sqlite.loader._parse_timestamp`
+    parses every `action_time` under the same naive-UTC convention, so a
+    fresh `User_events` row (see `api.dependencies.RecommendationService
+    .maybe_refresh`) compares correctly against this reference_time
+    regardless of which timezone the server machine itself runs in. Using
+    the server's local clock here instead would make a genuinely-recent,
+    correctly-UTC-timestamped event look "in the future" on any server not
+    itself running in UTC, incorrectly raising `features.recency
+    .RecencyLeakageError`.
 
     `price_context` (STEP 6, docs/data-mapping.md section 15) is likewise
     threaded straight through to `build_user_features` - `None` (default)
@@ -335,16 +345,21 @@ def recommend(
     gracefully (neutral price features) rather than crashing; the real
     caller (`RecommendationService.recommend`) builds and passes one.
     """
-    from datetime import datetime
+    from datetime import datetime, timezone
 
     from recommendation.data.adapters.engagement import build_engagement_profile
 
     profile = build_engagement_profile(
         user_id, bundle.users, bundle.purchases, bundle.cart, bundle.clicks, bundle.search, bundle.chatbot, bundle.reviews
     )
+    # Naive UTC "now" - NOT datetime.now() (the server process's local
+    # clock) - so this matches data.sqlite.loader._parse_timestamp's
+    # naive-UTC parsing convention regardless of server timezone. See this
+    # function's docstring.
+    now_utc_naive = datetime.now(timezone.utc).replace(tzinfo=None)
     user_features = build_user_features(
         profile, product_lookup, product_embeddings, config.features,
-        text_embeddings=text_embeddings, reference_time=datetime.now(), price_context=price_context,
+        text_embeddings=text_embeddings, reference_time=now_utc_naive, price_context=price_context,
     )
     return generate_recommendations(
         user_features, product_features, product_embeddings, all_item_ids, tt_encoder, user_tower, ranker_model, vector_index, config, limit

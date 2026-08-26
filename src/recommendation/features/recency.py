@@ -22,6 +22,15 @@ Naive `datetime`s throughout (no `tzinfo`), matching every other timestamp
 already flowing through this codebase (`data.sqlite.loader._parse_timestamp`,
 `evaluation.temporal_future_purchase`'s own cutoffs) - callers must not mix
 naive and timezone-aware datetimes here.
+
+That naive representation's fixed meaning is UTC wall-clock time:
+`data.sqlite.loader._parse_timestamp` normalizes every parsed `action_time`
+to naive-UTC, and `serving.pipeline.recommend` builds its live
+`reference_time` the same way (`datetime.now(timezone.utc)`, tzinfo
+stripped) rather than from the server process's local clock - otherwise a
+correctly-UTC-timestamped fresh `User_events` row could be misread as "in
+the future" on a server not itself running in UTC, incorrectly raising
+`RecencyLeakageError` below.
 """
 
 from __future__ import annotations

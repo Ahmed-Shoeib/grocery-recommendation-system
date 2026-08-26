@@ -55,6 +55,21 @@ class PathsConfig(BaseModel):
     data_source: Literal["synthetic", "sqlite"] = "sqlite"
 
 
+class RefreshConfig(BaseModel):
+    """How often the LIVE recommendation service re-reads its data layer
+    (`User_events` + Product/User/Review adapters, and everything derived
+    from them - product_features, engagement profiles, price context)
+    from `paths.data_sqlite`, without a process restart. Trained model
+    artifacts (Two-Tower/ranker/VectorIndex) are never affected by this -
+    see `api.dependencies.RecommendationService.maybe_refresh`.
+
+    `interval_seconds <= 0` disables periodic refresh (equivalent to the
+    original startup-snapshot-only behavior).
+    """
+
+    interval_seconds: float = 30.0
+
+
 class SyntheticDataConfig(BaseModel):
     num_products: int = 50
     num_users: int = 300
@@ -357,6 +372,7 @@ class AppConfig(BaseModel):
     random_seed: int = 42
     log_level: str = "INFO"
     paths: PathsConfig = Field(default_factory=PathsConfig)
+    refresh: RefreshConfig = Field(default_factory=RefreshConfig)
     synthetic_data: SyntheticDataConfig = Field(default_factory=SyntheticDataConfig)
     embedding: EmbeddingConfig = Field(default_factory=EmbeddingConfig)
     features: FeatureConfig = Field(default_factory=FeatureConfig)
@@ -383,6 +399,7 @@ _ENV_OVERRIDES: dict[str, tuple[tuple[str, ...], Callable[[str], object]]] = {
     "RECS_API_MAX_TOP_N": (("api", "max_recommendation_count"), int),
     "RECS_DATA_SOURCE": (("paths", "data_source"), str),
     "RECS_DASHBOARD_API_BASE_URL": (("dashboard", "api_base_url"), str),
+    "RECS_REFRESH_INTERVAL_SECONDS": (("refresh", "interval_seconds"), float),
 }
 
 

@@ -8,12 +8,15 @@ tests exercise API plumbing/contracts, not recommendation quality.
 
 from __future__ import annotations
 
+import inspect
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
 import numpy as np
 import pytest
 from fastapi.testclient import TestClient
 
+from recommendation.api import routes as routes_module
 from recommendation.api.app import create_app
 from recommendation.api.dependencies import RecommendationService, resolve_models_root
 from recommendation.data.adapters.base import (
@@ -577,3 +580,39 @@ def test_pipeline_failure_returns_structured_500():
     body = response.json()
     assert body["error"] == "internal_error"
     assert "Traceback" not in body["message"]
+
+
+# --- async-blocking fix: get_recommendations is now a plain sync def --------
+# (docs/production-readiness.md's "must address before real production
+# deployment" item: the route used to be `async def` while calling fully
+# synchronous model inference, blocking the event loop for the duration of
+# every request.)
+
+def test_get_recommendations_route_is_a_plain_sync_function():
+    """A plain `def` route is run by FastAPI in Starlette's external
+    threadpool automatically - confirms the fix was actually applied,
+    not just that requests still succeed (which they would either way).
+    """
+    assert inspect.iscoroutinefunction(routes_module.get_recommendations) is False
+
+
+def test_concurrent_recommendation_requests_all_succeed(client):
+    """Regression/no-crash check for the sync-def change: several
+    concurrent requests (including a mix of valid/known and unknown users)
+    must all complete correctly with no deadlock, no shared-state
+    corruption, and no change in response shape.
+    """
+    user_ids = [1, 2, 3, UNKNOWN_USER_ID] * 5
+
+    def _call(user_id: int):
+        return client.get(f"/v1/users/{user_id}/recommendations")
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        responses = list(pool.map(_call, user_ids))
+
+    for user_id, response in zip(user_ids, responses):
+        if user_id == UNKNOWN_USER_ID:
+            assert response.status_code == 404
+        else:
+            assert response.status_code == 200
+            assert response.json()["meta"]["user_id"] == user_id

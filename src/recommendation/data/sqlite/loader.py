@@ -23,7 +23,7 @@ risk exactly the double-counting the integration was told to avoid.
 from __future__ import annotations
 
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timezone
 
 from recommendation.data.schemas.events import ActionType, UserInteraction
 from recommendation.data.synthetic.raw_schemas import (
@@ -111,6 +111,29 @@ def load_events(con: sqlite3.Connection) -> list[UserInteraction]:
 
 
 def _parse_timestamp(value: str | None) -> datetime | None:
+    """Parses `action_time` into the naive datetime every downstream
+    consumer expects (`features.recency`, `evaluation
+    .temporal_future_purchase` - see those modules' "naive datetimes
+    throughout" docstrings). Required contract, adopted so a fresh
+    `User_events` row (see `api.dependencies.RecommendationService
+    .maybe_refresh`) can never be misread as "in the future" purely
+    because of a timezone-convention mismatch between the backend writer
+    and this server's own clock (`serving.pipeline.recommend`'s
+    `reference_time`, which uses this SAME convention):
+
+    - A naive value (no offset/`Z`) is taken to ALREADY be UTC wall-clock
+      time - the common backend convention (e.g. Python `datetime
+      .utcnow()`, Postgres `now() AT TIME ZONE 'utc'`) - and used as-is.
+      This is also byte-for-byte how every naive `action_time` already in
+      `data/sqlite/backend_shaped_synthetic.db` has always been parsed,
+      so existing data/tests are unaffected.
+    - A value that DOES carry explicit offset/`Z` info is converted to
+      UTC first, then stripped of tzinfo, landing in that exact same
+      naive-UTC representation.
+    """
     if value is None:
         return None
-    return datetime.fromisoformat(value)
+    parsed = datetime.fromisoformat(value)
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
+    return parsed

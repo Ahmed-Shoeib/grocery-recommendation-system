@@ -96,7 +96,14 @@ async def ready(request: Request) -> ReadinessResponse:
 
 
 @router.get("/users/{user_id}/recommendations", response_model=RecommendationResponse)
-async def get_recommendations(
+# A plain `def`, not `async def`: the body calls fully synchronous,
+# CPU-bound model inference (Two-Tower/ranker `.predict()`, SQLite reads
+# on refresh) with nothing to `await`. FastAPI runs a sync path-operation
+# function in Starlette's external threadpool automatically, so this no
+# longer blocks the event loop for the ~200-300ms a request takes -
+# no `run_in_threadpool`/`asyncio.to_thread` call needed, and no change
+# to the function's inputs, outputs, or behavior.
+def get_recommendations(
     user_id: int,
     limit: int | None = Query(default=None, ge=1, description="Requested Top-N; defaults to configs/base.yaml: api.default_recommendation_count"),
     service: RecommendationService = Depends(get_service),

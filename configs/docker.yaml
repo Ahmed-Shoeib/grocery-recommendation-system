@@ -27,6 +27,15 @@ paths:
   data_sqlite: "data/sqlite/backend_shaped_synthetic.db"
   data_source: "sqlite"
 
+# Freshness fix: how often the LIVE service re-reads User_events (+
+# Product/User/Review) from paths.data_sqlite and recomputes
+# product_features/engagement profiles/price context, WITHOUT a process
+# restart - see RecommendationService.maybe_refresh. Trained Two-Tower/
+# ranker/VectorIndex artifacts are never affected. <=0 disables periodic
+# refresh. Overridable via RECS_REFRESH_INTERVAL_SECONDS.
+refresh:
+  interval_seconds: 30.0
+
 # Phase 2 synthetic dataset generation.
 synthetic_data:
   num_products: 50

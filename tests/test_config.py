@@ -17,6 +17,17 @@ def test_load_config_defaults():
     assert config.retrieval.backend in ("faiss", "scann")
 
 
+def test_refresh_config_default_interval():
+    config = load_config()
+    assert config.refresh.interval_seconds == 30.0
+
+
+def test_env_override_refresh_interval_seconds(monkeypatch):
+    monkeypatch.setenv("RECS_REFRESH_INTERVAL_SECONDS", "5.5")
+    config = load_config()
+    assert config.refresh.interval_seconds == 5.5
+
+
 def test_retrieval_ann_config_defaults():
     config = load_config()
     retrieval = config.retrieval
