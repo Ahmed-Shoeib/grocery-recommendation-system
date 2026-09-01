@@ -38,6 +38,13 @@ class PathsConfig(BaseModel):
     # consumed by adapters.sqlite_factory.build_sqlite_adapters when no
     # explicit path is passed.
     data_sqlite: str = "data/sqlite/backend_shaped_synthetic.db"
+    # Persistent slug/GUID -> internal-int registry for the "backend_api"
+    # data source (docs/data-mapping.md section 19). JSON file, atomic
+    # write, append-only. Lives under data_processed by default so it sits
+    # with the other regenerable-but-worth-keeping build artifacts; delete
+    # it to renumber from scratch (only safe before any model is trained
+    # against those ids).
+    backend_identity_registry: str = "data/processed/backend_identity_registry.json"
     # STEP 9 (docs/data-mapping.md section 18): which data source + trained
     # artifact set `api.dependencies.build_recommendation_service` uses for
     # LIVE serving. "sqlite" -> data_sqlite via build_sqlite_adapters,
@@ -48,11 +55,15 @@ class PathsConfig(BaseModel):
     # change and are therefore currently dimension-incompatible; startup
     # validation - `serving.startup_validation.validate_ranker_artifacts` -
     # rejects them loudly rather than serving silently wrong results, see
-    # that module's docstring). Training scripts
+    # that module's docstring). "backend_api" -> the real backend REST API
+    # via `adapters.backend_factory.build_backend_api_adapters`, artifacts
+    # from `{models_dir}/backend_api/` (do not exist until a retrain
+    # against the real catalog - startup validation rejects a missing/
+    # mismatched set loudly, by design). Training scripts
     # (scripts/train_two_tower.py, train_ranker.py, train_sqlite_pipeline.py)
     # are unaffected by this flag - they take their adapter bundle as an
     # explicit argument, never read this field.
-    data_source: Literal["synthetic", "sqlite"] = "sqlite"
+    data_source: Literal["synthetic", "sqlite", "backend_api"] = "sqlite"
 
 
 class RefreshConfig(BaseModel):
@@ -68,6 +79,32 @@ class RefreshConfig(BaseModel):
     """
 
     interval_seconds: float = 30.0
+
+
+class BackendApiConfig(BaseModel):
+    """Connection settings for the real backend REST API (data_source
+    "backend_api"). No credentials/tokens live here or anywhere in the
+    codebase - the recommender calls only public/soon-public endpoints and
+    sends no Authorization header (docs/data-mapping.md section 19).
+
+    `base_url` has no meaningful default - it MUST be supplied per
+    environment via `configs/*.yaml: backend_api.base_url` or the
+    `RECS_BACKEND_API_BASE_URL` env var. `tls_verify` defaults to True and
+    is only ever relaxed via config/env for a dev backend with a
+    self-signed certificate (`RECS_BACKEND_TLS_VERIFY=false`), never in
+    code.
+    """
+
+    base_url: str = "http://localhost:8080"
+    timeout_seconds: float = 30.0
+    tls_verify: bool = True
+    max_retries: int = 2
+    # The backend caps /api/products and /api/categories `Limit` at 100
+    # (a higher value is a 400). The client floors each request at the
+    # per-endpoint cap, so a larger value here only affects endpoints that
+    # allow it (e.g. /api/user-activities).
+    page_size: int = 100
+    user_agent: str = "grocery-recommendation-system/backend-integration"
 
 
 class SyntheticDataConfig(BaseModel):
@@ -373,6 +410,7 @@ class AppConfig(BaseModel):
     log_level: str = "INFO"
     paths: PathsConfig = Field(default_factory=PathsConfig)
     refresh: RefreshConfig = Field(default_factory=RefreshConfig)
+    backend_api: BackendApiConfig = Field(default_factory=BackendApiConfig)
     synthetic_data: SyntheticDataConfig = Field(default_factory=SyntheticDataConfig)
     embedding: EmbeddingConfig = Field(default_factory=EmbeddingConfig)
     features: FeatureConfig = Field(default_factory=FeatureConfig)
@@ -384,6 +422,15 @@ class AppConfig(BaseModel):
     ranking: RankingConfig = Field(default_factory=RankingConfig)
     api: ApiConfig = Field(default_factory=ApiConfig)
     dashboard: DashboardConfig = Field(default_factory=DashboardConfig)
+
+
+def _parse_bool(value: str) -> bool:
+    lowered = value.strip().lower()
+    if lowered in ("1", "true", "yes", "on"):
+        return True
+    if lowered in ("0", "false", "no", "off"):
+        return False
+    raise ValueError(f"expected a boolean (true/false), got {value!r}")
 
 
 # env var -> (dotted path into the raw config dict, caster). Deliberately
@@ -400,6 +447,10 @@ _ENV_OVERRIDES: dict[str, tuple[tuple[str, ...], Callable[[str], object]]] = {
     "RECS_DATA_SOURCE": (("paths", "data_source"), str),
     "RECS_DASHBOARD_API_BASE_URL": (("dashboard", "api_base_url"), str),
     "RECS_REFRESH_INTERVAL_SECONDS": (("refresh", "interval_seconds"), float),
+    "RECS_BACKEND_API_BASE_URL": (("backend_api", "base_url"), str),
+    "RECS_BACKEND_API_TIMEOUT": (("backend_api", "timeout_seconds"), float),
+    "RECS_BACKEND_TLS_VERIFY": (("backend_api", "tls_verify"), _parse_bool),
+    "RECS_BACKEND_API_PAGE_SIZE": (("backend_api", "page_size"), int),
 }
 
 

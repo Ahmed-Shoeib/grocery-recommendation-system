@@ -448,10 +448,22 @@ and validated by `src/recommendation/utils/config.py`.
   | `RECS_API_HOST` / `RECS_API_PORT` | `api.host` / `api.port` |
   | `RECS_API_DEFAULT_TOP_N` | `api.default_recommendation_count` |
   | `RECS_API_MAX_TOP_N` | `api.max_recommendation_count` |
+  | `RECS_DATA_SOURCE` | `paths.data_source` (`synthetic` \| `sqlite` \| `backend_api`) |
+  | `RECS_REFRESH_INTERVAL_SECONDS` | `refresh.interval_seconds` |
+  | `RECS_BACKEND_API_BASE_URL` | `backend_api.base_url` (real backend REST URL; **must** be set to use `backend_api`) |
+  | `RECS_BACKEND_API_TIMEOUT` | `backend_api.timeout_seconds` |
+  | `RECS_BACKEND_TLS_VERIFY` | `backend_api.tls_verify` (default `true`; set `false` **only** for a dev backend with a self-signed cert) |
+  | `RECS_BACKEND_API_PAGE_SIZE` | `backend_api.page_size` |
 
-No secrets are hardcoded anywhere - this system has none to hold (no
-auth, no external API keys; the synthetic dataset and local model
-artifacts are the only "data" the system touches).
+  `.env.example` documents these; copy it to `.env` (gitignored) for
+  local work.
+
+No secrets are hardcoded anywhere, and there are none to hold: the
+recommender sends **no `Authorization` header and holds no token** even
+against the real backend (it uses public / soon-public endpoints only -
+`docs/data-mapping.md` §19). TLS verification for the backend client is
+**on by default** and is never disabled in code - only relaxable via the
+explicit `RECS_BACKEND_TLS_VERIFY=false` dev knob.
 
 ## Metrics (offline, synthetic data - see caveat below)
 
@@ -627,6 +639,22 @@ see `docs/data-mapping.md` §4's "SQLite integration" subsection for the
 full mapping. It is an integration/experimentation path, not (yet) the
 live API/dashboard data source, and it is read-only by construction. A
 real backend factory would follow the exact same shape.
+
+And now there is a **third** working factory:
+`data.adapters.backend_factory.build_backend_api_adapters`
+(`paths.data_source: "backend_api"`) reads the **real backend over its
+HTTP REST API** - there is no direct DB access. `data.backend.*` is the
+only code that knows HTTP / the backend's JSON wire shapes / its
+slug + GUID identifiers; a persistent `ExternalIdentityResolver` maps
+those to the stable internal `int` ids the canonical schemas and the
+trained artifacts require, so nothing downstream changes. See
+`docs/data-mapping.md` §19 for the full endpoint list, DTO→canonical
+mapping, identity design, the `/api/reviews`-not-implemented status, TLS/
+error/freshness behaviour, and what the backend team still needs to
+change. It is **opt-in and needs a retrain against the real catalog**
+before it can serve live `/recommendations` (`models/backend_api/`
+artifacts don't exist); the data path itself is verified end to end by
+`scripts/backend_api_smoke_test.py` (live, not part of `pytest`).
 
 ## Development phases
 

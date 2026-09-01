@@ -29,6 +29,7 @@ import tensorflow as tf
 
 from recommendation.api.errors import UnknownUserError
 from recommendation.data.adapters.base import AdapterBundle
+from recommendation.data.adapters.backend_factory import build_backend_api_adapters
 from recommendation.data.adapters.factory import build_synthetic_adapters
 from recommendation.data.adapters.sqlite_factory import build_sqlite_adapters
 from recommendation.data.schemas.engagement import EngagementProfile
@@ -101,6 +102,14 @@ def _load_data_snapshot(config: AppConfig, encoder: SentenceTransformerEncoder) 
         # - see docs/data-mapping.md section 16).
         feature_config = config.model_copy(
             update={"embedding": config.embedding.model_copy(update={"cache_path": "data/processed/product_embeddings_sqlite.npz"})}
+        )
+    elif config.paths.data_source == "backend_api":
+        # Real backend REST API (docs/data-mapping.md section 19). Its own
+        # embedding cache - a different catalog again (slug identity, no
+        # brand), never conflated with the synthetic or SQLite caches.
+        bundle = build_backend_api_adapters(config)
+        feature_config = config.model_copy(
+            update={"embedding": config.embedding.model_copy(update={"cache_path": "data/processed/product_embeddings_backend_api.npz"})}
         )
     else:
         dataset = generate_synthetic_dataset(config)
@@ -195,9 +204,11 @@ class RecommendationService:
                 return False
             if (time.monotonic() - self._data_loaded_at) < interval:
                 return False
-            if self.config.paths.data_source != "sqlite":
+            if self.config.paths.data_source not in ("sqlite", "backend_api"):
                 # The synthetic generator is deterministic (fixed seed) -
                 # there is no live external data source to become fresh.
+                # "sqlite" re-reads the DB file; "backend_api" re-polls the
+                # REST API (both cheap relative to the TTL).
                 return False
 
         if not self._refresh_lock.acquire(blocking=False):
@@ -266,6 +277,12 @@ def resolve_models_root(config: AppConfig) -> Path:
     """
     if config.paths.data_source == "sqlite":
         return resolve_path(config.paths.models_dir) / "sqlite_baseline"
+    elif config.paths.data_source == "backend_api":
+        # These artifacts don't exist until a retrain against the real
+        # backend catalog (slug identity, no brand vocabulary) - startup
+        # validation fails loudly on the missing/mismatched set, by
+        # design. See docs/data-mapping.md section 19.
+        return resolve_path(config.paths.models_dir) / "backend_api"
     elif config.paths.data_source == "synthetic":
         return resolve_path(config.paths.models_dir)
     else:

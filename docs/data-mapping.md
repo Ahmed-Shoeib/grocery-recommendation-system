@@ -1773,3 +1773,291 @@ resolution `build_recommendation_service` already uses - is reused so
 the report reader and the live service can never resolve a different
 directory for the same config.
 
+## 19. Real backend REST integration - `data_source: "backend_api"`
+
+There is **no direct database access** to the production backend. The
+recommendation service obtains catalog, user, and engagement data over
+the backend's **HTTP API** (Swagger at `/swagger/index.html`). This
+section documents the third `AdapterBundle` producer,
+`adapters.backend_factory.build_backend_api_adapters`, alongside
+`build_synthetic_adapters` (section 4) and `build_sqlite_adapters`
+(section 4's SQLite subsection). It is **opt-in**
+(`paths.data_source: "backend_api"`); `"sqlite"` stays the default.
+
+Any earlier statement in this repo implying the production backend is
+reached through direct SQL / a DB connection is superseded here: the ERD
+(`docs/erd.jpeg`) and the `User_events` contract (section 4) still
+describe the backend's *data model*, but the recommender's *access path*
+to it is HTTP, not SQL.
+
+### 19.1 What the API actually exposes (probed live 2026-09-01)
+
+The published OpenAPI document declares request bodies only - **no
+response schemas** - so every response shape below was verified by
+calling the live endpoints.
+
+**Envelope**: every response is
+`{"success": bool, "statusCode": int, "message": str, "data": <payload>}`.
+List endpoints nest `data.data` (the array) + `data.pagination`.
+
+**Pagination**: two styles. Cursor-based (`/api/products`,
+`/api/categories`, `/api/user-activities`): `pagination.nextCursor` /
+`pagination.hasNext`, request param `Cursor`/`cursor` +
+`Limit`/`pageSize`. `/api/products` and `/api/categories` reject
+`Limit > 100` with HTTP 400 (the client floors catalog page size at
+100). Page-number style (`/api/tags`) is not used by this integration.
+
+**Auth**: `/api/products`, `/api/categories`, `/api/user-activities` are
+public. `/api/users/{userId}` is currently `Bearer`-gated; the backend
+team has confirmed it will be opened up. **The recommender sends no
+`Authorization` header and holds no token** - it treats the user
+endpoint as best-effort (see 19.4).
+
+### 19.2 Endpoints used
+
+| Endpoint | Used for | Identity in payload |
+|---|---|---|
+| `GET /api/products` (list) + cursor pages | full catalog | product **slug**; no id |
+| `GET /api/categories` (list) + cursor pages | category names | category **slug**; no id, no parent |
+| `GET /api/user-activities` + cursor pages | **the sole engagement source** (CLICK / ADD_TO_CART / PURCHASE) | user **GUID**, product **slug** |
+| `GET /api/users/{guid}` | best-effort profile enrichment (`preferredCategory` / `ageGroup` **only if present**) | user **GUID** |
+
+Deliberately **not** used: `/api/orders*`, `/api/cart`,
+`/api/favorites/*`. `/api/user-activities` is the single engagement-truth
+source (mirrors the SQLite factory's `User_events`-only contract), so the
+same real-world action cannot be double-counted through two code paths.
+`/api/reviews` **does not exist** (the route 404s) - see 19.6.
+
+### 19.3 DTO → canonical mapping and the field-availability gap
+
+`data.backend.dtos` (external wire models) → `data.backend.loader` →
+the **same** `Raw*` / `UserInteraction` models the synthetic and SQLite
+loaders produce → the existing `InMemory*Adapter` / `UserEventsAdapter`
+classes, unchanged. No backend field name, casing, slug, GUID, HTTP
+status, or envelope reaches feature engineering or the models - the
+canonical schemas remain the stability boundary.
+
+Backend product projection vs. canonical `Product` (verified live):
+
+| Canonical field | Backend source | Note |
+|---|---|---|
+| `id` | *(assigned)* | `ExternalIdentityResolver.resolve_product(slug)` - see 19.5 |
+| `slug`, `name`, `description`, `price` | direct | `description` only on the detail endpoint |
+| `stock_quantity` | `stockQuantity` | negative → clamped to 0 (logged) |
+| `price` | `price` | non-positive → clamped to 0.01 (logged) |
+| `is_active` | **absent** | assumed `True`; `stock_quantity` alone gates eligibility for this source |
+| `brand` | **absent** | `None` → brand-affinity features degrade to neutral |
+| `sale_price`, `discount_percentage` | **absent** | `None` → price-aware discount features degrade |
+| `ingredients` | **absent** | `None` |
+| `category_id` | `categorySlug` → resolver | placeholder slug not in `/api/categories` → `0` ("no category") |
+| `parent_category_name` | **absent** | `/api/categories` has no parent link → `None` |
+| `tags` | **absent from the list projection** | `[]` - hydrating them is one `GET /api/products/{slug}` per product (N+1), deferred |
+
+No canonical schema field was added, removed, renamed, or re-typed. The
+`Raw*` models already model every gap field as optional/defaulted (built
+for exactly this, sections 1 and 4), so the mapping is lossy-but-valid,
+not a schema change. Two-Tower input/output contracts, the 128-D
+embedding behaviour, the 29-feature ranker contract, ANN behaviour,
+eligibility ordering, diversity, cold-start, and offline evaluation are
+all untouched.
+
+**Activity → engagement mapping** (`data.backend.mapping`, an explicit
+table - an unrecognised or intentionally-dropped backend action can
+never silently become a wrong signal):
+
+| Backend `actionType` | Canonical | |
+|---|---|---|
+| `ViewProduct` | `CLICK` | |
+| `AddToCart` | `ADD_TO_CART` | |
+| `PlaceOrder` | `PURCHASE` | rows carry the resolved product slug |
+| `AddedToFavorites` | *ignored* | no canonical "favorite" signal; folding it into cart/click would misrepresent it |
+| `RemoveFromCart`, `RemovedFromFavorites` | *ignored* | negative actions; recommender has no retraction semantics |
+| *(anything else)* | *ignored* | one WARNING per distinct unknown value |
+
+An activity row is also **dropped (counted + logged)** when its product
+`slug` is null (the backend records some actions without resolving a
+product) or names a product not in the current catalog - an unknown
+external id must never resolve to *a* product (section 5's data-validation
+contract). The backend has no SEARCH- or CHATBOT-equivalent activity, so
+those canonical signals are simply never produced by this source (which
+`SearchRecord` / `ChatbotContextRecord` already tolerate).
+
+Timestamps: `/api/user-activities` `timestamp` is naive (no offset). It
+is treated as UTC wall-clock - byte-for-byte the convention
+`data.sqlite.loader._parse_timestamp` and `serving.pipeline`'s
+`reference_time` already use (section 4's "Timestamps", the STEP handling
+UTC), so recency weighting and temporal logic need no change.
+
+### 19.4 User profiles
+
+The served user population is **users with ≥1 recorded activity** -
+`list_user_ids()` is the distinct set of user GUIDs seen in the activity
+stream. Each is enriched via `GET /api/users/{guid}` best-effort; while
+that endpoint stays auth-gated every call returns `None` and the profile
+is bare (id only), which the canonical `UserProfile` already tolerates
+(`preferred_category` / `age_group` `Optional`, section 2). After the
+first few auth failures the loader stops calling (no 401 per user) and
+logs once. Enrichment starts working with **no code change** once the
+backend opens the endpoint. `age_group` is populated **only if the API
+states it** - never derived from a birth date.
+
+Serving a zero-activity user via pure cold-start would need a full roster
+endpoint (`GET /api/users`, currently auth-gated) - out of scope here.
+
+**Live verification of `GET /api/users/{guid}` is pending** the backend
+team removing authentication; until then its mapping is exercised only by
+mocked tests + the live smoke script.
+
+### 19.5 Identity: slug / GUID → stable internal `int`
+
+The backend exposes products/categories by **slug** and users by
+**GUID**, and no numeric ids anywhere (an int leaks inside opaque
+pagination cursors but is not a usable contract). The recommender core
+and every trained artifact operate on integer ids.
+`data.backend.identity.ExternalIdentityResolver` is the single boundary
+that bridges the two - **nothing downstream of the adapter layer ever
+sees a slug or a GUID.** This is CASE B (see this task's brief): the API
+truly exposes only slugs/GUIDs, so a proper identity-resolution boundary
+is introduced rather than refactoring the recommender to string ids.
+
+- **Deterministic & persistent**: a JSON registry file
+  (`paths.backend_identity_registry`, default
+  `data/processed/backend_identity_registry.json`, atomic
+  write-and-rename). Same external key → same internal id, across
+  restarts and refreshes.
+- **Append-only**: a key is never renumbered or removed. A product that
+  leaves the catalog keeps its id reserved; if it (or an activity
+  referencing it) returns, the id is unchanged.
+- **Namespace-isolated**: `product` / `category` / `user` each have an
+  independent 1-based sequence and an independent key→id map. Internal
+  `user_id` and `product_id` are used in structurally separate lookups
+  throughout this codebase (as they already are for the SQLite dataset,
+  whose synthetic users 1..1000 and products 1..1200 overlap numerically
+  without issue) and are never compared or merged. Pass
+  `namespace_offsets` to make the numeric ranges disjoint too if a future
+  consumer needs that.
+- **No `hash()`, no list position**: ids come from a persisted monotonic
+  per-namespace counter, not `hash(key)` (salted, unstable across
+  interpreters) or enumeration order (unstable across catalog edits).
+- **Collision-checked**: a stored map that assigns one id to two keys is
+  rejected on load; a counter that has fallen behind its keys is repaired
+  (advanced past the max) with a warning - never a silent duplicate.
+- Catalog objects are *assigned* ids (`resolve_*`); cross-references
+  inside the activity stream are *looked up* only (`peek_*`, returns
+  `None`), so an activity can never mint a phantom product.
+
+**Slug mutability**: if the backend changes a product's slug, this
+resolver treats the new slug as a new product (new id); the old id is
+orphaned but harmless. The robust backend contract is **immutable id +
+mutable slug**; until that exists the compromise is isolated entirely in
+this one class. See 19.8.
+
+### 19.6 Reviews
+
+`/api/reviews` is not implemented (the route 404s). Reviews are an
+**optional** auxiliary ranking signal: `EngagementProfile.reviews`
+defaults to `[]` and `features.product_features.build_product_features`
+handles a review-free catalog (rating features fall back to neutral
+defaults). `loader.load_backend_reviews` returns `[]` today - this is the
+**existing semantics-preserving fallback, not fabricated data**. Its
+docstring records the exact expected contract
+(`{userId, productSlug, rating, comment?, createdAt}`, cursor-paginated)
+and the ~5 lines to implement when the endpoint lands; **no other file
+changes.** This is a backend-team blocker only for the *review* auxiliary
+signal, nothing else.
+
+### 19.7 Configuration, TLS, error behaviour, freshness
+
+**Config** (`configs/*.yaml: backend_api`, all overridable by env -
+`.env.example` documents them; **no secrets/tokens anywhere**):
+
+| Setting / env var | Default | Meaning |
+|---|---|---|
+| `base_url` / `RECS_BACKEND_API_BASE_URL` | *(placeholder)* | **must** be set per environment |
+| `timeout_seconds` / `RECS_BACKEND_API_TIMEOUT` | 30 | per-request timeout |
+| `tls_verify` / `RECS_BACKEND_TLS_VERIFY` | **`true`** | see below |
+| `max_retries` | 2 | retried only for connection errors + HTTP 429/502/503/504 |
+| `page_size` / `RECS_BACKEND_API_PAGE_SIZE` | 100 | floored per-endpoint (catalog cap = 100) |
+| `paths.backend_identity_registry` | `data/processed/backend_identity_registry.json` | 19.5 |
+
+**TLS**: verification is **on by default and never disabled in code**.
+The dev backend presents a self-signed `CN=localhost` certificate on a
+bare IP; for local work set `RECS_BACKEND_TLS_VERIFY=false` (env
+preferred over a file). Disabling it logs one WARNING at client
+construction. A real deployment must use a proper hostname + CA-signed
+certificate and leave verification on.
+
+**Errors** (`data.backend.errors`, a typed hierarchy so a log reader can
+tell *where* it broke - the client never catches `Exception` broadly and
+serves partial data): `BackendUnavailableError` (DNS/refused/TLS/timeout
+after retries), `BackendResponseError` / `BackendAuthError` (non-2xx,
+carrying status + body excerpt), `BackendContractError` (invalid JSON,
+`success != true`, missing `data`), `BackendPaginationError` (`hasNext`
+without a cursor, or a runaway page count). `IdentityRegistryError` for a
+corrupt/incompatible registry file.
+
+**Freshness**: `build_backend_api_adapters` fetches the whole catalog +
+activity stream **once**, in memory - exactly like `build_sqlite_adapters`
+reads the whole DB file once. Network calls live at this boundary only,
+never per feature or per candidate.
+`RecommendationService.maybe_refresh` re-invokes it on the existing TTL
+(`refresh.interval_seconds`, default 30s) so activity rows the backend
+records after startup become visible without a restart - the same
+mechanism the SQLite source already uses. Trained artifacts are never
+touched by a refresh.
+
+### 19.8 Live-serving status and what the backend team still needs to do
+
+`paths.data_source: "backend_api"` selects `models/backend_api/` for
+trained artifacts. **Those artifacts do not exist**: the current
+`models/sqlite_baseline/` Two-Tower/ranker were fit to the synthetic
+1,200-product catalog (integer ids, a brand vocabulary) - a different
+catalog from the real backend's (slug identity, no brand). Startup
+validation (`serving.startup_validation`) rejects a missing/mismatched
+artifact set **loudly**, by design. So today `"backend_api"` is a
+verified **data path** (the smoke script below runs it end to end through
+feature engineering, cold-start tiering, and the eligibility gate); live
+`/recommendations` from it requires a retrain against the real catalog -
+a separate, deliberately out-of-scope step.
+
+**Backend-team asks** (ideal contract, each currently worked around
+inside the integration layer):
+
+1. **Immutable id (or UUID) + slug** on products, categories, and users -
+   not slug-only. Removes the identity-registry compromise (19.5).
+2. **`GET /api/users/{userId}` without authentication** (already
+   confirmed in progress) - unblocks profile enrichment and live
+   verification (19.4).
+3. **`isActive`** (or a soft-delete flag) on the product payload - so
+   eligibility isn't stock-only for this source (19.3).
+4. **`GET /api/reviews`** (cursor-paginated, per 19.6) - unblocks the
+   review auxiliary signal.
+5. Product **brand** on the payload - restores brand-affinity features.
+6. Product **tags** on the *list* projection (not just the detail
+   endpoint) - restores tag text for the Sentence Transformer without an
+   N+1 fetch.
+7. Confirm whether `PlaceOrder` emits **one activity row per order line**
+   or one per order - the mapping assumes each row is one product
+   interaction.
+
+### 19.9 Tests + live smoke
+
+Deterministic, offline (fake session / fake client - never the live
+backend): `tests/test_backend_client.py` (envelope, both cursor param
+styles, page-size cap, retry, error classification, TLS flag),
+`tests/test_backend_identity.py` (determinism, restart persistence,
+namespace isolation, no-`hash()`, collision/repair, catalog
+add/remove), `tests/test_backend_mapping.py`,
+`tests/test_backend_loader.py` (field mapping, backend gaps, null/unknown
+slug drops, bare vs enriched profiles), `tests/test_backend_factory.py`
+(same `AdapterBundle` shape as the other sources, downstream
+`build_engagement_profile` unchanged, no orders/cart double-count,
+registry persistence).
+
+Live (network, **not** part of `pytest`):
+`scripts/backend_api_smoke_test.py` -
+`RECS_BACKEND_API_BASE_URL=… RECS_BACKEND_TLS_VERIFY=false
+RECS_DATA_SOURCE=backend_api python scripts/backend_api_smoke_test.py`.
+Proves the REST data flows through the canonical pipeline with no schema
+change, and that the identity registry is byte-identical on a second run.
+

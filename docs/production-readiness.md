@@ -167,13 +167,25 @@ Every finding is classified as one of:
 - **No rate limiting.**
 - **No TLS** - plain HTTP; a real deployment needs a reverse proxy/
   ingress terminating TLS in front of this service.
-- **Real backend adapters don't exist yet** - only the synthetic
-  in-memory adapters (`data.adapters.factory.build_synthetic_adapters`)
-  are implemented. The `AdapterBundle` interface
-  (`data.adapters.base`) is designed for this swap (see "How the real
-  backend will replace synthetic adapters" in the README), but writing
-  and validating the real SQL/API-backed adapters is real, scoped work
-  that hasn't happened yet.
+- **Real backend REST adapters exist; live serving from them still needs
+  a retrain** - `data.adapters.backend_factory.build_backend_api_adapters`
+  (`paths.data_source: "backend_api"`) is a third, working `AdapterBundle`
+  factory reading the real backend over its HTTP API
+  (`data.backend.*`, docs/data-mapping.md §19): configurable base URL,
+  timeouts, bounded retries, secure-by-default TLS, cursor pagination, a
+  typed error hierarchy, a persistent slug/GUID→int identity resolver,
+  and an explicit backend→canonical event map. The full data path is
+  verified end to end (`scripts/backend_api_smoke_test.py`, live) and by
+  a deterministic mocked test suite. **Not yet live for
+  `/recommendations`**: the trained artifacts under
+  `models/sqlite_baseline/` were fit to the synthetic 1,200-product
+  catalog (integer ids, brand vocabulary), a different catalog from the
+  real backend's (slug identity, no brand) - `"backend_api"` resolves
+  `models/backend_api/`, which doesn't exist until a retrain, and startup
+  validation rejects the mismatch loudly. Outstanding backend-team items
+  (immutable ids, un-gating `GET /api/users/{id}`, `isActive` on the
+  product payload, `GET /api/reviews`, product brand/tags) are listed in
+  docs/data-mapping.md §19.8.
 - **No artifact versioning/rollback story in deployment** - `models/`
   is a single directory snapshot; there's no registry, no canary/A-B
   serving path, no automated rollback if a newly trained model is

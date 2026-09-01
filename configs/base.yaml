@@ -27,12 +27,18 @@ paths:
   # Backend-shaped synthetic integration dataset (see
   # scripts/generate_backend_shaped_sqlite.py) - read-only.
   data_sqlite: "data/sqlite/backend_shaped_synthetic.db"
+  # Persistent slug/GUID -> internal-int registry for data_source
+  # "backend_api" (docs/data-mapping.md section 19).
+  backend_identity_registry: "data/processed/backend_identity_registry.json"
   # "sqlite" is the current live-serving source (docs/data-mapping.md
   # section 18) - the recency+price pipeline trained against
   # backend_shaped_synthetic.db (models/sqlite_baseline/). "synthetic"
   # remains available for backward compatibility only - its artifacts
   # (models/two_tower, models/ranker) predate the current feature
   # dimension change and startup validation will reject them.
+  # "backend_api" -> the real backend REST API (docs/data-mapping.md
+  # section 19); artifacts from models/backend_api/ which do NOT exist
+  # until a retrain against the real catalog - opt-in, not the default.
   data_source: "sqlite"
 
 # Freshness fix: how often the LIVE service re-reads User_events (+
@@ -43,6 +49,24 @@ paths:
 # refresh. Overridable via RECS_REFRESH_INTERVAL_SECONDS.
 refresh:
   interval_seconds: 30.0
+
+# Real backend REST API connection (only used when paths.data_source ==
+# "backend_api" - docs/data-mapping.md section 19). NO credentials/tokens
+# here or anywhere in the codebase: the recommender calls only public /
+# soon-public endpoints and sends no Authorization header.
+#   base_url      MUST be set per environment (or via RECS_BACKEND_API_BASE_URL).
+#   tls_verify    keep true; set false ONLY for a dev backend with a
+#                 self-signed cert, and prefer the env var
+#                 RECS_BACKEND_TLS_VERIFY=false so it never ships in a file.
+# Overridable env vars: RECS_BACKEND_API_BASE_URL, RECS_BACKEND_API_TIMEOUT,
+# RECS_BACKEND_TLS_VERIFY, RECS_BACKEND_API_PAGE_SIZE.
+backend_api:
+  base_url: "http://localhost:8080"
+  timeout_seconds: 30.0
+  tls_verify: true
+  max_retries: 2
+  page_size: 100   # backend caps /api/products & /api/categories Limit at 100
+  user_agent: "grocery-recommendation-system/backend-integration"
 
 # Phase 2 synthetic dataset generation.
 synthetic_data:

@@ -25,6 +25,9 @@ paths:
   data_synthetic: "data/synthetic"
   models_dir: "models"
   data_sqlite: "data/sqlite/backend_shaped_synthetic.db"
+  backend_identity_registry: "data/processed/backend_identity_registry.json"
+  # "backend_api" (real REST API, docs/data-mapping.md section 19) is
+  # opt-in and needs models/backend_api/ artifacts that don't exist yet.
   data_source: "sqlite"
 
 # Freshness fix: how often the LIVE service re-reads User_events (+
@@ -35,6 +38,18 @@ paths:
 # refresh. Overridable via RECS_REFRESH_INTERVAL_SECONDS.
 refresh:
   interval_seconds: 30.0
+
+# Real backend REST API connection (only used when data_source ==
+# "backend_api" - docs/data-mapping.md section 19). No credentials here.
+# Set base_url via RECS_BACKEND_API_BASE_URL in the container environment;
+# keep tls_verify true unless the target has a self-signed cert.
+backend_api:
+  base_url: "http://localhost:8080"
+  timeout_seconds: 30.0
+  tls_verify: true
+  max_retries: 2
+  page_size: 100
+  user_agent: "grocery-recommendation-system/backend-integration"
 
 # Phase 2 synthetic dataset generation.
 synthetic_data:
