@@ -240,21 +240,28 @@ def load_backend_users(
 
 
 def load_backend_reviews(client: BackendApiClient) -> list[RawReview]:
-    """`/api/reviews` is not implemented by the backend yet (verified: the
-    route 404s). Reviews are an *optional* auxiliary ranking signal -
-    `EngagementProfile.reviews` defaults to `[]` and
+    """`/api/reviews` is not implemented by the backend yet (re-verified
+    2026-09-04: absent from both a live 404 and the published OpenAPI
+    spec - no route, no schema). Reviews are an *optional* auxiliary
+    ranking signal - `EngagementProfile.reviews` defaults to `[]` and
     `features.product_features.build_product_features` handles a
     review-free catalog (rating features fall back to neutral defaults) -
     so returning an empty list here is the existing semantics-preserving
     fallback, NOT fabricated data.
 
-    When the endpoint lands, its expected contract (to require no
-    downstream change) is: a cursor-paginated list of
-    `{userId: GUID, productSlug: str, rating: number (1-5),
-    comment: str?, createdAt: datetime}`. Implement the body then:
-    resolve userId via `resolver.resolve_user`, productSlug via
-    `resolver.peek_product` (drop unknown, same as activities), build
-    `RawReview`. No other file needs to change.
+    Expected contract when the endpoint lands (docs/data-mapping.md
+    section 19.6 has the full JSON shape + backend-team ask): the usual
+    `{success, data: {data: [...], pagination}}` envelope, cursor-paginated
+    like `/api/user-activities`, each row
+    `{userId: GUID, productId: str?, productSlug: str, rating: number
+    (1-5), comment: str?, createdAt: datetime}` - `productId` preferred
+    once the backend exposes one (19.5), `productSlug` the required
+    fallback. Implement the body then: add `ApiReview` (mirrors
+    `ApiActivity`) + `BackendApiClient.list_reviews` (mirrors
+    `list_activities`), resolve `userId` via `resolver.resolve_user`,
+    product identity via `resolver.peek_product` preferring
+    `productId or productSlug` (drop unknown, same policy as activities),
+    build `RawReview`. No other file needs to change.
     """
     return []
 

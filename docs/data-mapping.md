@@ -2007,19 +2007,70 @@ orphaned but harmless. The robust backend contract is **immutable id +
 mutable slug**; until that exists the compromise is isolated entirely in
 this one class. See 19.8.
 
+**Product-identity readiness (reviewed 2026-09-04, no code change - the
+design was already ready):** `resolve_product`/`peek_product` take an
+opaque string key - the resolver has no idea whether it's a slug or a
+UUID, so it needs no change at all when the backend adds an immutable
+product id. The only lines that would change, confined entirely to
+`data.backend.loader` (never `identity.py`, never anything downstream of
+the adapter layer), are the ~4 call sites that currently pass `p.slug` /
+`row.slug` - they'd instead pass `p.product_id or p.slug` /
+`row.product_id or row.slug` once `ApiProduct`/`ApiActivity` gain that
+(not-yet-existing, so not modeled - see 19.1's `extra="ignore"` note)
+field. **One caveat that's a migration event, not a code defect**:
+switching the resolver's product key from slug to product id is an
+identity-*namespace* change, not a value update - the on-disk registry is
+keyed by slug today, so the first load after switching would find no
+existing keys, mint a fresh internal id for every product, and require a
+retrain (Two-Tower/ANN/ranker product embeddings are indexed by that
+internal id). Plan for that retrain when the backend actually ships
+product ids; nothing to do before then.
+
 ### 19.6 Reviews
 
-`/api/reviews` is not implemented (the route 404s). Reviews are an
-**optional** auxiliary ranking signal: `EngagementProfile.reviews`
-defaults to `[]` and `features.product_features.build_product_features`
-handles a review-free catalog (rating features fall back to neutral
-defaults). `loader.load_backend_reviews` returns `[]` today - this is the
-**existing semantics-preserving fallback, not fabricated data**. Its
-docstring records the exact expected contract
-(`{userId, productSlug, rating, comment?, createdAt}`, cursor-paginated)
-and the ~5 lines to implement when the endpoint lands; **no other file
-changes.** This is a backend-team blocker only for the *review* auxiliary
-signal, nothing else.
+`/api/reviews` is not implemented (confirmed again 2026-09-04: absent
+from both a live 404 and the published OpenAPI spec - no route, no
+schema). Reviews are an **optional** auxiliary ranking signal:
+`EngagementProfile.reviews` defaults to `[]` and
+`features.product_features.build_product_features` handles a review-free
+catalog (rating features fall back to neutral defaults).
+`loader.load_backend_reviews` returns `[]` today - this is the **existing
+semantics-preserving fallback, not fabricated data**.
+
+**Expected contract for the backend team**, matching this backend's own
+conventions elsewhere (envelope, camelCase, cursor pagination) so
+implementing it is additive, not a new pattern:
+
+```
+GET /api/reviews?Cursor=<opaque>&Limit=<=100>
+
+{
+  "success": true, "statusCode": 200, "message": "...",
+  "data": {
+    "data": [
+      {
+        "userId": "4ae30fbc-d60d-4422-adb6-abfcce31a25c",   // user GUID - required
+        "productId": "…",       // preferred once it exists (19.5 caveat applies)
+        "productSlug": "orange-juice",  // required fallback while productId doesn't exist yet
+        "rating": 4.5,           // required, numeric 1-5
+        "comment": "…",          // optional
+        "createdAt": "2026-08-01T10:00:00"  // required, same naive-UTC convention as /api/user-activities' timestamp
+      }
+    ],
+    "pagination": { "nextCursor": "...", "hasNext": false, "pageSize": 100 }
+  }
+}
+```
+
+Intended flow once implemented, **no downstream model/schema change**:
+`BackendApiClient.list_reviews` (new, mirrors `list_activities`) ->
+`ApiReview` DTO (new, mirrors `ApiActivity`) -> `loader.load_backend_reviews`
+resolves `userId` via `resolver.resolve_user` and the product identity via
+`resolver.peek_product` (preferring `productId` over `productSlug` per the
+precedence above; drop unknown, same policy as activities) -> `RawReview`
+-> the existing `InMemoryReviewAdapter` / `EngagementProfile.reviews` /
+`build_product_features` path, entirely unchanged. This is a backend-team
+blocker only for the *review* auxiliary signal, nothing else.
 
 ### 19.7 Configuration, TLS, error behaviour, freshness
 
@@ -2108,7 +2159,13 @@ never blocks the data load.
 inside the integration layer):
 
 1. **Immutable id (or UUID) + slug** on products, categories, and users -
-   not slug-only. Removes the identity-registry compromise (19.5).
+   not slug-only, and ideally on **both** the product responses
+   (`ProductResponse`/`ProductSummaryResponse`) **and** the corresponding
+   `/api/user-activities` rows (`UserActivitiesResponse.productId`), not
+   just one side - a review/activity row that only carries a slug still
+   can't be tied to a renamed product otherwise. Removes the
+   identity-registry compromise (19.5); this integration is already
+   structurally ready to consume it with a small, isolated change (19.5).
 2. ~~`GET /api/users/{userId}` without authentication~~ **superseded**: the
    backend instead provided service-to-service credentials
    (`POST /api/auth/service/token`) - see the architecture note above.
@@ -2127,6 +2184,38 @@ inside the integration layer):
 7. Confirm whether `PlaceOrder` emits **one activity row per order line**
    or one per order - the mapping assumes each row is one product
    interaction.
+8. **SEARCH and CHATBOT activity rows** on `/api/user-activities` - see
+   19.10. Only 3 of the 5 canonical engagement signals are live today.
+
+### 19.10 Engagement-signal coverage (verified 2026-09-04)
+
+Re-probed the live `/api/user-activities` vocabulary (public endpoint, no
+auth) and the published OpenAPI spec's `actionType` typing:
+
+| Canonical signal | Backend `actionType` | Status |
+|---|---|---|
+| `CLICK` | `ViewProduct` | **live** (seen in the 2026-09-01 probe; not present in every sample page, but a known, mapped value) |
+| `ADD_TO_CART` | `AddToCart` | **live** (present in the current sample) |
+| `PURCHASE` | `PlaceOrder` | **live** (present in the current sample) |
+| `SEARCH` | *(none)* | **missing** - no search-related `actionType` value exists on the backend at all |
+| `CHATBOT` | *(none)* | **missing** - no chatbot-related `actionType` value exists on the backend at all |
+
+`actionType` is typed as a bare nullable `string` in the OpenAPI spec (no
+enum), so there is no scaffolding hinting at planned SEARCH/CHATBOT values
+either. `data.backend.mapping._ACTION_TYPE_MAP` correctly reflects exactly
+this: it maps only the six backend values that exist
+(`ViewProduct`/`AddToCart`/`PlaceOrder`/`AddedToFavorites`/
+`RemoveFromCart`/`RemovedFromFavorites`), never invents a SEARCH or
+CHATBOT mapping, does not fold favorites into CLICK/ADD_TO_CART, and
+treats both removal actions as ignored (no retraction semantics) - this
+was reviewed and left unchanged, it already matches every stated
+requirement. Per the canonical `User_events` contract (section 4,
+`data.schemas.events`), SEARCH/CHATBOT rows are expected to arrive through
+this **same** endpoint as new `actionType` values (only once a search/
+chatbot turn has been resolved to a specific product) - not a separate
+endpoint - so supporting them later is a single-line addition to
+`_ACTION_TYPE_MAP` (e.g. `"search": ActionType.SEARCH`), nothing else in
+the pipeline changes.
 
 ### 19.9 Tests + live smoke
 
