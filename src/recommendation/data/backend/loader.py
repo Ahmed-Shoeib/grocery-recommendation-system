@@ -275,16 +275,23 @@ def _as_naive_utc(dt):
 def _to_raw_user(internal_id: int, api_user, catalog: BackendCatalog) -> RawUser:
     if api_user is None:
         return RawUser(id=internal_id, first_name="", last_name="", email="", preferred_category_id=None, age_group=None)
-    pref_id = None
-    if api_user.preferred_category_slug:
-        pref_id = catalog.category_id_by_slug.get(api_user.preferred_category_slug)
-    if pref_id is None and api_user.preferred_category:
-        pref_id = catalog.category_id_by_name.get(api_user.preferred_category)
+    # `preferredCategories` is a list (verified live 2026-09-04, see
+    # dtos.ApiFavoriteCategory) - only the first entry's category is used;
+    # RawUser/UserProfile model a single preferred category, and the
+    # backend does not rank/order multiple favorites for us.
+    pref_slug = api_user.first_preferred_category_slug()
+    pref_name = api_user.first_preferred_category_name()
+    pref_id = catalog.category_id_by_slug.get(pref_slug) if pref_slug else None
+    if pref_id is None and pref_name:
+        pref_id = catalog.category_id_by_name.get(pref_name)
     return RawUser(
         id=internal_id,
         first_name=api_user.first_name or "",
         last_name=api_user.last_name or "",
         email=api_user.email or "",
         preferred_category_id=pref_id,
-        age_group=api_user.age_group,  # never derived from birth date - only if the API states it
+        # `ageGroup` has no equivalent in the live UserResponse schema at
+        # all (verified 2026-09-04) - this is always None today; never
+        # derived from `birthDate`, only ever the API's own field.
+        age_group=api_user.age_group,
     )

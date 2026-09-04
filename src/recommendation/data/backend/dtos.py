@@ -1,8 +1,13 @@
 """External DTOs - the backend's HTTP response shapes, nothing more.
 
 These mirror what the live API actually returns (verified by probing every
-endpoint - the published OpenAPI spec declares request bodies only, not
-response schemas). They are deliberately tolerant: `extra="ignore"` so a
+endpoint). As of the 2026-09-01 probe the published OpenAPI spec declared
+request bodies only, no response schemas; a later probe (2026-09-04, see
+`ApiUser`) found the spec now also documents `/api/users/{userId}`'s
+response (`UserResponseApiResponse` -> `UserResponse`) and it matches the
+live payload exactly - still verified against the live response here
+rather than trusted blindly, since the other list endpoints remain
+undocumented. They are deliberately tolerant: `extra="ignore"` so a
 backend-side field addition never breaks ingestion, and every
 recommendation-irrelevant field is simply omitted here rather than
 modeled.
@@ -95,27 +100,68 @@ class ApiActivity(BaseModel):
     timestamp: datetime | None = None
 
 
-class ApiUser(BaseModel):
-    """`/api/users/{userId}`. Currently auth-protected on the dev backend;
-    the backend team has confirmed it will be opened up. Modeled
-    defensively from the Swagger request DTOs + register contract - every
-    field optional, so a bare `{"id": "<guid>"}` (or a 401 that yields no
-    body at all) still produces a usable, low-signal profile rather than
-    raising. `preferred_category` / `age_group` are populated ONLY if the
-    live response actually carries them - never derived/invented (e.g. from
-    `birth_date`), per the canonical-schema contract.
+class ApiCategoryRef(BaseModel):
+    """The nested `category` object inside one `ApiFavoriteCategory` entry -
+    the same shape `/api/categories` exposes (slug/name), just nested here
+    instead of top-level.
     """
 
     model_config = _WIRE
 
-    id: str | None = None
-    user_id: str | None = None
+    slug: str | None = None
+    name: str | None = None
+
+
+class ApiFavoriteCategory(BaseModel):
+    """One entry of `/api/users/{userId}`'s `preferredCategories` array -
+    verified live 2026-09-04 to be the backend's `FavoriteCategory` join
+    row (`{id, userId, categoryId, category: {...}, addedAt}`), NOT a bare
+    category slug/name. Only the nested `category` ref is modeled - the
+    join row's own numeric id/timestamp are irrelevant here.
+    """
+
+    model_config = _WIRE
+
+    category: ApiCategoryRef | None = None
+
+
+class ApiUser(BaseModel):
+    """`/api/users/{userId}`. Bearer-gated (verified live 2026-09-04 via a
+    `POST /api/auth/service/token` client-credentials exchange - see
+    docs/data-mapping.md section 19.1/19.8); this integration sends no
+    Authorization header, so every call still degrades to a bare profile
+    until the backend team decides how the recommender should authenticate
+    (best-effort - see `client.BackendApiClient.get_user`).
+
+    Modeled from the now-published `UserResponse` OpenAPI schema + a live
+    sample, every field still optional so a bare `{"guid": "<guid>"}` (or a
+    401 that yields no body at all) produces a usable, low-signal profile
+    rather than raising. `preferred_categories` reflects the *actual* wire
+    shape - a list, each entry nesting a `category` object - not the
+    singular `preferredCategory`/`preferredCategorySlug` guessed pre-
+    verification. `age_group` has **no equivalent field in the live
+    schema at all**; it is kept only so a future backend addition needs no
+    code change here - never derived/invented (e.g. from `birth_date`),
+    per the canonical-schema contract.
+    """
+
+    model_config = _WIRE
+
+    guid: str | None = None
     first_name: str | None = None
     last_name: str | None = None
     email: str | None = None
-    preferred_category: str | None = None
-    preferred_category_slug: str | None = None
+    preferred_categories: list[ApiFavoriteCategory] = Field(default_factory=list)
     age_group: str | None = None
 
-    def guid(self) -> str | None:
-        return self.id or self.user_id
+    def first_preferred_category_slug(self) -> str | None:
+        for entry in self.preferred_categories:
+            if entry.category and entry.category.slug:
+                return entry.category.slug
+        return None
+
+    def first_preferred_category_name(self) -> str | None:
+        for entry in self.preferred_categories:
+            if entry.category and entry.category.name:
+                return entry.category.name
+        return None

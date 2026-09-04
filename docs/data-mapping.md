@@ -1808,10 +1808,16 @@ List endpoints nest `data.data` (the array) + `data.pagination`.
 100). Page-number style (`/api/tags`) is not used by this integration.
 
 **Auth**: `/api/products`, `/api/categories`, `/api/user-activities` are
-public. `/api/users/{userId}` is currently `Bearer`-gated; the backend
-team has confirmed it will be opened up. **The recommender sends no
-`Authorization` header and holds no token** - it treats the user
-endpoint as best-effort (see 19.4).
+public (re-confirmed live 2026-09-04). `/api/users/{userId}` is
+`Bearer`-gated - **re-verified live 2026-09-04, still gated**, and it
+stays that way by design: rather than opening it up, the backend team
+added a service-to-service client-credentials flow instead (`POST
+/api/auth/service/token`, body `{clientId, clientSecret}` -> `{data:
+{accessToken, expiresAtUtc}}`, tag `ServiceAuth` in Swagger). **The
+recommender sends no `Authorization` header and holds no token** - it
+still treats the user endpoint as best-effort (see 19.4); the
+client-credentials exchange is deliberately not implemented in this
+integration yet (19.8 asks / architecture note below).
 
 ### 19.2 Endpoints used
 
@@ -1820,7 +1826,7 @@ endpoint as best-effort (see 19.4).
 | `GET /api/products` (list) + cursor pages | full catalog | product **slug**; no id |
 | `GET /api/categories` (list) + cursor pages | category names | category **slug**; no id, no parent |
 | `GET /api/user-activities` + cursor pages | **the sole engagement source** (CLICK / ADD_TO_CART / PURCHASE) | user **GUID**, product **slug** |
-| `GET /api/users/{guid}` | best-effort profile enrichment (`preferredCategory` / `ageGroup` **only if present**) | user **GUID** |
+| `GET /api/users/{guid}` | best-effort profile enrichment (`preferredCategories[].category.slug` **only if present**; `ageGroup` does not exist in the live schema) | user **GUID**, wire key `guid` |
 
 Deliberately **not** used: `/api/orders*`, `/api/cart`,
 `/api/favorites/*`. `/api/user-activities` is the single engagement-truth
@@ -1904,9 +1910,58 @@ states it** - never derived from a birth date.
 Serving a zero-activity user via pure cold-start would need a full roster
 endpoint (`GET /api/users`, currently auth-gated) - out of scope here.
 
-**Live verification of `GET /api/users/{guid}` is pending** the backend
-team removing authentication; until then its mapping is exercised only by
-mocked tests + the live smoke script.
+**Live verification of `GET /api/users/{guid}` (2026-09-04):** authenticated
+via `POST /api/auth/service/token` with temporary `clientId`/`clientSecret`
+service credentials (issued for this verification only, not stored in the
+repo), then called with `Authorization: Bearer <accessToken>`. Confirmed:
+the endpoint accepts the same GUID `/api/user-activities` reports, and
+Swagger now *does* publish a response schema for it
+(`UserResponseApiResponse` -> `UserResponse`) - superseding 19.1's
+"no response schemas" note for this one endpoint - which matched the live
+payload exactly. Verified real shape (`{success, statusCode, message,
+data}` envelope, as elsewhere):
+
+```json
+{
+  "guid": "4ae30fbc-d60d-4422-adb6-abfcce31a25c",
+  "firstName": "D",
+  "lastName": "H",
+  "email": "mazenahmed48000@gmail.com",
+  "phoneNumber": "01223333491",
+  "birthDate": "2008-08-08T00:00:00",
+  "preferredCategories": [],
+  "role": 0,
+  "isActive": true,
+  "createdAt": "2026-08-19T11:24:26.4798796"
+}
+```
+
+| Field | Type | Notes |
+|---|---|---|
+| `guid` | string (UUID) | **the identity field - not `id` or `userId`**, both wrongly assumed pre-verification |
+| `firstName`, `lastName`, `email` | string, nullable | as assumed |
+| `phoneNumber` | string, nullable | not modeled (no canonical use) |
+| `birthDate` | datetime | not modeled; never used to derive `age_group` |
+| `preferredCategories` | **array**, not nullable in observed samples | each entry `{id, userId, categoryId, category: {id, name, slug, ...}, addedAt}` (a `FavoriteCategory` join row) - **not** a bare `preferredCategory`/`preferredCategorySlug` string as the pre-verification DTO assumed. All 42 live users sampled (2 from the activity stream + the 40-row `/api/users` roster) had `preferredCategories: []`, so the nested shape is verified from the Swagger schema (`FavoriteCategory` -> `Category`, which matches `/api/categories`'s own slug/name shape) rather than a non-empty live sample - re-check against a live non-empty sample if one becomes available. |
+| `role` | int (enum `0`\|`1`) | not modeled (no canonical use) |
+| `isActive` | bool | not modeled (no canonical use; distinct from product `isActive`, which still doesn't exist) |
+| `createdAt` | datetime | not modeled (no canonical use) |
+| `ageGroup` | **absent** | confirmed **not part of the schema at all** (`UserResponse` has no such property, and it's absent from every live sample) - not merely "not yet returned"; the field stays modeled defensively (`extra="ignore"` tolerates a future addition) but is unconditionally `None` under the current contract |
+
+**Correction applied**: `data.backend.dtos.ApiUser` was fixed to match -
+`id`/`user_id` (never present on the wire) replaced with `guid`;
+`preferred_category`/`preferred_category_slug` (singular, wrong shape)
+replaced with `preferred_categories: list[ApiFavoriteCategory]` plus
+`first_preferred_category_slug()`/`_name()` helpers; `loader._to_raw_user`
+updated to read the first list entry. This was a real, previously-latent
+bug: since the endpoint was auth-gated end-to-end until this
+verification, `preferred_category_id` enrichment from
+`GET /api/users/{guid}` had never actually run against the real shape -
+it would have silently stayed `None` forever even once the backend
+started returning 200s, because the singular field names never matched
+the wire. No canonical schema, identity path, or other endpoint mapping
+changed; `ExternalIdentityResolver` still resolves user identity from
+`/api/user-activities`' GUIDs only, not from this endpoint.
 
 ### 19.5 Identity: slug / GUID → stable internal `int`
 
@@ -2020,14 +2075,47 @@ feature engineering, cold-start tiering, and the eligibility gate); live
 `/recommendations` from it requires a retrain against the real catalog -
 a separate, deliberately out-of-scope step.
 
+**Auth architecture note (2026-09-04):** the backend team did not open up
+`GET /api/users/{userId}`; instead they issued temporary service
+credentials (`clientId`/`clientSecret`) redeemable via
+`POST /api/auth/service/token` for a short-lived Bearer token - a
+client-credentials, service-to-service auth pattern. **That is the better
+production shape for this endpoint**, not a public/anonymous
+`/api/users/{userId}`: a user profile (name, email, phone, birth date) is
+PII with no reason to be world-readable, and the recommender is the only
+non-browser caller that needs it. The recommended production
+architecture is:
+
+```
+recommendation service --(clientId+clientSecret, once)--> POST /api/auth/service/token
+recommendation service --(Authorization: Bearer <token>)--> GET /api/users/{userId}
+```
+
+i.e. keep `/api/users/{userId}` Bearer-gated and have the recommender hold
+its own service credentials (env-injected, never committed, token cached
+in memory only and refreshed before `expiresAtUtc`) - rather than removing
+auth from the endpoint. **Not implemented in this integration** (this
+verification used temporary credentials manually, out-of-process, per the
+task's explicit scope); implementing it is a follow-up: add a small
+`ServiceAuthClient` (login once, cache the token, re-authenticate on
+expiry/401) that `BackendApiClient` optionally wraps, config-gated so the
+public catalog/activity calls are unaffected. `GET /api/users/{guid}`
+would remain best-effort enrichment either way - a 401 from an
+unconfigured/expired service credential still degrades to a bare profile,
+never blocks the data load.
+
 **Backend-team asks** (ideal contract, each currently worked around
 inside the integration layer):
 
 1. **Immutable id (or UUID) + slug** on products, categories, and users -
    not slug-only. Removes the identity-registry compromise (19.5).
-2. **`GET /api/users/{userId}` without authentication** (already
-   confirmed in progress) - unblocks profile enrichment and live
-   verification (19.4).
+2. ~~`GET /api/users/{userId}` without authentication~~ **superseded**: the
+   backend instead provided service-to-service credentials
+   (`POST /api/auth/service/token`) - see the architecture note above.
+   Ask instead: **long-lived (or auto-rotatable) service credentials for
+   the recommender**, provisioned per environment, so this integration can
+   authenticate itself in production rather than relying on temporary
+   manually-issued ones.
 3. **`isActive`** (or a soft-delete flag) on the product payload - so
    eligibility isn't stock-only for this source (19.3).
 4. **`GET /api/reviews`** (cursor-paginated, per 19.6) - unblocks the

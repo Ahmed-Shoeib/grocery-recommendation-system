@@ -100,15 +100,47 @@ def test_users_are_bare_when_endpoint_is_auth_gated(tmp_path):
 
 
 def test_user_enrichment_populates_preferred_category_when_available(tmp_path):
+    """Real shape verified live 2026-09-04: `preferredCategories` is a
+    LIST, each entry nesting a `category` object (`FavoriteCategoryResponse`
+    in Swagger) - not the singular `preferredCategory`/`preferredCategorySlug`
+    assumed pre-verification.
+    """
     r = _resolver(tmp_path)
     catalog = load_backend_catalog(FakeBackendClient(products=_PRODS, categories=_CATS), r)
     client = FakeBackendClient(users={
-        "g1": {"id": "g1", "firstName": "A", "preferredCategorySlug": "groceries", "ageGroup": "25-34"},
+        "g1": {
+            "guid": "g1",
+            "firstName": "A",
+            "preferredCategories": [
+                {"categoryId": 5, "category": {"slug": "groceries", "name": "Groceries"}, "addedAt": "2026-01-01T00:00:00"},
+            ],
+        },
     })
     users = load_backend_users(client, {1: "g1"}, catalog)
     u = users[0]
     assert u.preferred_category_id == catalog.category_id_by_slug["groceries"]
-    assert u.age_group == "25-34"
+
+
+def test_age_group_stays_none_on_the_real_schema_but_is_forward_compatible(tmp_path):
+    """`ageGroup` has no equivalent field in the live `UserResponse` schema
+    at all (verified 2026-09-04) - a realistic payload never populates it -
+    but the DTO stays tolerant (`extra="ignore"`) so a future backend
+    addition needs no code change here.
+    """
+    r = _resolver(tmp_path)
+    catalog = load_backend_catalog(FakeBackendClient(products=_PRODS, categories=_CATS), r)
+
+    real_shape_client = FakeBackendClient(users={
+        "g1": {
+            "guid": "g1", "firstName": "A", "lastName": "B", "email": "a@example.com",
+            "phoneNumber": "0100000000", "birthDate": "2000-01-01T00:00:00",
+            "preferredCategories": [], "role": 0, "isActive": True, "createdAt": "2026-01-01T00:00:00",
+        },
+    })
+    assert load_backend_users(real_shape_client, {1: "g1"}, catalog)[0].age_group is None
+
+    forward_compat_client = FakeBackendClient(users={"g1": {"guid": "g1", "ageGroup": "25-34"}})
+    assert load_backend_users(forward_compat_client, {1: "g1"}, catalog)[0].age_group == "25-34"
 
 
 def test_reviews_endpoint_absent_returns_empty_not_fabricated():

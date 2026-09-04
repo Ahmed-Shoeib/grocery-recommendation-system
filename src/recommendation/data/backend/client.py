@@ -9,9 +9,14 @@ both pagination styles the backend uses. Output is always a list of
 
 Auth: the recommender sends NO Authorization header. The endpoints it
 needs (`/api/products`, `/api/categories`, `/api/user-activities`) are
-public; `/api/users/{guid}` is being opened up by the backend team and is
-treated as best-effort (a 401/403 there logs once and degrades, it does
-not raise). See docs/data-mapping.md section 19.
+public (verified live, still true as of 2026-09-04); `/api/users/{guid}`
+is Bearer-gated and, per a live probe, stays that way - instead of opening
+it up, the backend added a `POST /api/auth/service/token`
+client-credentials exchange for service-to-service callers. This
+integration deliberately does not implement that exchange yet (out of
+scope for the data-mapping work here); `/api/users/{guid}` is treated as
+best-effort (a 401/403 there logs once and degrades, it does not raise).
+See docs/data-mapping.md section 19.
 
 TLS: `verify` defaults to on. The dev backend presents a self-signed
 `CN=localhost` certificate on a bare IP; for local work set
