@@ -83,9 +83,15 @@ class RefreshConfig(BaseModel):
 
 class BackendApiConfig(BaseModel):
     """Connection settings for the real backend REST API (data_source
-    "backend_api"). No credentials/tokens live here or anywhere in the
-    codebase - the recommender calls only public/soon-public endpoints and
-    sends no Authorization header (docs/data-mapping.md section 19).
+    "backend_api").
+
+    **No credentials here, by design.** The gated endpoints
+    (`/api/users/{guid}`, `/api/reviews`) authenticate with a service
+    clientId/clientSecret, but those are read directly from the environment
+    by `data.backend.auth.ServiceTokenProvider` and never become fields on
+    this model: config is loaded from committed YAML and is dumped in
+    diagnostics/logs, so a secret placed here would leak into both. See
+    docs/data-mapping.md section 19.
 
     `base_url` has no meaningful default - it MUST be supplied per
     environment via `configs/*.yaml: backend_api.base_url` or the

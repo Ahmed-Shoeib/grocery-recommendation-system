@@ -30,6 +30,25 @@ from pydantic.alias_generators import to_camel
 _WIRE = ConfigDict(alias_generator=to_camel, populate_by_name=True, extra="ignore")
 
 
+class ApiServiceToken(BaseModel):
+    """`POST /api/auth/service/token` response payload (inside the usual
+    `{success, data}` envelope). Swagger declares the *request*
+    (`ServiceTokenRequest: {clientId, clientSecret}`) but documents the 200
+    response as bare "OK" with no schema, so this is modeled from the live
+    exchange: `{accessToken, expiresAtUtc}`, lifetime ~15 minutes.
+
+    `expires_at_utc` is optional on purpose - if the backend ever stops
+    sending it, `auth.ServiceTokenProvider` falls back to a conservative
+    fixed TTL rather than treating the token as immortal. This object is
+    never logged, never persisted, and never leaves the backend package.
+    """
+
+    model_config = _WIRE
+
+    access_token: str
+    expires_at_utc: datetime | None = None
+
+
 class ApiPagination(BaseModel):
     """Union of the two pagination shapes the backend uses: cursor-based
     (`/api/products`, `/api/categories`, `/api/user-activities`) exposes
@@ -98,6 +117,41 @@ class ApiActivity(BaseModel):
     action_type: str
     slug: str | None = None
     timestamp: datetime | None = None
+
+
+class ApiReview(BaseModel):
+    """One `GET /api/reviews` row (`AiProductReviewResponse` in Swagger,
+    tag `AiProductReview` - the endpoint the backend team added for this
+    recommender, distinct from the browser-facing
+    `/api/products/{slug}/reviews`).
+
+    Identity note - the reason `loader.load_backend_reviews` currently
+    drops rows: `user_id` and `product_id` are the backend's **int32
+    primary keys**, while every other endpoint this integration consumes
+    addresses users by GUID (`/api/user-activities`, `/api/users/{guid}`)
+    and products by slug (`/api/products`, `/api/user-activities`). No
+    endpoint exposes both an int id and a slug/GUID for the same row, so
+    there is no join key today. This is the same gap the backend team's
+    in-progress "immutable product UUID/ID in product responses and
+    /api/user-activities" work closes; nothing is guessed here in the
+    meantime (docs/data-mapping.md section 19.6).
+
+    `rating` is `int32` with no declared bounds on this response, though
+    the write side (`CreateProductReviewRequest`) constrains it to 1-5;
+    range validation is the loader's job, not the DTO's, so an
+    out-of-range row is dropped with a count rather than raising and
+    failing the whole load.
+    """
+
+    model_config = _WIRE
+
+    review_id: int | None = None
+    user_id: int | None = None
+    product_id: int | None = None
+    rating: float | None = None
+    comment: str | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
 
 
 class ApiCategoryRef(BaseModel):

@@ -1808,16 +1808,14 @@ List endpoints nest `data.data` (the array) + `data.pagination`.
 100). Page-number style (`/api/tags`) is not used by this integration.
 
 **Auth**: `/api/products`, `/api/categories`, `/api/user-activities` are
-public (re-confirmed live 2026-09-04). `/api/users/{userId}` is
-`Bearer`-gated - **re-verified live 2026-09-04, still gated**, and it
-stays that way by design: rather than opening it up, the backend team
-added a service-to-service client-credentials flow instead (`POST
-/api/auth/service/token`, body `{clientId, clientSecret}` -> `{data:
-{accessToken, expiresAtUtc}}`, tag `ServiceAuth` in Swagger). **The
-recommender sends no `Authorization` header and holds no token** - it
-still treats the user endpoint as best-effort (see 19.4); the
-client-credentials exchange is deliberately not implemented in this
-integration yet (19.8 asks / architecture note below).
+public (re-confirmed live 2026-09-04). `/api/users/{userId}` and
+`/api/reviews` are `Bearer`-gated and stay that way by design: rather than
+opening them up, the backend team provided a service-to-service
+client-credentials flow (`POST /api/auth/service/token`, body
+`{clientId, clientSecret}` -> `{data: {accessToken, expiresAtUtc}}`, tag
+`ServiceAuth` in Swagger). **That exchange is implemented as of
+2026-09-09** - see 19.11. The `Authorization` header is attached
+per-protected-request; public calls still send none.
 
 ### 19.2 Endpoints used
 
@@ -1826,13 +1824,17 @@ integration yet (19.8 asks / architecture note below).
 | `GET /api/products` (list) + cursor pages | full catalog | product **slug**; no id |
 | `GET /api/categories` (list) + cursor pages | category names | category **slug**; no id, no parent |
 | `GET /api/user-activities` + cursor pages | **the sole engagement source** (CLICK / ADD_TO_CART / PURCHASE) | user **GUID**, product **slug** |
-| `GET /api/users/{guid}` | best-effort profile enrichment (`preferredCategories[].category.slug` **only if present**; `ageGroup` does not exist in the live schema) | user **GUID**, wire key `guid` |
+| `GET /api/users/{guid}` (Bearer) | best-effort profile enrichment (`preferredCategories[].category.slug` **only if present**; `ageGroup` does not exist in the live schema) | user **GUID**, wire key `guid` |
+| `GET /api/reviews` (Bearer) | optional auxiliary review signal; **unpaginated flat array** | user **int32 id**, product **int32 id** - unjoinable today, see 19.6 |
 
 Deliberately **not** used: `/api/orders*`, `/api/cart`,
-`/api/favorites/*`. `/api/user-activities` is the single engagement-truth
-source (mirrors the SQLite factory's `User_events`-only contract), so the
-same real-world action cannot be double-counted through two code paths.
-`/api/reviews` **does not exist** (the route 404s) - see 19.6.
+`/api/favorites/*`, and the browser-facing
+`/api/products/{slug}/reviews` (per-product, so consuming it for the whole
+catalog would be N+1). `/api/user-activities` is the single
+engagement-truth source (mirrors the SQLite factory's `User_events`-only
+contract), so the same real-world action cannot be double-counted through
+two code paths - reviews are a *separate* signal
+(`EngagementProfile.reviews`), not a second purchase/click source.
 
 ### 19.3 DTO → canonical mapping and the field-availability gap
 
@@ -1851,13 +1853,13 @@ Backend product projection vs. canonical `Product` (verified live):
 | `slug`, `name`, `description`, `price` | direct | `description` only on the detail endpoint |
 | `stock_quantity` | `stockQuantity` | negative → clamped to 0 (logged) |
 | `price` | `price` | non-positive → clamped to 0.01 (logged) |
-| `is_active` | **absent** | assumed `True`; `stock_quantity` alone gates eligibility for this source |
-| `brand` | **absent** | `None` → brand-affinity features degrade to neutral |
+| `is_active` | **permanently absent** | `True`; real availability is `stockQuantity > 0`, which alone gates eligibility for this source. **Not a gap to be filled** - see 19.12 |
+| `brand` | **permanently absent** | `None` → brand-affinity features degrade to neutral. **Not a gap to be filled** - see 19.12 |
 | `sale_price`, `discount_percentage` | **absent** | `None` → price-aware discount features degrade |
 | `ingredients` | **absent** | `None` |
 | `category_id` | `categorySlug` → resolver | placeholder slug not in `/api/categories` → `0` ("no category") |
 | `parent_category_name` | **absent** | `/api/categories` has no parent link → `None` |
-| `tags` | **absent from the list projection** | `[]` - hydrating them is one `GET /api/products/{slug}` per product (N+1), deferred |
+| `tags` | **permanently absent from the list projection** | `[]` - hydrating them is one `GET /api/products/{slug}` per product (N+1), refused. **Not a gap to be filled** - see 19.12 |
 
 No canonical schema field was added, removed, renamed, or re-typed. The
 `Raw*` models already model every gap field as optional/defaulted (built
@@ -2026,51 +2028,138 @@ retrain (Two-Tower/ANN/ranker product embeddings are indexed by that
 internal id). Plan for that retrain when the backend actually ships
 product ids; nothing to do before then.
 
-### 19.6 Reviews
+### 19.6 Reviews - `/api/reviews` IMPLEMENTED, integrated, blocked on identity
 
-`/api/reviews` is not implemented (confirmed again 2026-09-04: absent
-from both a live 404 and the published OpenAPI spec - no route, no
-schema). Reviews are an **optional** auxiliary ranking signal:
-`EngagementProfile.reviews` defaults to `[]` and
-`features.product_features.build_product_features` handles a review-free
-catalog (rating features fall back to neutral defaults).
-`loader.load_backend_reviews` returns `[]` today - this is the **existing
-semantics-preserving fallback, not fabricated data**.
+**Superseded**: the pre-2026-09-09 version of this section described
+`/api/reviews` as non-existent and specified a *guessed* contract
+(GUID `userId`, `productSlug`, cursor pagination). The endpoint now
+exists and the real contract differs on every one of those points. The
+guess is gone from the code; what follows is verified against the live
+OpenAPI document and the live endpoint.
 
-**Expected contract for the backend team**, matching this backend's own
-conventions elsewhere (envelope, camelCase, cursor pagination) so
-implementing it is additive, not a new pattern:
+#### Verified contract (2026-09-09)
+
+| Aspect | Verified value |
+|---|---|
+| Path | `GET /api/reviews` |
+| Swagger tag | `AiProductReview` - added for this recommender, distinct from the browser-facing `ProductReview` routes |
+| Auth | **Required.** Unauthenticated → `401` with an empty body. Service Bearer token (19.11) |
+| Query parameters | **None** |
+| Pagination | **None** - a single flat array, unlike every other list endpoint here |
+| Envelope | `AiProductReviewResponseListApiResponse`: `{success, statusCode, message, data: [...]}` - note `data` is the **array itself**, not `{data, pagination}` |
+| `data` nullability | Nullable - `null` means "no reviews", not an error |
+| Error behaviour | `401` / `403` → `ProblemDetails` |
+
+Row shape (`AiProductReviewResponse`, `additionalProperties: false` - the
+seven fields below are all there is):
+
+| Field | Type | Notes |
+|---|---|---|
+| `reviewId` | `int32` | review primary key |
+| `userId` | `int32` | **backend user primary key - NOT the GUID** used by `/api/user-activities` and `/api/users/{guid}` |
+| `productId` | `int32` | **backend product primary key - NOT the slug** used by `/api/products` and `/api/user-activities` |
+| `rating` | `int32` | no bounds declared on the response; the write side (`CreateProductReviewRequest`) constrains it to 1-5 |
+| `comment` | `string?` | nullable |
+| `createdAt` | `date-time` | naive UTC, same convention as `/api/user-activities.timestamp` |
+| `updatedAt` | `date-time?` | nullable; not consumed - `RawReview` has one timestamp |
+
+#### The identity gap - why reviews still yield nothing
+
+`/api/reviews` is the only endpoint that addresses users and products by
+**numeric primary key**. Everything else this integration consumes uses
+GUID (users) and slug (products), and **no endpoint exposes both keys for
+the same row**, so there is no join key. The rows are real and are
+fetched; every one is then dropped by the same policy that governs
+activities - an unresolvable external reference must never be attached to
+*a* product (section 5, 19.5).
+
+The only join available today would be
+`GET /api/products/{productSlug}/reviews` (tag `ProductReview`, returns
+`{id, userGuid, ...}`), whose `id` is the same review key: matching it
+against `/api/reviews` would yield `productId → slug` and
+`userId → userGuid`. That is **one request per product** - the N+1 pattern
+this integration refuses (same reasoning as product tags, 19.3).
+
+**This is not a new backend-team item.** It closes automatically with the
+already-requested immutable product id (19.5): the moment `/api/products`
+returns the backend's product identifier, `productId` joins directly.
+The user side needs the equivalent on `/api/users` / `/api/user-activities`.
+
+Until then `EngagementProfile.reviews` stays `[]`, which
+`features.product_features.build_product_features` already handles
+(rating features fall back to neutral defaults). **Empty because
+unjoinable, never fabricated.**
+
+#### Implemented flow
 
 ```
-GET /api/reviews?Cursor=<opaque>&Limit=<=100>
-
-{
-  "success": true, "statusCode": 200, "message": "...",
-  "data": {
-    "data": [
-      {
-        "userId": "4ae30fbc-d60d-4422-adb6-abfcce31a25c",   // user GUID - required
-        "productId": "…",       // preferred once it exists (19.5 caveat applies)
-        "productSlug": "orange-juice",  // required fallback while productId doesn't exist yet
-        "rating": 4.5,           // required, numeric 1-5
-        "comment": "…",          // optional
-        "createdAt": "2026-08-01T10:00:00"  // required, same naive-UTC convention as /api/user-activities' timestamp
-      }
-    ],
-    "pagination": { "nextCursor": "...", "hasNext": false, "pageSize": 100 }
-  }
-}
+GET /api/reviews  (Bearer)
+  -> BackendApiClient.list_reviews         # flat array, no pagination
+  -> ApiReview DTO                          # dtos.ApiReview
+  -> loader.load_backend_reviews            # identity resolution + drop policy
+  -> RawReview                              # canonical, ge=1/le=5 rating
+  -> InMemoryReviewAdapter -> EngagementProfile.reviews -> build_product_features
 ```
 
-Intended flow once implemented, **no downstream model/schema change**:
-`BackendApiClient.list_reviews` (new, mirrors `list_activities`) ->
-`ApiReview` DTO (new, mirrors `ApiActivity`) -> `loader.load_backend_reviews`
-resolves `userId` via `resolver.resolve_user` and the product identity via
-`resolver.peek_product` (preferring `productId` over `productSlug` per the
-precedence above; drop unknown, same policy as activities) -> `RawReview`
--> the existing `InMemoryReviewAdapter` / `EngagementProfile.reviews` /
-`build_product_features` path, entirely unchanged. This is a backend-team
-blocker only for the *review* auxiliary signal, nothing else.
+No downstream ML change: the canonical models, Two-Tower inputs, ranker
+features and artifacts are untouched.
+
+Drop policy, each counted and logged separately:
+
+| Dropped when | Why |
+|---|---|
+| no `reviewId` | no canonical primary key |
+| `rating` missing or outside 1-5 | `RawReview.rating` is `ge=1, le=5`; an out-of-range row would abort the whole load |
+| `productId` unresolvable | the identity gap above - currently every row |
+| `userId` not in this load's activity stream | resolution is a **lookup, never a mint**: a review by a user with no activity must not create a phantom user |
+
+**Single point of change** when the backend id lands: populate
+`BackendCatalog.product_id_by_backend_id` in `load_backend_catalog` and
+`loader._resolve_review_product` starts resolving. Nothing else moves;
+`tests/test_backend_loader.py::test_resolvable_reviews_become_canonical_raw_reviews`
+already exercises that path with the map populated.
+
+### 19.11 Service-to-service authentication - IMPLEMENTED
+
+`POST /api/auth/service/token` with `{clientId, clientSecret}` returns
+`{accessToken, expiresAtUtc}`, lifetime ~15 minutes. Implemented in
+`data.backend.auth.ServiceTokenProvider`; it is the only component that
+performs the exchange or holds a token.
+
+| Endpoint | Auth |
+|---|---|
+| `GET /api/products`, `/api/categories`, `/api/user-activities` | **public** - no `Authorization` header sent |
+| `GET /api/users/{guid}` | Bearer; best-effort (a failure yields a bare profile, never a failed load) |
+| `GET /api/reviews` | Bearer |
+
+Behaviour:
+
+- **Credentials from the environment only** -
+  `RECS_BACKEND_SERVICE_CLIENT_ID` / `RECS_BACKEND_SERVICE_CLIENT_SECRET`.
+  Deliberately **not** fields on `BackendApiConfig`: that model is loaded
+  from committed YAML and is dumped in diagnostics, so a secret there
+  would leak into both. `.env` is gitignored; `.env.example` carries
+  placeholders only.
+- **Lazy.** A token is fetched only when a protected endpoint is actually
+  called. Unset credentials → gated endpoints are skipped with one log
+  line and **no request**, so an unconfigured deployment behaves exactly
+  as it did before auth existed.
+- **Cached in memory, never on disk.** Refreshed 60s before
+  `expiresAtUtc`; a response without an expiry falls back to a
+  conservative 5-minute TTL rather than being treated as immortal.
+- **One refresh + one retry on 401.** A token this process still believes
+  valid can be rejected (backend restart, revoked client, clock skew); a
+  second 401 raises, so a bad credential cannot spin.
+- **Thread-safe.** Double-checked locking, so the background refresh
+  thread and request threads crossing an expiry boundary perform exactly
+  one exchange between them.
+- **Never logged.** No log line or exception message carries the secret,
+  the token, or a token-endpoint body; transport failures report the
+  exception *type* only, because `requests` exceptions can carry the
+  request body. Only token length and expiry instant are logged.
+- **Per-request header.** The `Authorization` header is attached to the
+  individual protected request, never to `Session.headers`, so a token
+  cannot leak onto a public catalog call.
 
 ### 19.7 Configuration, TLS, error behaviour, freshness
 
@@ -2145,47 +2234,46 @@ recommendation service --(Authorization: Bearer <token>)--> GET /api/users/{user
 i.e. keep `/api/users/{userId}` Bearer-gated and have the recommender hold
 its own service credentials (env-injected, never committed, token cached
 in memory only and refreshed before `expiresAtUtc`) - rather than removing
-auth from the endpoint. **Not implemented in this integration** (this
-verification used temporary credentials manually, out-of-process, per the
-task's explicit scope); implementing it is a follow-up: add a small
-`ServiceAuthClient` (login once, cache the token, re-authenticate on
-expiry/401) that `BackendApiClient` optionally wraps, config-gated so the
-public catalog/activity calls are unaffected. `GET /api/users/{guid}`
-would remain best-effort enrichment either way - a 401 from an
-unconfigured/expired service credential still degrades to a bare profile,
+auth from the endpoint. **Implemented as of 2026-09-09** in
+`data.backend.auth.ServiceTokenProvider` - see 19.11 for the full
+behaviour. `GET /api/users/{guid}` remains best-effort enrichment either
+way: a 401, or absent credentials, still degrades to a bare profile and
 never blocks the data load.
 
-**Backend-team asks** (ideal contract, each currently worked around
-inside the integration layer):
+**Backend-team asks** - the complete open list as of 2026-09-09:
 
 1. **Immutable id (or UUID) + slug** on products, categories, and users -
-   not slug-only, and ideally on **both** the product responses
+   not slug-only, and on **both** the product responses
    (`ProductResponse`/`ProductSummaryResponse`) **and** the corresponding
    `/api/user-activities` rows (`UserActivitiesResponse.productId`), not
-   just one side - a review/activity row that only carries a slug still
-   can't be tied to a renamed product otherwise. Removes the
-   identity-registry compromise (19.5); this integration is already
-   structurally ready to consume it with a small, isolated change (19.5).
-2. ~~`GET /api/users/{userId}` without authentication~~ **superseded**: the
-   backend instead provided service-to-service credentials
-   (`POST /api/auth/service/token`) - see the architecture note above.
-   Ask instead: **long-lived (or auto-rotatable) service credentials for
-   the recommender**, provisioned per environment, so this integration can
-   authenticate itself in production rather than relying on temporary
-   manually-issued ones.
-3. **`isActive`** (or a soft-delete flag) on the product payload - so
-   eligibility isn't stock-only for this source (19.3).
-4. **`GET /api/reviews`** (cursor-paginated, per 19.6) - unblocks the
-   review auxiliary signal.
-5. Product **brand** on the payload - restores brand-affinity features.
-6. Product **tags** on the *list* projection (not just the detail
-   endpoint) - restores tag text for the Sentence Transformer without an
-   N+1 fetch.
-7. Confirm whether `PlaceOrder` emits **one activity row per order line**
+   just one side. *In progress on the backend side.* Removes the
+   identity-registry compromise (19.5) **and** unblocks `/api/reviews`,
+   whose `productId`/`userId` are numeric keys nothing else exposes
+   (19.6) - one change closes both.
+2. **SEARCH and CHATBOT activity rows** on `/api/user-activities` - see
+   19.10. *In progress on the backend side.* Only 3 of the 5 canonical
+   engagement signals are live today.
+3. Confirm whether `PlaceOrder` emits **one activity row per order line**
    or one per order - the mapping assumes each row is one product
-   interaction.
-8. **SEARCH and CHATBOT activity rows** on `/api/user-activities` - see
-   19.10. Only 3 of the 5 canonical engagement signals are live today.
+   interaction. *Question asked, awaiting answer.* No code change pending
+   the reply; `PlaceOrder -> PURCHASE` is unchanged.
+4. **Per-environment service credentials** for the recommender, so it can
+   authenticate in production rather than relying on temporarily issued
+   ones. The client-credentials flow itself is now implemented (19.11);
+   this is a provisioning item only.
+
+**Closed / withdrawn:**
+
+- ~~`GET /api/reviews`~~ - **implemented by the backend and integrated**
+  (19.6). Only the identity join remains, which is ask 1.
+- ~~`GET /api/users/{userId}` without authentication~~ - superseded by the
+  service-auth flow, now implemented (19.11). Keeping the endpoint
+  Bearer-gated is the right shape: a profile is PII and the recommender is
+  the only non-browser caller that needs it.
+- ~~Product `isActive`~~, ~~product `brand`~~, ~~tags on the product list
+  projection~~ - **withdrawn, not blockers.** The backend team has
+  confirmed the production backend will never provide these. They are no
+  longer requested; see 19.12 for what that means for the recommender.
 
 ### 19.10 Engagement-signal coverage (verified 2026-09-04)
 
@@ -2217,16 +2305,99 @@ endpoint - so supporting them later is a single-line addition to
 `_ACTION_TYPE_MAP` (e.g. `"search": ActionType.SEARCH`), nothing else in
 the pipeline changes.
 
+### 19.12 Permanently unavailable: `isActive`, `brand`, list-level tags
+
+The backend team has confirmed the **production** backend will never
+provide `isActive`, `brand`, or tags in the product list projection.
+These are therefore **not backend-team requests any more** (they are
+withdrawn from 19.8) and must not be treated as temporary gaps that will
+one day be filled.
+
+They are also **not being removed from the recommender in this task**, and
+that is deliberate. The current trained artifacts are the SQLite baseline,
+and `brand` in particular is baked into shipped model contracts:
+
+| Where | What depends on it | Removing it now would… |
+|---|---|---|
+| `retrieval/two_tower/feature_encoding.py` | `brand_vocab` (fit on catalog brands); `brand_id` item input; `brand_affinity` user vector, width = `len(brand_vocab)` | change encoder vocabulary **and input widths** |
+| `retrieval/two_tower/model.py` | `item_brand_embedding` layer; `brand_affinity` user input | change the saved model graph |
+| `ranking/features.py` | `brand_affinity_match` and `item_is_active` - 2 of the **29** ranker features | change the feature vector length and the ranker contract |
+| `features/user_features.py` | `brand_affinity` distribution (`max_top_brands`) | change user-feature output |
+| `features/product_features.py` | `brand`, `tags`, `is_active` fields | change the product-feature record |
+| `embeddings/text_builder.py` | `"Brand: …"` and tag text in the embedded product string | change every product embedding → re-embed |
+| `reranking/diversity.py` | `brand_repetition_penalty` | change re-ranking behaviour |
+| `serving/eligibility.py` | `is_active` rule (with `stock_quantity`) | change the eligibility gate |
+
+Every one of those is a retraining-scale change, and retraining is
+intentionally postponed until the real backend dataset exists. So:
+
+**Today (`backend_api` source) - nothing is fabricated:**
+
+- `isActive`: not invented. `loader` sets `is_active=True` because the
+  backend has no deleted/inactive concept at all, and **real availability
+  comes from `stockQuantity > 0`**, which is a genuine backend signal and
+  is what actually gates eligibility for this source.
+- `brand`: `None` (the existing neutral/missing value). Brand-dependent
+  features degrade to zero rather than being given a made-up value.
+- `tags`: empty (not consumed). **Discrepancy for the backend team to
+  reconcile:** the live dev backend at the time of writing *does* return
+  `tags` on the product list projection (23 of 83 products carried
+  non-empty tags on 2026-09-09), which contradicts the statement that
+  production will not provide them. They are deliberately left unconsumed
+  either way - wiring them in would change the embedded product text and
+  therefore invalidate every current product embedding and trained
+  artifact, which is a retraining-phase decision, not a data-mapping one.
+  If production *will* carry tags after all, that decision changes and
+  point 3 below is withdrawn.
+
+**SQLite baseline is untouched** - it keeps its real `Brand` / `isActive`
+columns and its current eligibility behaviour, so the trained artifacts
+stay valid.
+
+**During the future real-backend retraining phase**, these must be
+revisited rather than carried forward as permanently-constant inputs -
+a feature that is always `0` (or always `True`) costs parameters and
+dilutes the model while contributing no signal:
+
+1. **Eligibility** should become stock-based plus whatever real commerce
+   availability rule the backend actually provides; drop the synthetic-only
+   `is_active` dependency if there is no real equivalent.
+2. **Brand features** - `brand_vocab`, the item brand embedding, the
+   `brand_affinity` user vector, `brand_affinity_match`, and the brand
+   diversity penalty - should be removed or replaced with a real
+   production attribute (e.g. category depth, supplier, price tier).
+   Ranker feature count drops from 29 accordingly.
+3. **Product text** should be rebuilt from the fields that genuinely exist
+   in production (name, description, category), dropping the tag segment,
+   unless an efficient tag source appears.
+
+Deciding this is part of the retraining redesign, not of the current
+data-mapping work.
+
 ### 19.9 Tests + live smoke
 
 Deterministic, offline (fake session / fake client - never the live
 backend): `tests/test_backend_client.py` (envelope, both cursor param
-styles, page-size cap, retry, error classification, TLS flag),
+styles, page-size cap, retry, error classification, TLS flag, the
+unpaginated `/api/reviews` array + its Bearer header and 401 retry),
+`tests/test_backend_auth.py` (token acquisition, cache reuse,
+refresh-before-expiry, expiry fallback, `invalidate`, single exchange
+under 8 concurrent callers, missing/blank credentials with **no** network
+call, rejected credentials, token-endpoint 5xx/transport/contract
+failures, public calls carrying no `Authorization`, protected calls
+carrying it, one-refresh-then-stop on repeated 401, and explicit
+no-leak assertions on logs, exception messages, `Session.headers`, and
+`BackendApiConfig`'s field list),
 `tests/test_backend_identity.py` (determinism, restart persistence,
 namespace isolation, no-`hash()`, collision/repair, catalog
 add/remove), `tests/test_backend_mapping.py`,
 `tests/test_backend_loader.py` (field mapping, backend gaps, null/unknown
-slug drops, bare vs enriched profiles), `tests/test_backend_factory.py`
+slug drops, bare vs enriched profiles, and the review path: skipped
+without credentials, empty response, unjoinable int ids dropped,
+malformed/out-of-range ratings dropped, unknown user never minted,
+timestamp normalisation, auth failure degrading - plus the
+map-populated case proving resolution works the moment the backend
+exposes its product id), `tests/test_backend_factory.py`
 (same `AdapterBundle` shape as the other sources, downstream
 `build_engagement_profile` unchanged, no orders/cart double-count,
 registry persistence).

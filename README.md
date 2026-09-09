@@ -454,14 +454,22 @@ and validated by `src/recommendation/utils/config.py`.
   | `RECS_BACKEND_API_TIMEOUT` | `backend_api.timeout_seconds` |
   | `RECS_BACKEND_TLS_VERIFY` | `backend_api.tls_verify` (default `true`; set `false` **only** for a dev backend with a self-signed cert) |
   | `RECS_BACKEND_API_PAGE_SIZE` | `backend_api.page_size` |
+  | `RECS_BACKEND_SERVICE_CLIENT_ID` / `..._SECRET` | **secret** - service credentials for the Bearer-gated backend endpoints; env only, never in config |
 
   `.env.example` documents these; copy it to `.env` (gitignored) for
   local work.
 
-No secrets are hardcoded anywhere, and there are none to hold: the
-recommender sends **no `Authorization` header and holds no token** even
-against the real backend (it uses public / soon-public endpoints only -
-`docs/data-mapping.md` §19). TLS verification for the backend client is
+No secrets are hardcoded anywhere. The only secrets the project consumes
+are the two backend service credentials above, and they are read straight
+from the environment by `data.backend.auth` - deliberately **not** fields
+on `BackendApiConfig`, since config is loaded from committed YAML and
+dumped in diagnostics. They are exchanged at
+`POST /api/auth/service/token` for a ~15-minute Bearer token that is
+cached **in memory only** (never written to disk, never logged, never put
+on `Session.headers`) and attached only to the two gated endpoints -
+`/api/users/{guid}` and `/api/reviews`. Leave them unset and those
+endpoints are skipped cleanly with no request at all. See
+`docs/data-mapping.md` §19.11. TLS verification for the backend client is
 **on by default** and is never disabled in code - only relaxable via the
 explicit `RECS_BACKEND_TLS_VERIFY=false` dev knob.
 
@@ -649,8 +657,9 @@ slug + GUID identifiers; a persistent `ExternalIdentityResolver` maps
 those to the stable internal `int` ids the canonical schemas and the
 trained artifacts require, so nothing downstream changes. See
 `docs/data-mapping.md` §19 for the full endpoint list, DTO→canonical
-mapping, identity design, the `/api/reviews`-not-implemented status, TLS/
-error/freshness behaviour, and what the backend team still needs to
+mapping, identity design, the service-auth flow (§19.11), the
+`/api/reviews` integration and its outstanding identity join (§19.6),
+TLS/error/freshness behaviour, and what the backend team still needs to
 change. It is **opt-in and needs a retrain against the real catalog**
 before it can serve live `/recommendations` (`models/backend_api/`
 artifacts don't exist); the data path itself is verified end to end by

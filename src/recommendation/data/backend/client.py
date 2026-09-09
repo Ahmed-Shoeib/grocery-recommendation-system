@@ -7,16 +7,14 @@ statuses, TLS verification, the `{success, data}` response envelope, and
 both pagination styles the backend uses. Output is always a list of
 `recommendation.data.backend.dtos` models - HTTP details never escape.
 
-Auth: the recommender sends NO Authorization header. The endpoints it
-needs (`/api/products`, `/api/categories`, `/api/user-activities`) are
-public (verified live, still true as of 2026-09-04); `/api/users/{guid}`
-is Bearer-gated and, per a live probe, stays that way - instead of opening
-it up, the backend added a `POST /api/auth/service/token`
-client-credentials exchange for service-to-service callers. This
-integration deliberately does not implement that exchange yet (out of
-scope for the data-mapping work here); `/api/users/{guid}` is treated as
-best-effort (a 401/403 there logs once and degrades, it does not raise).
-See docs/data-mapping.md section 19.
+Auth: per-request, never session-wide. `/api/products`, `/api/categories`
+and `/api/user-activities` are public and are called with NO Authorization
+header. `/api/users/{guid}` and `/api/reviews` are Bearer-gated, and are
+called with a token from `auth.ServiceTokenProvider` (the
+`POST /api/auth/service/token` client-credentials exchange). The header is
+attached to the individual protected request rather than to
+`Session.headers`, so a token can never leak onto a public call. See
+docs/data-mapping.md section 19.
 
 TLS: `verify` defaults to on. The dev backend presents a self-signed
 `CN=localhost` certificate on a bare IP; for local work set
@@ -31,10 +29,19 @@ from typing import Any
 
 import requests
 
-from recommendation.data.backend.dtos import ApiActivity, ApiCategory, ApiPagination, ApiProduct, ApiUser
+from recommendation.data.backend.auth import ServiceTokenProvider
+from recommendation.data.backend.dtos import (
+    ApiActivity,
+    ApiCategory,
+    ApiPagination,
+    ApiProduct,
+    ApiReview,
+    ApiUser,
+)
 from recommendation.data.backend.errors import (
     BackendAuthError,
     BackendContractError,
+    BackendCredentialsError,
     BackendPaginationError,
     BackendResponseError,
     BackendUnavailableError,
@@ -50,10 +57,19 @@ _CATALOG_MAX_LIMIT = 100  # backend rejects Limit > 100 on /api/products and /ap
 
 
 class BackendApiClient:
-    def __init__(self, config: BackendApiConfig, *, session: requests.Session | None = None) -> None:
+    def __init__(
+        self,
+        config: BackendApiConfig,
+        *,
+        session: requests.Session | None = None,
+        token_provider: ServiceTokenProvider | None = None,
+    ) -> None:
         self._config = config
         self._base = config.base_url.rstrip("/")
         self._session = session or requests.Session()
+        # Shares the session (and therefore the connection pool) with data
+        # requests; credentials come from the environment inside the provider.
+        self._tokens = token_provider or ServiceTokenProvider(config, session=self._session)
         self._session.headers.setdefault("Accept", "application/json")
         self._session.headers.setdefault("User-Agent", config.user_agent)
         if not config.tls_verify:
@@ -70,18 +86,45 @@ class BackendApiClient:
 
     # --- low-level ----------------------------------------------------
 
-    def _request(self, path: str, params: dict[str, Any] | None = None) -> Any:
+    def _request(self, path: str, params: dict[str, Any] | None = None, *, auth: bool = False) -> Any:
+        """GET `path`, unwrapping the `{success, data}` envelope.
+
+        `auth=True` attaches a service Bearer token to this request only.
+        If the backend still answers 401 - a token this process considered
+        valid can be rejected after a backend restart, a revoked client, or
+        clock skew - the cached token is dropped and the request is retried
+        exactly once with a fresh one. A second 401 is a real auth failure
+        and raises, so a bad credential can never spin.
+        """
+        if not auth:
+            return self._unwrap(self._send(path, params, None), path)
+
+        resp = self._send(path, params, self._auth_header())
+        if resp.status_code == 401:
+            logger.info("GET %s returned 401; refreshing the service token and retrying once", path)
+            self._tokens.invalidate()
+            resp = self._send(path, params, self._auth_header())
+        return self._unwrap(resp, path)
+
+    def _auth_header(self) -> dict[str, str]:
+        return {"Authorization": f"Bearer {self._tokens.token()}"}
+
+    def _send(
+        self, path: str, params: dict[str, Any] | None, headers: dict[str, str] | None
+    ) -> requests.Response:
+        """One GET with the transport-level retry policy (connection errors
+        and retryable statuses). Returns the raw response; status
+        interpretation is `_unwrap`'s job.
+        """
         url = f"{self._base}{path}"
         attempts = self._config.max_retries + 1
-        last_exc: Exception | None = None
         for attempt in range(1, attempts + 1):
             try:
                 resp = self._session.request(
-                    "GET", url, params=params,
+                    "GET", url, params=params, headers=headers,
                     timeout=self._config.timeout_seconds, verify=self._config.tls_verify,
                 )
             except requests.exceptions.RequestException as exc:
-                last_exc = exc
                 if attempt < attempts:
                     self._backoff(attempt, f"{type(exc).__name__} for GET {path}")
                     continue
@@ -90,7 +133,7 @@ class BackendApiClient:
             if resp.status_code in _RETRYABLE_STATUS and attempt < attempts:
                 self._backoff(attempt, f"HTTP {resp.status_code} for GET {path}")
                 continue
-            return self._unwrap(resp, path)
+            return resp
 
         raise BackendUnavailableError(f"GET {url} exhausted retries")  # pragma: no cover - loop always returns/raises
 
@@ -193,13 +236,33 @@ class BackendApiClient:
         rows = self._iter_cursor("/api/user-activities", cursor_param="cursor", limit_param="pageSize")
         return [ApiActivity.model_validate(r) for r in rows]
 
+    def list_reviews(self) -> list[ApiReview]:
+        """`GET /api/reviews` - Bearer-gated, and (unlike every other list
+        endpoint here) NOT paginated: Swagger declares no query parameters
+        and a flat `data` array (`AiProductReviewResponseListApiResponse`),
+        verified live. A `null` data array means "no reviews", not an error.
+        """
+        data = self._request("/api/reviews", auth=True)
+        if data is None:
+            return []
+        if not isinstance(data, list):
+            raise BackendContractError(
+                f"GET /api/reviews: expected a JSON array in 'data', got {type(data).__name__}"
+            )
+        return [ApiReview.model_validate(r) for r in data]
+
     def get_user(self, guid: str) -> ApiUser | None:
-        """Best-effort. Returns None (not raise) on 401/403/404 so a
-        currently-protected or not-yet-migrated user endpoint degrades to
-        a low-signal profile instead of failing the whole data load.
+        """Bearer-gated; best-effort by design. Returns None (never raises)
+        when credentials are absent or the backend rejects/does not have the
+        user, so profile enrichment degrades to a low-signal profile instead
+        of failing the whole data load. This endpoint must not become a hard
+        dependency of basic user identity - the GUID from
+        `/api/user-activities` is enough to serve a user.
         """
         try:
-            data = self._request(f"/api/users/{guid}")
+            data = self._request(f"/api/users/{guid}", auth=True)
+        except BackendCredentialsError:
+            return None
         except BackendAuthError as exc:
             logger.warning("GET /api/users/%s unauthorized (%s) - degrading to bare profile", guid, exc.status_code)
             return None
@@ -208,3 +271,10 @@ class BackendApiClient:
                 return None
             raise
         return ApiUser.model_validate(data)
+
+    def has_service_credentials(self) -> bool:
+        """Whether service auth is configured at all. Lets callers skip
+        protected endpoints entirely (one clear log line) instead of
+        producing a failure per call.
+        """
+        return self._tokens.has_credentials()

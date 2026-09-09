@@ -67,7 +67,7 @@ def build_backend_api_adapters(
     activities = client.list_activities()
     interactions, guid_by_internal = load_backend_events(activities, resolver, catalog)
     raw_users = load_backend_users(client, guid_by_internal, catalog)
-    raw_reviews = load_backend_reviews(client)
+    raw_reviews = load_backend_reviews(client, catalog, guid_by_internal)
 
     resolver.save()
 

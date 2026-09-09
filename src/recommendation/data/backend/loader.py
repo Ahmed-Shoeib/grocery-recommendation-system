@@ -27,9 +27,10 @@ from __future__ import annotations
 
 from collections import Counter
 
+from recommendation.data.backend.auth import ENV_CLIENT_ID, ENV_CLIENT_SECRET
 from recommendation.data.backend.client import BackendApiClient
-from recommendation.data.backend.dtos import ApiActivity
-from recommendation.data.backend.errors import BackendAuthError
+from recommendation.data.backend.dtos import ApiActivity, ApiReview
+from recommendation.data.backend.errors import BackendAuthError, BackendCredentialsError
 from recommendation.data.backend.identity import ExternalIdentityResolver
 from recommendation.data.backend.mapping import is_known, map_action_type
 from recommendation.data.schemas.events import UserInteraction
@@ -64,6 +65,7 @@ class BackendCatalog:
         product_tags: list[RawProductTag],
         category_id_by_slug: dict[str, int],
         category_id_by_name: dict[str, int],
+        product_id_by_backend_id: dict[int, int] | None = None,
     ) -> None:
         self.categories = categories
         self.products = products
@@ -72,6 +74,12 @@ class BackendCatalog:
         self.category_id_by_slug = category_id_by_slug
         self.category_id_by_name = category_id_by_name
         self.product_slugs = {p.slug for p in products}
+        # Backend int32 product id -> internal product id. Empty for now:
+        # `/api/products` exposes no numeric id, so nothing can populate it.
+        # `_resolve_review_product` reads it, which is what makes
+        # `/api/reviews` (keyed by that int id) resolvable the moment the
+        # backend's in-progress product-id work lands - see 19.5/19.6.
+        self.product_id_by_backend_id = dict(product_id_by_backend_id or {})
 
 
 def load_backend_catalog(client: BackendApiClient, resolver: ExternalIdentityResolver) -> BackendCatalog:
@@ -123,14 +131,21 @@ def load_backend_catalog(client: BackendApiClient, resolver: ExternalIdentityRes
     if clamped_stock:
         logger.warning("backend load: %d product(s) had negative stock, clamped to 0", clamped_stock)
 
+    with_tags = sum(1 for p in api_products if p.tags)
     logger.info(
-        "backend catalog loaded: %d categories, %d products (tags not exposed by the list endpoint)",
-        len(raw_categories), len(raw_products),
+        "backend catalog loaded: %d categories, %d products (%d carry list-level tags, not consumed)",
+        len(raw_categories), len(raw_products), with_tags,
     )
-    # backend gap: the product LIST projection carries no tags, so the
-    # RawTag / RawProductTag join is empty. Product `tags` therefore never
-    # reach the Sentence Transformer text for this source. Hydrating them
-    # would mean one /api/products/{slug} call per product (N+1) - deferred.
+    # The RawTag / RawProductTag join is left empty, so product `tags` never
+    # reach the Sentence Transformer text for this source.
+    #
+    # Note (2026-09-09): the live dev backend DOES now return `tags` on the
+    # list projection, but the backend team has stated the production
+    # backend will not. Wiring them in would change every product embedding
+    # and therefore invalidate the current trained artifacts, so tags stay
+    # unconsumed pending the real-backend retraining decision - see
+    # docs/data-mapping.md section 19.12, which also records the
+    # dev-vs-production discrepancy for the backend team to reconcile.
     return BackendCatalog(raw_categories, raw_products, [], [], cat_id_by_slug, cat_id_by_name)
 
 
@@ -239,31 +254,143 @@ def load_backend_users(
     return raw_users
 
 
-def load_backend_reviews(client: BackendApiClient) -> list[RawReview]:
-    """`/api/reviews` is not implemented by the backend yet (re-verified
-    2026-09-04: absent from both a live 404 and the published OpenAPI
-    spec - no route, no schema). Reviews are an *optional* auxiliary
-    ranking signal - `EngagementProfile.reviews` defaults to `[]` and
-    `features.product_features.build_product_features` handles a
-    review-free catalog (rating features fall back to neutral defaults) -
-    so returning an empty list here is the existing semantics-preserving
-    fallback, NOT fabricated data.
+def load_backend_reviews(
+    client: BackendApiClient,
+    catalog: BackendCatalog,
+    guid_by_internal: dict[int, str],
+) -> list[RawReview]:
+    """`GET /api/reviews` -> canonical `RawReview`s.
 
-    Expected contract when the endpoint lands (docs/data-mapping.md
-    section 19.6 has the full JSON shape + backend-team ask): the usual
-    `{success, data: {data: [...], pagination}}` envelope, cursor-paginated
-    like `/api/user-activities`, each row
-    `{userId: GUID, productId: str?, productSlug: str, rating: number
-    (1-5), comment: str?, createdAt: datetime}` - `productId` preferred
-    once the backend exposes one (19.5), `productSlug` the required
-    fallback. Implement the body then: add `ApiReview` (mirrors
-    `ApiActivity`) + `BackendApiClient.list_reviews` (mirrors
-    `list_activities`), resolve `userId` via `resolver.resolve_user`,
-    product identity via `resolver.peek_product` preferring
-    `productId or productSlug` (drop unknown, same policy as activities),
-    build `RawReview`. No other file needs to change.
+    Drop policy mirrors `load_backend_events` exactly: a row that cannot be
+    resolved to a product and a user *this load already knows* is counted,
+    logged, and discarded - never allowed to mint a phantom id or attach to
+    the wrong entity. Also dropped: ratings outside the canonical 1-5 range
+    (`RawReview.rating` is `ge=1, le=5`, so an out-of-range row would
+    otherwise abort the whole load).
+
+    **Identity gap - why this currently yields no reviews.** The rows are
+    real and the endpoint works, but `/api/reviews` addresses users and
+    products by the backend's **int32 primary keys** (`userId`,
+    `productId`), while every other endpoint this integration consumes
+    addresses users by GUID and products by slug. No endpoint exposes both
+    for the same row, so there is no join key and `_resolve_*` below cannot
+    match. That is the same gap the backend team's in-progress "immutable
+    product UUID/ID in product responses and /api/user-activities" work
+    closes - see docs/data-mapping.md section 19.6. Nothing is guessed in
+    the meantime: reviews are an *optional* auxiliary signal
+    (`EngagementProfile.reviews` defaults to `[]`, and
+    `features.product_features.build_product_features` falls back to
+    neutral rating defaults for a review-free catalog), so an empty result
+    is semantics-preserving, not fabricated.
+
+    Skipped entirely (one log line, no request) when service credentials
+    are unset - the endpoint is Bearer-gated and would otherwise 401 once
+    per load.
     """
-    return []
+    if not client.has_service_credentials():
+        logger.info(
+            "skipping /api/reviews: it is Bearer-gated and no service credentials are configured "
+            "(set %s / %s); reviews are an optional signal and the load continues without them",
+            ENV_CLIENT_ID, ENV_CLIENT_SECRET,
+        )
+        return []
+
+    try:
+        api_reviews = client.list_reviews()
+    except (BackendCredentialsError, BackendAuthError) as exc:
+        logger.warning("GET /api/reviews unauthorized (%s) - continuing without review signals", exc)
+        return []
+
+    if not api_reviews:
+        logger.info("backend load: /api/reviews returned no rows")
+        return []
+
+    internal_by_guid = {guid: internal for internal, guid in guid_by_internal.items()}
+    reviews: list[RawReview] = []
+    dropped_rating = dropped_unknown_product = dropped_unknown_user = dropped_no_id = 0
+
+    for row in api_reviews:
+        if row.review_id is None:
+            dropped_no_id += 1
+            continue
+        rating = _valid_rating(row.rating)
+        if rating is None:
+            dropped_rating += 1
+            continue
+        product_id = _resolve_review_product(row, catalog)
+        if product_id is None:
+            dropped_unknown_product += 1
+            continue
+        user_id = _resolve_review_user(row, internal_by_guid)
+        if user_id is None:
+            dropped_unknown_user += 1
+            continue
+        reviews.append(
+            RawReview(
+                id=row.review_id,
+                user_id=user_id,
+                product_id=product_id,
+                rating=rating,
+                comment=row.comment,
+                # Same convention as activities: a naive backend timestamp
+                # is UTC wall-clock (see `_as_naive_utc`).
+                creation_date=_as_naive_utc(row.created_at),
+            )
+        )
+
+    if dropped_no_id:
+        logger.info("backend load: %d review row(s) dropped (no reviewId)", dropped_no_id)
+    if dropped_rating:
+        logger.info("backend load: %d review row(s) dropped (rating missing or outside 1-5)", dropped_rating)
+    if dropped_unknown_user:
+        logger.info("backend load: %d review row(s) dropped (user not in this load's activity stream)", dropped_unknown_user)
+    if dropped_unknown_product:
+        logger.warning(
+            "backend load: %d of %d review row(s) dropped - /api/reviews identifies products by the "
+            "backend's int32 productId, which /api/products does not expose, so there is no join key. "
+            "Reviews stay unavailable until the backend adds its product id to the product projection "
+            "(docs/data-mapping.md section 19.6).",
+            dropped_unknown_product, len(api_reviews),
+        )
+    logger.info("backend load: %d canonical reviews from %d /api/reviews row(s)", len(reviews), len(api_reviews))
+    return reviews
+
+
+def _valid_rating(rating: float | None) -> float | None:
+    """Canonical `RawReview.rating` is `ge=1, le=5`. The response schema
+    declares no bounds (only the write side does), so an out-of-range or
+    missing value is a droppable data problem, not an exception.
+    """
+    if rating is None:
+        return None
+    return float(rating) if 1.0 <= float(rating) <= 5.0 else None
+
+
+def _resolve_review_product(review: ApiReview, catalog: BackendCatalog) -> int | None:
+    """Backend int32 `productId` -> internal product id.
+
+    Returns `None` for every row today: the catalog is keyed by slug
+    because `/api/products` exposes no numeric id, so there is nothing to
+    match `productId` against. **This is the single place to change** when
+    the backend adds its product id to the product projection - populate a
+    `{backend_product_id: internal_id}` map in `load_backend_catalog` and
+    look it up here. Deliberately not pre-built against a guessed field
+    name (see docs/data-mapping.md section 19.5).
+    """
+    return catalog.product_id_by_backend_id.get(review.product_id) if review.product_id is not None else None
+
+
+def _resolve_review_user(review: ApiReview, internal_by_guid: dict[str, int]) -> int | None:
+    """Backend int32 `userId` -> internal user id.
+
+    Same gap on the user side: `/api/user-activities` and
+    `/api/users/{guid}` both address users by GUID, so an int `userId` has
+    no counterpart. Resolution is intentionally restricted to users this
+    load already saw (never `resolver.resolve_user`, which would *mint* a
+    new internal id for an unknown key and create a phantom user with a
+    review but no activity).
+    """
+    return None if review.user_id is None else internal_by_guid.get(str(review.user_id))
 
 
 # --- helpers ----------------------------------------------------------

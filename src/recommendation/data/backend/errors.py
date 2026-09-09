@@ -41,6 +41,14 @@ class BackendAuthError(BackendResponseError):
     """
 
 
+class BackendCredentialsError(BackendApiError):
+    """Service credentials are needed for a protected endpoint but are not
+    configured in the environment. Distinct from `BackendAuthError`: nothing
+    was sent to the backend, so the fix is configuration, not the backend.
+    See `auth.ServiceTokenProvider`.
+    """
+
+
 class BackendContractError(BackendApiError):
     """The transport succeeded but the payload did not match the expected
     contract: invalid JSON, a missing/!=true `success` envelope flag, a
