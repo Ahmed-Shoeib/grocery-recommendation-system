@@ -7,7 +7,7 @@ re-embedded, or have its index structure rebuilt for this - `isActive`/
 `stockQuantity` are serving-time catalog state, not something the
 Two-Tower model or its frozen 128-D item embeddings encode. FAISS and
 ScaNN both index the SAME full-catalog embeddings (built once, at service
-startup, from the trained Two-Tower - see `api.dependencies
+startup, from the trained Two-Tower - see `api.service
 .build_recommendation_service`); this wrapper restricts what a `search()`
 call is allowed to return, purely at query time, so eligibility changes
 never touch the index at all.
@@ -57,7 +57,7 @@ from __future__ import annotations
 import numpy as np
 
 from recommendation.retrieval.index.base import SearchResult, VectorIndex
-from recommendation.utils.config import RetrievalConfig
+from recommendation.config import RetrievalConfig
 
 
 class EligibilityRestrictedIndex:

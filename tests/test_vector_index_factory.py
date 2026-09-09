@@ -2,7 +2,7 @@ import pytest
 
 from recommendation.retrieval.index.factory import build_vector_index, candidate_pool_size
 from recommendation.retrieval.index.faiss_index import FaissVectorIndex
-from recommendation.utils.config import RetrievalConfig
+from recommendation.config import RetrievalConfig
 
 
 def test_build_vector_index_faiss_backend_returns_faiss_index():

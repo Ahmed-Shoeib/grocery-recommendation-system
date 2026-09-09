@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import tensorflow as tf
 
-from recommendation.utils.config import RankingConfig
+from recommendation.config import RankingConfig
 
 
 def build_ranker_model(input_dim: int, config: RankingConfig) -> tf.keras.Model:

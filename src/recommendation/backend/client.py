@@ -5,7 +5,7 @@ handled here and nowhere else: base URL, timeouts, connection-error vs
 HTTP-error vs contract-error classification, bounded retries for transient
 statuses, TLS verification, the `{success, data}` response envelope, and
 both pagination styles the backend uses. Output is always a list of
-`recommendation.data.backend.dtos` models - HTTP details never escape.
+`recommendation.backend.dtos` models - HTTP details never escape.
 
 Auth: per-request, never session-wide. `/api/products`, `/api/categories`
 and `/api/user-activities` are public and are called with NO Authorization
@@ -29,8 +29,8 @@ from typing import Any
 
 import requests
 
-from recommendation.data.backend.auth import ServiceTokenProvider
-from recommendation.data.backend.dtos import (
+from recommendation.backend.auth import ServiceTokenProvider
+from recommendation.backend.dtos import (
     ApiActivity,
     ApiCategory,
     ApiPagination,
@@ -38,7 +38,7 @@ from recommendation.data.backend.dtos import (
     ApiReview,
     ApiUser,
 )
-from recommendation.data.backend.errors import (
+from recommendation.backend.errors import (
     BackendAuthError,
     BackendContractError,
     BackendCredentialsError,
@@ -46,8 +46,8 @@ from recommendation.data.backend.errors import (
     BackendResponseError,
     BackendUnavailableError,
 )
-from recommendation.utils.config import BackendApiConfig
-from recommendation.utils.logging import get_logger
+from recommendation.config import BackendApiConfig
+from recommendation.logging import get_logger
 
 logger = get_logger(__name__)
 

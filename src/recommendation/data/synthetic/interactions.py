@@ -29,7 +29,7 @@ from recommendation.data.synthetic.raw_schemas import (
     RawUser,
 )
 from recommendation.data.synthetic.users import UserLatentProfile
-from recommendation.utils.config import SyntheticDataConfig
+from recommendation.config import SyntheticDataConfig
 
 REFERENCE_NOW = datetime(2026, 8, 12)
 

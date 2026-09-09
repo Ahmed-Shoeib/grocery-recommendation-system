@@ -3,7 +3,7 @@ import time
 import numpy as np
 import pytest
 
-from recommendation.api.dependencies import build_recommendation_service
+from recommendation.api.service import build_recommendation_service
 from recommendation.ranking.features import RANKING_FEATURE_NAMES
 from recommendation.ranking.model import build_ranker_model
 from recommendation.ranking.serialization import RankerArtifacts
@@ -18,7 +18,7 @@ from recommendation.serving.startup_validation import (
     validate_two_tower_artifacts,
     validate_vector_index_compatibility,
 )
-from recommendation.utils.config import AppConfig, RankingConfig, RetrievalConfig
+from recommendation.config import AppConfig, RankingConfig, RetrievalConfig
 
 
 def _two_tower_artifacts(output_dim=8, encoder_embedding_dim=8, num_items=3) -> TwoTowerArtifacts:

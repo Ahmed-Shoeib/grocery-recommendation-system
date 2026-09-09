@@ -32,8 +32,8 @@ from recommendation.data.adapters.base import AdapterBundle
 from recommendation.data.adapters.backend_factory import build_backend_api_adapters
 from recommendation.data.adapters.factory import build_synthetic_adapters
 from recommendation.data.adapters.sqlite_factory import build_sqlite_adapters
-from recommendation.data.schemas.engagement import EngagementProfile
-from recommendation.data.schemas.product import Product
+from recommendation.schemas.engagement import EngagementProfile
+from recommendation.schemas.product import Product
 from recommendation.data.synthetic.dataset import generate_synthetic_dataset
 from recommendation.data.synthetic.validation import validate_dataset
 from recommendation.embeddings.encoder import SentenceTransformerEncoder
@@ -56,8 +56,8 @@ from recommendation.serving.startup_validation import (
     validate_two_tower_artifacts,
     validate_vector_index_compatibility,
 )
-from recommendation.utils.config import AppConfig, resolve_path
-from recommendation.utils.logging import get_logger
+from recommendation.config import AppConfig, resolve_path
+from recommendation.logging import get_logger
 
 logger = get_logger(__name__)
 

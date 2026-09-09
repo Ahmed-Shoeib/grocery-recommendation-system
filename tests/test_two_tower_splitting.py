@@ -1,5 +1,5 @@
-from recommendation.data.schemas.engagement import EngagementProfile, PurchaseRecord
-from recommendation.data.schemas.user import UserProfile
+from recommendation.schemas.engagement import EngagementProfile, PurchaseRecord
+from recommendation.schemas.user import UserProfile
 from recommendation.retrieval.two_tower.splitting import build_user_splits
 
 

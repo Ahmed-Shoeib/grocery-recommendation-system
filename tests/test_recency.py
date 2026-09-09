@@ -14,7 +14,7 @@ from recommendation.features.recency import (
     effective_weight,
     recency_weight,
 )
-from recommendation.utils.config import RecencyConfig
+from recommendation.config import RecencyConfig
 
 T0 = datetime(2026, 1, 1, 0, 0, 0)
 

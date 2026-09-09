@@ -20,7 +20,7 @@ from recommendation.data.adapters.review_adapter import InMemoryReviewAdapter
 from recommendation.data.adapters.search_adapter import SyntheticSearchAdapter
 from recommendation.data.adapters.user_adapter import InMemoryUserAdapter
 from recommendation.data.synthetic.dataset import SyntheticDataset
-from recommendation.utils.config import SyntheticDataConfig
+from recommendation.config import SyntheticDataConfig
 
 
 def build_synthetic_adapters(dataset: SyntheticDataset, config: SyntheticDataConfig) -> AdapterBundle:

@@ -7,10 +7,10 @@ the ONLY place in the codebase that knows HTTP / the backend's JSON wire
 shapes:
 
     backend REST API
-        -> recommendation.data.backend.auth      (service token: POST /api/auth/service/token)
-        -> recommendation.data.backend.client   (HTTP, pagination, retries, TLS, Bearer)
-        -> recommendation.data.backend.dtos      (external response models)
-        -> recommendation.data.backend.loader    (DTO -> Raw* / UserInteraction,
+        -> recommendation.backend.auth      (service token: POST /api/auth/service/token)
+        -> recommendation.backend.client   (HTTP, pagination, retries, TLS, Bearer)
+        -> recommendation.backend.dtos      (external response models)
+        -> recommendation.backend.loader    (DTO -> Raw* / UserInteraction,
                                                    via ExternalIdentityResolver)
         -> recommendation.data.adapters.backend_factory.build_backend_api_adapters
         -> AdapterBundle   (identical interface to the synthetic / SQLite paths)
@@ -22,7 +22,7 @@ the canonical schemas remain the stability boundary (docs/data-mapping.md
 section 19).
 
 Identity: the backend exposes products/categories by SLUG and users by
-GUID, with no numeric ids. `recommendation.data.backend.identity
+GUID, with no numeric ids. `recommendation.backend.identity
 .ExternalIdentityResolver` maps each external key to a stable, persistent
 internal `int` so the recommender core and the trained model artifacts
 keep operating on the canonical integer-id contract they were built
@@ -32,7 +32,7 @@ those rows cannot be joined yet (docs/data-mapping.md section 19.6).
 
 Auth: `/api/products`, `/api/categories` and `/api/user-activities` are
 public. `/api/users/{guid}` and `/api/reviews` are Bearer-gated and use
-`recommendation.data.backend.auth.ServiceTokenProvider`, whose
+`recommendation.backend.auth.ServiceTokenProvider`, whose
 credentials come from the environment and whose token is cached in memory
 only - never persisted, never logged, never attached to a public request.
 """

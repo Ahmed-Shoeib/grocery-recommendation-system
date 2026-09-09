@@ -20,7 +20,7 @@ from recommendation.features.user_features import UserFeatures
 from recommendation.ranking.features import RANKING_FEATURE_NAMES, build_ranking_feature_vector
 from recommendation.retrieval.two_tower.feature_encoding import TwoTowerFeatureEncoder
 from recommendation.retrieval.two_tower.model import build_item_tower, build_user_tower
-from recommendation.utils.config import TwoTowerConfig
+from recommendation.config import TwoTowerConfig
 
 PRICE_RANKING_FEATURE_NAMES = [
     "item_normalized_price",

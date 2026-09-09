@@ -27,7 +27,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from recommendation.data.schemas.engagement import EngagementProfile
+from recommendation.schemas.engagement import EngagementProfile
 
 
 @dataclass

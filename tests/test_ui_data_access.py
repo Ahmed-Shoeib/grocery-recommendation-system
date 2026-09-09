@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from recommendation.api.dependencies import RecommendationService
+from recommendation.api.service import RecommendationService
 from recommendation.data.adapters.base import (
     AdapterBundle,
     CartAdapter,
@@ -13,7 +13,7 @@ from recommendation.data.adapters.base import (
     SearchAdapter,
     UserAdapter,
 )
-from recommendation.data.schemas.engagement import (
+from recommendation.schemas.engagement import (
     CartAffinityRecord,
     ChatbotContextRecord,
     ClickRecord,
@@ -21,8 +21,8 @@ from recommendation.data.schemas.engagement import (
     PurchaseRecord,
     SearchRecord,
 )
-from recommendation.data.schemas.product import Product
-from recommendation.data.schemas.user import UserProfile
+from recommendation.schemas.product import Product
+from recommendation.schemas.user import UserProfile
 from recommendation.features.product_features import build_product_features
 from recommendation.ranking.features import RANKING_FEATURE_NAMES
 from recommendation.ranking.model import build_ranker_model
@@ -40,7 +40,7 @@ from recommendation.ui.data_access import (
     list_users,
     load_user_detail,
 )
-from recommendation.utils.config import AppConfig, ColdStartConfig, RankingConfig, RetrievalConfig, TwoTowerConfig
+from recommendation.config import AppConfig, ColdStartConfig, RankingConfig, RetrievalConfig, TwoTowerConfig
 
 _EMBEDDING_DIM = 8
 _OUTPUT_DIM = 8

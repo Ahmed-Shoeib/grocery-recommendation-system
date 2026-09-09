@@ -18,7 +18,7 @@ from recommendation.ranking.serialization import load_ranker_artifacts, save_ran
 from recommendation.ranking.train import train_ranker
 from recommendation.retrieval.two_tower.serialization import TwoTowerArtifacts
 from recommendation.retrieval.two_tower.train import train_two_tower
-from recommendation.utils.config import get_config
+from recommendation.config import get_config
 
 _FAKE_DIM = 16
 

@@ -60,8 +60,8 @@ from enum import Enum
 from recommendation.data.adapters.base import ReviewAdapter, UserAdapter
 from recommendation.data.adapters.user_events_adapter import UserEventsAdapter
 from recommendation.data.adapters.engagement import build_engagement_profile
-from recommendation.data.schemas.engagement import EngagementProfile
-from recommendation.data.schemas.events import ActionType, UserInteraction
+from recommendation.schemas.engagement import EngagementProfile
+from recommendation.schemas.events import ActionType, UserInteraction
 from recommendation.features.product_features import ProductFeatures
 from recommendation.serving.eligibility import EligibilityRule, apply_eligibility
 
@@ -254,7 +254,7 @@ def build_point_in_time_engagement_profile(
     already-built `EngagementProfile`) is what makes this correct for
     CHATBOT in particular: `ChatbotContextRecord` aggregates every
     resolved mention into one record with no per-mention timestamp (a
-    known, documented V1 simplification - see `data.schemas.engagement
+    known, documented V1 simplification - see `schemas.engagement
     .ChatbotContextRecord`'s docstring). Truncating the events BEFORE that
     aggregate is built means the aggregate itself only ever reflects
     pre-cutoff mentions - no separate per-mention timestamp is needed.

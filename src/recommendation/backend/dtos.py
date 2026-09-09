@@ -12,7 +12,7 @@ backend-side field addition never breaks ingestion, and every
 recommendation-irrelevant field is simply omitted here rather than
 modeled.
 
-DTOs never leave this package. `recommendation.data.backend.loader`
+DTOs never leave this package. `recommendation.backend.loader`
 translates them into the canonical `Raw*` / `UserInteraction` models that
 the rest of the codebase already consumes, so no backend field name
 (`categorySlug`, `userId`, ...) or wire convention (camelCase, slug/GUID

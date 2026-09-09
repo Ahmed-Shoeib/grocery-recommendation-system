@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from recommendation.data.schemas.product import Product
+from recommendation.schemas.product import Product
 from recommendation.embeddings.encoder import SentenceTransformerEncoder
 from recommendation.embeddings.product_embeddings import (
     compute_product_embeddings,
@@ -10,7 +10,7 @@ from recommendation.embeddings.product_embeddings import (
     save_cache,
 )
 from recommendation.embeddings.text_builder import build_product_text
-from recommendation.utils.config import get_config
+from recommendation.config import get_config
 
 MODEL_NAME = get_config().embedding.sentence_transformer_model
 

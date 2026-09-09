@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from enum import Enum
 
-from recommendation.utils.config import ColdStartConfig
+from recommendation.config import ColdStartConfig
 
 
 class HistoryTier(str, Enum):

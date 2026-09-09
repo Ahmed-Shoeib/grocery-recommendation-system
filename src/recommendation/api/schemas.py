@@ -1,7 +1,8 @@
 """API request/response schemas - deliberately separate from the internal
-domain/model schemas (`data.schemas`, `features.product_features
-.ProductFeatures`, `serving.pipeline.RecommendationResult`): this is the
-wire contract, versioned and stable independent of internal refactors.
+domain/model schemas (`recommendation.schemas`,
+`features.product_features.ProductFeatures`,
+`serving.pipeline.RecommendationResult`): this is the wire contract,
+versioned and stable independent of internal refactors.
 `RecommendationItem` carries a small, deliberately-chosen set of
 APPLICATION-level display fields (product name/category/brand/price) -
 not the full catalog record, and never any internal model tensor/feature

@@ -17,7 +17,7 @@ does not call `ui.metrics` (legacy, no longer wired into any live route
 Deliberately does NOT re-export `create_app`
 (`from recommendation.api.app import create_app`) here: since Python
 always executes a parent package's `__init__.py` before any of its
-submodules, that eager import would pull `api.dependencies` (TensorFlow,
+submodules, that eager import would pull `api.service` (TensorFlow,
 the Two-Tower/ranker/adapters stack) into every import under
 `recommendation.api.*`, including `api.schemas` - the pure-Pydantic wire
 contract `ui.api_client` (the Streamlit process) needs to import without

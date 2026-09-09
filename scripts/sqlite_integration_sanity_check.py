@@ -25,7 +25,7 @@ from recommendation.data.adapters.sqlite_factory import build_sqlite_adapters
 from recommendation.features.pipeline import run_feature_pipeline
 from recommendation.serving.cold_start import determine_history_tier
 from recommendation.serving.eligibility import apply_eligibility, build_eligibility_rules
-from recommendation.utils.config import get_config
+from recommendation.config import get_config
 
 
 def find_user_by_event_count(bundle, predicate) -> int | None:

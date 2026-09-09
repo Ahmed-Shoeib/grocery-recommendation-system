@@ -3,7 +3,7 @@ from datetime import datetime, timedelta
 import numpy as np
 import pytest
 
-from recommendation.data.schemas.engagement import (
+from recommendation.schemas.engagement import (
     CartAffinityRecord,
     ChatbotContextRecord,
     ClickRecord,
@@ -11,10 +11,10 @@ from recommendation.data.schemas.engagement import (
     PurchaseRecord,
     SearchRecord,
 )
-from recommendation.data.schemas.product import Product
-from recommendation.data.schemas.user import UserProfile
+from recommendation.schemas.product import Product
+from recommendation.schemas.user import UserProfile
 from recommendation.features.user_features import build_user_features, build_user_text_embeddings
-from recommendation.utils.config import FeatureConfig, RecencyConfig
+from recommendation.config import FeatureConfig, RecencyConfig
 
 
 def _products() -> dict[int, Product]:

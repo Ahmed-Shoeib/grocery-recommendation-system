@@ -237,7 +237,7 @@ top-k results are expected to overlap heavily but are not guaranteed
 bit-identical (see `scripts/evaluate_ann_recall.py` for a measured
 recall-vs-exact comparison). HNSW/ScaNN parameters (`M`/
 `efConstruction`/`efSearch`; leaf counts/AH quantization/reorder depth)
-are config-driven (`RetrievalConfig` in `utils/config.py`) and derived
+are config-driven (`RetrievalConfig` in `config.py`) and derived
 from catalog size where it matters, not hard-coded for one catalog size -
 switching FAISS to IVF/IVF-PQ or retuning ScaNN's tree/AH parameters
 later is still a change inside one class, not an interface change. Full
@@ -271,27 +271,51 @@ docs/
   production-readiness.md    Critical review (Ready now / Acceptable limitation / Must address / Future)
 models/                     Serialized model artifacts (gitignored - regenerable). sqlite_baseline/ = current SQLite-serving artifacts + the persisted offline report.
 src/recommendation/
-  data/
-    adapters/                Backend + synthetic data adapters -> canonical schemas
-    schemas/                 Canonical pydantic schemas (Category, Product, UserProfile, EngagementProfile, ...)
-    synthetic/                Synthetic dataset generator
-  features/                  EngagementProfile -> feature vectors
-  embeddings/                 Sentence Transformer product encoding + cache
-  retrieval/
-    two_tower/                User Tower / Item Tower model
-    index/                     VectorIndex (ScaNN primary/production - Docker, FAISS Windows dev fallback) + EligibilityRestrictedIndex (query-time pre-retrieval eligibility wrapper)
-  ranking/                    Neural ranker over VectorIndex candidates (features, model, train, evaluation, serialization)
-  reranking/                  Duplicate removal + category/brand diversity re-ranking
-  evaluation/                  Offline metrics + latency measurement + temporal future-purchase protocol + persisted offline-report (de)serialization/provenance
-  serving/                    Cold-start tiering, fallback candidates, two-stage eligibility (hard pre-retrieval gate + final lightweight validation), startup artifact validation, the full pipeline orchestrator
-  api/                         FastAPI app (v1) - app/routes/schemas/dependencies, thin wrapper over serving.pipeline
-  ui/                           Streamlit dashboard (dashboard.py rendering-only, api_client.py typed HTTP client) - a pure HTTP client of the FastAPI service, never loads a model artifact or RecommendationService itself
-  utils/                       Config loading (incl. env var overrides), logging
+  config.py                  All config models + YAML/env loading (RECS_* overrides) - the single most-imported module
+  logging.py                 Centralized logging setup (setup_logging / get_logger)
+  schemas/                   Canonical pydantic contracts (Category, Product, UserProfile, EngagementProfile, UserInteraction, ...) - source-agnostic; the stability boundary every layer depends on
+  backend/                   Real backend HTTP integration (the ONLY code that speaks HTTP): auth (service token), client, dtos, identity resolver, loader, action-type mapping
+  data/                      Turning a data source into canonical schemas
+    adapters/                Canonical adapter layer (8 ABCs + in-memory impls) + the synthetic / sqlite / backend adapter factories
+    sqlite/                  SQLite baseline source loader (connection + raw-row -> Raw* mapping)
+    synthetic/               Synthetic dataset generator (personas, catalog, interactions, ...)
+  embeddings/                Sentence-Transformer product-text encoding + cache
+  features/                  EngagementProfile -> user / product feature vectors (price, recency, pipeline)
+  retrieval/                 Candidate generation
+    two_tower/               User Tower / Item Tower model + training + feature encoding
+    index/                   VectorIndex (ScaNN primary/production - Docker, FAISS Windows dev fallback) + EligibilityRestrictedIndex (query-time pre-retrieval eligibility wrapper)
+  ranking/                   Neural ranker over VectorIndex candidates (features, model, train, evaluation, serialization)
+  reranking/                 Duplicate removal + category/brand diversity re-ranking
+  evaluation/                Offline metrics + latency measurement + temporal future-purchase protocol + persisted offline-report (de)serialization/provenance
+  serving/                   Cold-start tiering, fallback candidates, two-stage eligibility (hard pre-retrieval gate + final lightweight validation), startup artifact validation, the full pipeline orchestrator
+  api/                       FastAPI app (v1) - app / routes / schemas (wire contract) / errors, plus service.py (RecommendationService - loads artifacts once, injected per request); a thin wrapper over serving.pipeline
+  ui/                        Streamlit dashboard (dashboard.py rendering-only, api_client.py typed HTTP client) - a pure HTTP client of the FastAPI service, never loads a model artifact or RecommendationService itself
 scripts/                     One entrypoint per workflow step - see Training/Inference workflows below
 tests/                       pytest suite (see Testing below)
 Dockerfile                   Multi-stage: base / test / api / dashboard
 docker-compose.yml           train (profile-gated) / api / dashboard orchestration
 ```
+
+### Where things live
+
+| Looking for… | It's here |
+|---|---|
+| Backend API calls (HTTP, retries, TLS, pagination) | `backend/client.py` |
+| Service-auth token exchange | `backend/auth.py` |
+| Backend wire DTOs | `backend/dtos.py` |
+| Canonical internal schemas | `schemas/` (`product.py`, `user.py`, `engagement.py`, `events.py`, `category.py`) |
+| Feature construction | `features/` (`user_features.py`, `product_features.py`, `price.py`, `recency.py`, `pipeline.py`) |
+| Two-Tower model | `retrieval/two_tower/model.py` |
+| ANN retrieval | `retrieval/index/` (`faiss_index.py`, `scann_index.py`, `factory.py`) |
+| Neural ranker (29-feature contract) | `ranking/features.py` + `ranking/model.py` |
+| Diversity re-ranking | `reranking/diversity.py` |
+| `RecommendationService` (loads artifacts, orchestrates a request) | `api/service.py` |
+| Request-time pipeline (cold-start, eligibility, fallback, Top-N) | `serving/` (`pipeline.py`, `cold_start.py`, `eligibility.py`, `fallback.py`) |
+| FastAPI app / routes / wire contract | `api/app.py`, `api/routes.py`, `api/schemas.py` |
+| Offline evaluation | `evaluation/` |
+| Config + env overrides | `config.py` |
+| Training scripts | `scripts/train_two_tower.py`, `scripts/train_ranker.py`, `scripts/train_sqlite_pipeline.py` |
+| Model artifacts | `models/` (gitignored; `models/sqlite_baseline/` = current serving artifacts) |
 
 ## Setup (native Windows dev)
 
@@ -433,7 +457,7 @@ All tunables (paths, hyperparameters, candidate-pool sizing, cold-start
 thresholds and blend weights, model version, random seeds) live in
 `configs/base.yaml` (Windows/FAISS) or `configs/docker.yaml`
 (Docker/ScaNN - a full standalone copy, not a partial override), loaded
-and validated by `src/recommendation/utils/config.py`.
+and validated by `src/recommendation/config.py`.
 
 - Which file loads: `RECS_CONFIG_PATH` env var (defaults to `configs/base.yaml`).
 - A small, explicit set of individual settings can be overridden on top
@@ -461,7 +485,7 @@ and validated by `src/recommendation/utils/config.py`.
 
 No secrets are hardcoded anywhere. The only secrets the project consumes
 are the two backend service credentials above, and they are read straight
-from the environment by `data.backend.auth` - deliberately **not** fields
+from the environment by `backend.auth` - deliberately **not** fields
 on `BackendApiConfig`, since config is loaded from committed YAML and
 dumped in diagnostics. They are exchanged at
 `POST /api/auth/service/token` for a ~15-minute Bearer token that is
@@ -634,7 +658,7 @@ interface (`src/recommendation/data/adapters/base.py`) - eight ABCs
 them from in-memory synthetic data. Pointing the system at the real
 backend is: implement one `build_backend_adapters(...)` factory
 returning the same `AdapterBundle` from real SQL/API calls, then swap
-the one call site (`scripts/*.py`, `api.dependencies
+the one call site (`scripts/*.py`, `api.service
 .build_recommendation_service`) - no change to features, models,
 ranking, re-ranking, eligibility, the API, or the dashboard.
 
@@ -651,7 +675,7 @@ real backend factory would follow the exact same shape.
 And now there is a **third** working factory:
 `data.adapters.backend_factory.build_backend_api_adapters`
 (`paths.data_source: "backend_api"`) reads the **real backend over its
-HTTP REST API** - there is no direct DB access. `data.backend.*` is the
+HTTP REST API** - there is no direct DB access. `backend.*` is the
 only code that knows HTTP / the backend's JSON wire shapes / its
 slug + GUID identifiers; a persistent `ExternalIdentityResolver` maps
 those to the stable internal `int` ids the canonical schemas and the

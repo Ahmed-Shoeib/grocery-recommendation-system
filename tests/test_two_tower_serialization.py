@@ -4,7 +4,7 @@ import pytest
 from recommendation.retrieval.two_tower.feature_encoding import TwoTowerFeatureEncoder
 from recommendation.retrieval.two_tower.model import build_item_tower, build_user_tower
 from recommendation.retrieval.two_tower.serialization import load_two_tower_artifacts, save_two_tower_artifacts
-from recommendation.utils.config import TwoTowerConfig
+from recommendation.config import TwoTowerConfig
 
 
 @pytest.fixture

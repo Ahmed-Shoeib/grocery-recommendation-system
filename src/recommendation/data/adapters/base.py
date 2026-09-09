@@ -2,7 +2,7 @@
 
 Every concrete adapter (synthetic in-memory today, a real SQL/API-backed
 implementation later) implements one of these and returns the canonical
-schemas from `recommendation.data.schemas`. Feature engineering and models
+schemas from `recommendation.schemas`. Feature engineering and models
 depend only on these interfaces, never on a concrete implementation, so a
 real-backend swap is a constructor change, not a model change.
 """
@@ -12,7 +12,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
-from recommendation.data.schemas.engagement import (
+from recommendation.schemas.engagement import (
     CartAffinityRecord,
     ChatbotContextRecord,
     ClickRecord,
@@ -20,8 +20,8 @@ from recommendation.data.schemas.engagement import (
     ReviewRecord,
     SearchRecord,
 )
-from recommendation.data.schemas.product import Product
-from recommendation.data.schemas.user import UserProfile
+from recommendation.schemas.product import Product
+from recommendation.schemas.user import UserProfile
 
 
 class ProductCatalogAdapter(ABC):

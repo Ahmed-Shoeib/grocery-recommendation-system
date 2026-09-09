@@ -12,8 +12,8 @@ from datetime import datetime, timedelta
 
 import pytest
 
-from recommendation.data.schemas.engagement import PurchaseRecord
-from recommendation.data.schemas.product import Product
+from recommendation.schemas.engagement import PurchaseRecord
+from recommendation.schemas.product import Product
 from recommendation.features.price import (
     PriceCatalogContext,
     assign_price_tier,
@@ -25,7 +25,7 @@ from recommendation.features.price import (
     is_discounted,
     price_relative_distance,
 )
-from recommendation.utils.config import RecencyConfig
+from recommendation.config import RecencyConfig
 
 T0 = datetime(2026, 6, 1)
 

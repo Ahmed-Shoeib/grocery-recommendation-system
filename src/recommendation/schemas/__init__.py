@@ -3,8 +3,8 @@ layer, independent of whether the data came from the synthetic generators
 or a real backend.
 """
 
-from recommendation.data.schemas.category import Category
-from recommendation.data.schemas.engagement import (
+from recommendation.schemas.category import Category
+from recommendation.schemas.engagement import (
     CartAffinityRecord,
     ChatbotContextRecord,
     ClickRecord,
@@ -13,9 +13,9 @@ from recommendation.data.schemas.engagement import (
     ReviewRecord,
     SearchRecord,
 )
-from recommendation.data.schemas.events import ActionType, UserInteraction
-from recommendation.data.schemas.product import Product
-from recommendation.data.schemas.user import UserProfile
+from recommendation.schemas.events import ActionType, UserInteraction
+from recommendation.schemas.product import Product
+from recommendation.schemas.user import UserProfile
 
 __all__ = [
     "Category",

@@ -1,6 +1,6 @@
 from recommendation.data.synthetic.dataset import generate_synthetic_dataset
 from recommendation.data.synthetic.validation import validate_dataset
-from recommendation.utils.config import load_config
+from recommendation.config import load_config
 
 
 def _small_config(**overrides):

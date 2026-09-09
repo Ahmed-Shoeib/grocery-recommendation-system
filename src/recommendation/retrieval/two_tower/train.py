@@ -19,7 +19,7 @@ import numpy as np
 import tensorflow as tf
 
 from recommendation.data.adapters.base import AdapterBundle
-from recommendation.data.schemas.engagement import EngagementProfile
+from recommendation.schemas.engagement import EngagementProfile
 from recommendation.embeddings.encoder import SentenceTransformerEncoder
 from recommendation.features.pipeline import FeaturePipelineResult
 from recommendation.features.price import build_price_catalog_context
@@ -30,8 +30,8 @@ from recommendation.retrieval.two_tower.examples import TrainingExample, build_e
 from recommendation.retrieval.two_tower.feature_encoding import TwoTowerFeatureEncoder
 from recommendation.retrieval.two_tower.model import TwoTowerModel, build_item_tower, build_user_tower
 from recommendation.retrieval.two_tower.splitting import UserSplit, build_user_splits
-from recommendation.utils.config import AppConfig
-from recommendation.utils.logging import get_logger
+from recommendation.config import AppConfig
+from recommendation.logging import get_logger
 
 logger = get_logger(__name__)
 

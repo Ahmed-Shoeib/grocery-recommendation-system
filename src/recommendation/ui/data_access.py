@@ -27,10 +27,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from recommendation.api.dependencies import RecommendationService
+from recommendation.api.service import RecommendationService
 from recommendation.data.adapters.engagement import build_engagement_profile
-from recommendation.data.schemas.engagement import EngagementProfile
-from recommendation.data.schemas.product import Product
+from recommendation.schemas.engagement import EngagementProfile
+from recommendation.schemas.product import Product
 from recommendation.features.user_features import UserFeatures, build_user_features
 from recommendation.serving.cold_start import HistoryTier, determine_history_tier
 from recommendation.serving.pipeline import RecommendationResult

@@ -5,8 +5,8 @@ retries, TLS flag - all against a fake session (never the live backend).
 import pytest
 import requests
 
-from recommendation.data.backend.client import BackendApiClient
-from recommendation.data.backend.errors import (
+from recommendation.backend.client import BackendApiClient
+from recommendation.backend.errors import (
     BackendAuthError,
     BackendContractError,
     BackendCredentialsError,
@@ -14,7 +14,7 @@ from recommendation.data.backend.errors import (
     BackendResponseError,
     BackendUnavailableError,
 )
-from recommendation.utils.config import BackendApiConfig
+from recommendation.config import BackendApiConfig
 
 
 class FakeResponse:
@@ -114,7 +114,7 @@ def test_connection_error_becomes_backend_unavailable():
 
 
 def test_retryable_status_is_retried_then_succeeds(monkeypatch):
-    monkeypatch.setattr("recommendation.data.backend.client.time.sleep", lambda *_: None)
+    monkeypatch.setattr("recommendation.backend.client.time.sleep", lambda *_: None)
     client, session = _client([
         FakeResponse(status_code=503, text="try later"),
         FakeResponse(json_body=_envelope([])),

@@ -1,7 +1,7 @@
 """Backend actionType -> canonical ActionType mapping policy."""
 
-from recommendation.data.backend.mapping import is_known, map_action_type
-from recommendation.data.schemas.events import ActionType
+from recommendation.backend.mapping import is_known, map_action_type
+from recommendation.schemas.events import ActionType
 
 
 def test_positive_signals_map_to_canonical_types():

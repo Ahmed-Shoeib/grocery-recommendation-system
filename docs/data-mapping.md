@@ -46,7 +46,7 @@ Treatment in this codebase:
 
 - Present in synthetic V1 data for every user.
 - Modeled as `Optional[str]` on the canonical `UserProfile`
-  (`src/recommendation/data/schemas/user.py`) so any code path that
+  (`src/recommendation/schemas/user.py`) so any code path that
   consumes them degrades gracefully (falls back to popularity-based
   signals) for users created before the backend migration lands, rather
   than assuming they are always populated.
@@ -108,7 +108,7 @@ tier user (`serving.cold_start`) is a real, known user (a `UserProfile`
 exists) who simply has zero engagement signals - a normal `200` response
 using the fallback chain above. An **unknown user** (no `UserProfile` at
 all - `api.errors.UnknownUserError`, checked in
-`api.dependencies.RecommendationService.recommend` before the pipeline
+`api.service.RecommendationService.recommend` before the pipeline
 ever runs) is a different failure mode entirely and returns `404` with a
 structured error body. Conflating the two would hide a real "this user
 doesn't exist" condition (e.g. a stale/mistyped id) behind what looks
@@ -161,14 +161,14 @@ etc.) are needed on `User_events` itself.
 
 ### Canonical representation and the adapter boundary
 
-`data.schemas.events.UserInteraction` (`user_id`, `product_id`,
+`schemas.events.UserInteraction` (`user_id`, `product_id`,
 `action_type`, `action_time`) is the canonical, source-agnostic shape of
 one `User_events` row. `data.adapters.user_events_adapter
 .UserEventsAdapter` is the seam that will translate real `User_events`
 rows into `UserInteraction`s and, from there, into the SAME per-signal
 canonical records (`ClickRecord`, `PurchaseRecord`, `CartAffinityRecord`,
 `SearchRecord`, `ChatbotContextRecord`) that `EngagementProfile`
-(`data.schemas.engagement`) already uses today - by implementing the
+(`schemas.engagement`) already uses today - by implementing the
 existing `ClickAdapter`/`PurchaseAdapter`/`CartAdapter`/`SearchAdapter`/
 `ChatbotContextAdapter` interfaces from that one unified event list
 (action-type fan-out), instead of five separate ERD-backed adapters. Feature
@@ -207,7 +207,7 @@ free text. `PurchaseRecord.order_id`/`unit_price`/`order_status` and
 `CartAffinityRecord`/`PurchaseRecord.quantity` are therefore optional on
 the canonical schemas (default `None`/`1`) specifically so
 `UserEventsAdapter` can construct them with only what `User_events`
-actually provides - see `data.schemas.engagement` for the full field-by-
+actually provides - see `schemas.engagement` for the full field-by-
 field rationale. `ChatbotContextRecord` stays a single aggregated record
 per user (one entry in `mentioned_product_ids` per resolved CHATBOT row);
 see that class's docstring for the known V1 simplification this implies
@@ -228,7 +228,7 @@ the same way SEARCH/CHATBOT are sourced: `ClickAdapter` (interface) /
 start tiering, §3), exactly like the other signals.
 
 `click_weight` is a small, deliberately unbenchmarked placeholder (see
-`FeatureConfig` docstring, `src/recommendation/utils/config.py`) - CLICK
+`FeatureConfig` docstring, `src/recommendation/config.py`) - CLICK
 has no real usage data to calibrate against yet. It does NOT add a new
 numeric input slot to the Two-Tower or ranker feature vectors (those
 dimensions are baked into already-trained model artifacts); it only flows
@@ -302,7 +302,7 @@ falls back to this when no explicit path is passed, following the
 existing `paths.*` config pattern rather than introducing a new
 "data source" abstraction. This is an integration/experimentation path
 only in this phase - the live API/dashboard service
-(`api.dependencies.build_recommendation_service`) still uses the
+(`api.service.build_recommendation_service`) still uses the
 synthetic path exclusively; nothing about which source serves live
 requests changed here.
 
@@ -379,7 +379,7 @@ caller. Concretely:
   In a real backend deployment, this is exactly the kind of per-request
   (or short-TTL-cached) catalog read a serving layer already needs to do
   for other reasons; V1's synthetic service builds it once at process
-  startup (see `api.dependencies.build_recommendation_service`), a known
+  startup (see `api.service.build_recommendation_service`), a known
   V1 characteristic of the synthetic demo, not a Phase 11 limitation.
 - Retrieval/ranking/re-ranking still keep operating on a `pool_size`
   candidate pool derived from `retrieval.candidate_pool_size` -
@@ -599,7 +599,7 @@ unmodified `UserEventsAdapter` + `adapters.engagement.build_engagement_profile`
 - not by truncating an already-built `EngagementProfile`. This is what
 makes CHATBOT truncation correct despite `ChatbotContextRecord` having no
 per-mention timestamp (a documented aggregate-record simplification, see
-`data.schemas.engagement.ChatbotContextRecord`'s docstring): the aggregate
+`schemas.engagement.ChatbotContextRecord`'s docstring): the aggregate
 is built fresh from only the pre-cutoff CHATBOT events, so it never needs
 a per-mention timestamp to be truncated correctly. No product-id-based
 exclusion (`exclude_product_ids`) is used for this protocol at all - time-
@@ -696,11 +696,11 @@ unused event infrastructure now" below.
 **Phase 9, current implementation (see §18)**: the internal Streamlit
 dashboard (`recommendation.ui`) was originally a second, in-process
 consumer of the same pipeline - `ui.service_loader.load_service` reused
-`api.dependencies.RecommendationService`/`build_recommendation_service`
+`api.service.RecommendationService`/`build_recommendation_service`
 directly, with no HTTP hop and no API server required to start first.
 That original design is no longer current: the dashboard is now a pure
 `ui.api_client.RecommendationApiClient` HTTP client of the Phase 8 API
-and no longer imports `api.dependencies`, `serving.*`, or any
+and no longer imports `api.service`, `serving.*`, or any
 model-loading code - see §18 for the full rewiring and why two
 independent `RecommendationService` construction sites was itself a
 defect, not just a preference for fewer processes.
@@ -908,7 +908,7 @@ implementation of Phase N," not as an independent stage after Phase 11.
 | §15 Price-aware derived features (`features.price`, `price_tier_id`/`PriceCatalogContext`/`UserPriceProfile`) | Phase 3 (features) / Phase 4 (Two-Tower encoder dims) / Phase 6 (ranker features) (historically tracked as STEP 6) |
 | §16 From-scratch SQLite training + temporal evaluation (`evaluation.temporal_training`, `models/sqlite_baseline/`, Docker/ScaNN verification) | Phase 2 (data source) / Phase 4 (retrained Two-Tower) / Phase 6 (retrained ranker) / Phase 7 (temporal training reuses the full pipeline) (historically tracked as STEP 7) |
 | §17 Controlled two-way ablation - BASE vs. RECENCY+PRICE (`include_price_features`; `scripts/run_ablation.py`/`models/ablation/base/` since removed - repository cleanup, results retained) | Not a phase - a controlled experiment validating the Phase 3/4/6 improvements above (historically tracked as STEP 8) |
-| §18 One serving path: Streamlit as a pure FastAPI HTTP client (`api.dependencies.build_recommendation_service` SQLite wiring fix, `ui.api_client.RecommendationApiClient`, `paths.data_source`/`dashboard.api_base_url` config) | Phase 9 (dashboard becomes a pure HTTP client) / Phase 8 (API-side wiring fix) (historically tracked as STEP 9) |
+| §18 One serving path: Streamlit as a pure FastAPI HTTP client (`api.service.build_recommendation_service` SQLite wiring fix, `ui.api_client.RecommendationApiClient`, `paths.data_source`/`dashboard.api_base_url` config) | Phase 9 (dashboard becomes a pure HTTP client) / Phase 8 (API-side wiring fix) (historically tracked as STEP 9) |
 | §18.1 Persisted offline-report architecture (`evaluation.offline_report`, `scripts/generate_offline_report.py`, provenance validation, `GET /v1/metrics/offline`) | Phase 8 (historically tracked as a STEP 9 follow-up fix) |
 
 ## 14. Recency weighting — Phase 3 (Feature Engineering), current implementation
@@ -1496,7 +1496,7 @@ re-running the same procedure if ever needed again.
 now part of Phase 9's and Phase 8's current implementation, not a
 separate stage - see §13.)*
 
-**Problem this closes**: through STEP 8, FastAPI (`api.dependencies
+**Problem this closes**: through STEP 8, FastAPI (`api.service
 .build_recommendation_service`) and Streamlit (`ui.service_loader
 .load_service`) each independently constructed their own
 `RecommendationService` in-process. Inspecting the actual code (not just
@@ -1515,7 +1515,7 @@ processes.
 Streamlit ──(in-process)──> RecommendationService ──> Pipeline
 FastAPI   ──(in-process)──> RecommendationService ──> Pipeline
              (two SEPARATE instances, and - until this phase's
-              api.dependencies fix below - two DIFFERENT artifact/
+              api.service fix below - two DIFFERENT artifact/
               dataset configurations)
 ```
 
@@ -1530,10 +1530,10 @@ FastAPI is now the only process that ever constructs a
 VectorIndex, or touches an adapter/SQLite connection. Streamlit owns UI
 state and one `ui.api_client.RecommendationApiClient` instance; it has no
 model-loading, ranking, feature-engineering, or eligibility logic of any
-kind, and imports none of `api.dependencies`, `serving.*`,
+kind, and imports none of `api.service`, `serving.*`,
 `retrieval.*`, or `ranking.*`.
 
-**`api.dependencies.build_recommendation_service` fix** (the actual
+**`api.service.build_recommendation_service` fix** (the actual
 correctness bug, not new functionality): now branches on the new
 `config.paths.data_source: Literal["synthetic", "sqlite"]` setting
 (default `"sqlite"` - `configs/base.yaml`/`configs/docker.yaml`, override
@@ -1644,7 +1644,7 @@ default 10.0s). Contains no recommendation/ranking/feature-engineering/
 eligibility/model-loading logic - verified by
 `tests/test_ui_api_client.py::test_api_client_module_does_not_import_recommendation_service_or_model_code`
 (runs a fresh subprocess that imports only `ui.api_client` and asserts
-`api.dependencies`/`serving.pipeline`/TensorFlow never entered
+`api.service`/`serving.pipeline`/TensorFlow never entered
 `sys.modules`).
 
 **A real bug this uncovered, and its fix** (small, necessary wiring,
@@ -1654,7 +1654,7 @@ documented per the "stop and report" rule rather than silently patched):
 convenience. Because Python always executes a package's `__init__.py`
 before any of its submodules, this meant importing `recommendation.api
 .schemas` alone - all `ui.api_client` needs - transitively imported
-`api.app` -> `api.dependencies` -> TensorFlow and the entire Two-Tower/
+`api.app` -> `api.service` -> TensorFlow and the entire Two-Tower/
 ranker/adapter stack into the Streamlit process, silently defeating the
 "Streamlit owns none of that" goal of this phase. Fixed by removing the
 re-export (grepped first: zero call sites used
@@ -1768,7 +1768,7 @@ existing blanket `models/*` gitignore rule (`!models/.gitkeep` excepted)
 artifact.
 
 **Config surface**: none new. `resolve_models_root(config)`
-(`api.dependencies`) - the same `data_source`-driven directory
+(`api.service`) - the same `data_source`-driven directory
 resolution `build_recommendation_service` already uses - is reused so
 the report reader and the live service can never resolve a different
 directory for the same config.
@@ -1838,7 +1838,7 @@ two code paths - reviews are a *separate* signal
 
 ### 19.3 DTO → canonical mapping and the field-availability gap
 
-`data.backend.dtos` (external wire models) → `data.backend.loader` →
+`backend.dtos` (external wire models) → `backend.loader` →
 the **same** `Raw*` / `UserInteraction` models the synthetic and SQLite
 loaders produce → the existing `InMemory*Adapter` / `UserEventsAdapter`
 classes, unchanged. No backend field name, casing, slug, GUID, HTTP
@@ -1869,7 +1869,7 @@ embedding behaviour, the 29-feature ranker contract, ANN behaviour,
 eligibility ordering, diversity, cold-start, and offline evaluation are
 all untouched.
 
-**Activity → engagement mapping** (`data.backend.mapping`, an explicit
+**Activity → engagement mapping** (`backend.mapping`, an explicit
 table - an unrecognised or intentionally-dropped backend action can
 never silently become a wrong signal):
 
@@ -1950,7 +1950,7 @@ data}` envelope, as elsewhere):
 | `createdAt` | datetime | not modeled (no canonical use) |
 | `ageGroup` | **absent** | confirmed **not part of the schema at all** (`UserResponse` has no such property, and it's absent from every live sample) - not merely "not yet returned"; the field stays modeled defensively (`extra="ignore"` tolerates a future addition) but is unconditionally `None` under the current contract |
 
-**Correction applied**: `data.backend.dtos.ApiUser` was fixed to match -
+**Correction applied**: `backend.dtos.ApiUser` was fixed to match -
 `id`/`user_id` (never present on the wire) replaced with `guid`;
 `preferred_category`/`preferred_category_slug` (singular, wrong shape)
 replaced with `preferred_categories: list[ApiFavoriteCategory]` plus
@@ -1971,7 +1971,7 @@ The backend exposes products/categories by **slug** and users by
 **GUID**, and no numeric ids anywhere (an int leaks inside opaque
 pagination cursors but is not a usable contract). The recommender core
 and every trained artifact operate on integer ids.
-`data.backend.identity.ExternalIdentityResolver` is the single boundary
+`backend.identity.ExternalIdentityResolver` is the single boundary
 that bridges the two - **nothing downstream of the adapter layer ever
 sees a slug or a GUID.** This is CASE B (see this task's brief): the API
 truly exposes only slugs/GUIDs, so a proper identity-resolution boundary
@@ -2014,7 +2014,7 @@ design was already ready):** `resolve_product`/`peek_product` take an
 opaque string key - the resolver has no idea whether it's a slug or a
 UUID, so it needs no change at all when the backend adds an immutable
 product id. The only lines that would change, confined entirely to
-`data.backend.loader` (never `identity.py`, never anything downstream of
+`backend.loader` (never `identity.py`, never anything downstream of
 the adapter layer), are the ~4 call sites that currently pass `p.slug` /
 `row.slug` - they'd instead pass `p.product_id or p.slug` /
 `row.product_id or row.slug` once `ApiProduct`/`ApiActivity` gain that
@@ -2139,7 +2139,7 @@ already exercises that path with the map populated.
 
 `POST /api/auth/service/token` with `{clientId, clientSecret}` returns
 `{accessToken, expiresAtUtc}` (a JWT, ~15 minute lifetime). Implemented in
-`data.backend.auth.ServiceTokenProvider`; it is the only component that
+`backend.auth.ServiceTokenProvider`; it is the only component that
 performs the exchange or holds a token.
 
 **Verified live 2026-09-09** with the recommender's own service client:
@@ -2208,7 +2208,7 @@ preferred over a file). Disabling it logs one WARNING at client
 construction. A real deployment must use a proper hostname + CA-signed
 certificate and leave verification on.
 
-**Errors** (`data.backend.errors`, a typed hierarchy so a log reader can
+**Errors** (`backend.errors`, a typed hierarchy so a log reader can
 tell *where* it broke - the client never catches `Exception` broadly and
 serves partial data): `BackendUnavailableError` (DNS/refused/TLS/timeout
 after retries), `BackendResponseError` / `BackendAuthError` (non-2xx,
@@ -2261,7 +2261,7 @@ i.e. keep `/api/users/{userId}` Bearer-gated and have the recommender hold
 its own service credentials (env-injected, never committed, token cached
 in memory only and refreshed before `expiresAtUtc`) - rather than removing
 auth from the endpoint. **Implemented as of 2026-09-09** in
-`data.backend.auth.ServiceTokenProvider` - see 19.11 for the full
+`backend.auth.ServiceTokenProvider` - see 19.11 for the full
 behaviour. `GET /api/users/{guid}` remains best-effort enrichment either
 way: a 401, or absent credentials, still degrades to a bare profile and
 never blocks the data load.
@@ -2324,7 +2324,7 @@ auth) and the published OpenAPI spec's `actionType` typing:
 
 `actionType` is typed as a bare nullable `string` in the OpenAPI spec (no
 enum), so there is no scaffolding hinting at planned SEARCH/CHATBOT values
-either. `data.backend.mapping._ACTION_TYPE_MAP` correctly reflects exactly
+either. `backend.mapping._ACTION_TYPE_MAP` correctly reflects exactly
 this: it maps only the six backend values that exist
 (`ViewProduct`/`AddToCart`/`PlaceOrder`/`AddedToFavorites`/
 `RemoveFromCart`/`RemovedFromFavorites`), never invents a SEARCH or
@@ -2332,7 +2332,7 @@ CHATBOT mapping, does not fold favorites into CLICK/ADD_TO_CART, and
 treats both removal actions as ignored (no retraction semantics) - this
 was reviewed and left unchanged, it already matches every stated
 requirement. Per the canonical `User_events` contract (section 4,
-`data.schemas.events`), SEARCH/CHATBOT rows are expected to arrive through
+`schemas.events`), SEARCH/CHATBOT rows are expected to arrive through
 this **same** endpoint as new `actionType` values (only once a search/
 chatbot turn has been resolved to a specific product) - not a separate
 endpoint - so supporting them later is a single-line addition to

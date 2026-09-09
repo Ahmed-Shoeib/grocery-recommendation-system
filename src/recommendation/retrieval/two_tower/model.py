@@ -24,7 +24,7 @@ from __future__ import annotations
 import tensorflow as tf
 
 from recommendation.retrieval.two_tower.feature_encoding import TwoTowerFeatureEncoder
-from recommendation.utils.config import TwoTowerConfig
+from recommendation.config import TwoTowerConfig
 
 
 @tf.keras.utils.register_keras_serializable(package="recommendation")

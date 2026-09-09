@@ -27,13 +27,13 @@ from __future__ import annotations
 
 from collections import Counter
 
-from recommendation.data.backend.auth import ENV_CLIENT_ID, ENV_CLIENT_SECRET
-from recommendation.data.backend.client import BackendApiClient
-from recommendation.data.backend.dtos import ApiActivity, ApiReview
-from recommendation.data.backend.errors import BackendAuthError, BackendCredentialsError
-from recommendation.data.backend.identity import ExternalIdentityResolver
-from recommendation.data.backend.mapping import is_known, map_action_type
-from recommendation.data.schemas.events import UserInteraction
+from recommendation.backend.auth import ENV_CLIENT_ID, ENV_CLIENT_SECRET
+from recommendation.backend.client import BackendApiClient
+from recommendation.backend.dtos import ApiActivity, ApiReview
+from recommendation.backend.errors import BackendAuthError, BackendCredentialsError
+from recommendation.backend.identity import ExternalIdentityResolver
+from recommendation.backend.mapping import is_known, map_action_type
+from recommendation.schemas.events import UserInteraction
 from recommendation.data.synthetic.raw_schemas import (
     RawCategory,
     RawProduct,
@@ -42,7 +42,7 @@ from recommendation.data.synthetic.raw_schemas import (
     RawTag,
     RawUser,
 )
-from recommendation.utils.logging import get_logger
+from recommendation.logging import get_logger
 
 logger = get_logger(__name__)
 

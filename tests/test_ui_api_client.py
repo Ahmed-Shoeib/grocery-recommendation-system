@@ -232,14 +232,14 @@ def test_api_client_module_does_not_import_recommendation_service_or_model_code(
     (docs/data-mapping.md section 18) - it only imports the pure-Pydantic
     `api.schemas` wire contract. Run in a fresh subprocess: within this
     test session other test modules have already imported
-    `recommendation.api.dependencies` for unrelated reasons, so checking
+    `recommendation.api.service` for unrelated reasons, so checking
     `sys.modules` in-process would give a false positive either way.
     """
     probe = (
         "import sys\n"
         "import recommendation.ui.api_client\n"
         "forbidden = {\n"
-        "    'recommendation.api.dependencies',\n"
+        "    'recommendation.api.service',\n"
         "    'recommendation.serving.pipeline',\n"
         "    'recommendation.retrieval.two_tower.model',\n"
         "    'recommendation.ranking.model',\n"

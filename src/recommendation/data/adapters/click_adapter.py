@@ -13,7 +13,7 @@ from __future__ import annotations
 from collections import defaultdict
 
 from recommendation.data.adapters.base import ClickAdapter
-from recommendation.data.schemas.engagement import ClickRecord
+from recommendation.schemas.engagement import ClickRecord
 
 
 class SyntheticClickAdapter(ClickAdapter):

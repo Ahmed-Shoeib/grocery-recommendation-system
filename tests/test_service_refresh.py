@@ -25,11 +25,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from recommendation.api.dependencies import RecommendationService, _DataSnapshot, _load_data_snapshot
-import recommendation.api.dependencies as dependencies_module
+from recommendation.api.service import RecommendationService, _DataSnapshot, _load_data_snapshot
+import recommendation.api.service as dependencies_module
 from recommendation.api.errors import UnknownUserError
 from recommendation.features.price import PriceCatalogContext
-from recommendation.utils.config import AppConfig, PathsConfig, RefreshConfig, get_config, resolve_path
+from recommendation.config import AppConfig, PathsConfig, RefreshConfig, get_config, resolve_path
 
 DB_PATH = resolve_path(get_config().paths.data_sqlite)
 pytestmark = pytest.mark.skipif(not DB_PATH.exists(), reason="backend_shaped_synthetic.db not present")

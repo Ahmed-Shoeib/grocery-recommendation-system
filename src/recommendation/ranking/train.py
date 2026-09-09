@@ -31,8 +31,8 @@ from recommendation.ranking.model import build_ranker_model
 from recommendation.retrieval.index.factory import build_vector_index, candidate_pool_size
 from recommendation.retrieval.two_tower.serialization import TwoTowerArtifacts
 from recommendation.retrieval.two_tower.splitting import build_user_splits
-from recommendation.utils.config import AppConfig
-from recommendation.utils.logging import get_logger
+from recommendation.config import AppConfig
+from recommendation.logging import get_logger
 
 logger = get_logger(__name__)
 

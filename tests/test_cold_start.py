@@ -1,5 +1,5 @@
 from recommendation.serving.cold_start import HistoryTier, determine_history_tier
-from recommendation.utils.config import ColdStartConfig
+from recommendation.config import ColdStartConfig
 
 
 def _config() -> ColdStartConfig:

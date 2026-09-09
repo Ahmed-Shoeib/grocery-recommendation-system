@@ -68,7 +68,7 @@ from recommendation.evaluation.temporal_future_purchase import (
 from recommendation.features.product_features import build_product_features
 from recommendation.features.user_features import build_user_features
 from recommendation.serving.eligibility import apply_eligibility, build_eligibility_rules
-from recommendation.utils.config import RecencyConfig, get_config, resolve_path
+from recommendation.config import RecencyConfig, get_config, resolve_path
 
 K_VALUES = [5, 10, 20]
 TOP_N = 20

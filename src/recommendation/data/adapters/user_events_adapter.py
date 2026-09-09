@@ -4,7 +4,7 @@ This is the seam the whole architecture change exists to prepare. Once
 the backend team's `User_events` table (id, user_id, product_id,
 action_time, action_type) is real and queryable, whatever loads rows from
 it maps each row into a `UserInteraction`
-(`recommendation.data.schemas.events`) - the only thing this module needs
+(`recommendation.schemas.events`) - the only thing this module needs
 to be handed. `UserEventsAdapter` then does the `action_type` fan-out and
 implements FIVE existing adapter interfaces (`ClickAdapter`,
 `PurchaseAdapter`, `CartAdapter`, `SearchAdapter`, `ChatbotContextAdapter`)
@@ -28,7 +28,7 @@ keywords) - only `user_id`, `product_id`, `action_time`, `action_type`.
 `PurchaseRecord`/`CartAffinityRecord`/`SearchRecord` already model those
 extra ERD-specific fields as optional precisely so this adapter can
 construct them with only what `User_events` actually provides (see
-`data.schemas.engagement` module docstring). `ChatbotContextRecord`
+`schemas.engagement` module docstring). `ChatbotContextRecord`
 aggregates every resolved CHATBOT row for a user into one record's
 `mentioned_product_ids` list - see that class's docstring for why this
 stays a single aggregate record rather than one row per mention.
@@ -48,14 +48,14 @@ from recommendation.data.adapters.base import (
     UserAdapter,
 )
 from recommendation.data.adapters.base import AdapterBundle, ProductCatalogAdapter
-from recommendation.data.schemas.engagement import (
+from recommendation.schemas.engagement import (
     CartAffinityRecord,
     ChatbotContextRecord,
     ClickRecord,
     PurchaseRecord,
     SearchRecord,
 )
-from recommendation.data.schemas.events import ActionType, UserInteraction
+from recommendation.schemas.events import ActionType, UserInteraction
 
 _SOURCE = "user_events"
 

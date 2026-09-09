@@ -33,7 +33,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from recommendation.api.dependencies import resolve_models_root
+from recommendation.api.service import resolve_models_root
 from recommendation.data.adapters.sqlite_factory import build_sqlite_adapters
 from recommendation.data.sqlite.connection import open_readonly_connection
 from recommendation.data.sqlite.loader import load_events
@@ -53,8 +53,8 @@ from recommendation.ranking.serialization import load_ranker_artifacts
 from recommendation.retrieval.index.factory import build_vector_index
 from recommendation.retrieval.two_tower.serialization import load_two_tower_artifacts
 from recommendation.serving.eligibility import apply_eligibility, build_eligibility_rules
-from recommendation.utils.config import get_config, resolve_path
-from recommendation.utils.logging import get_logger, setup_logging
+from recommendation.config import get_config, resolve_path
+from recommendation.logging import get_logger, setup_logging
 
 logger = get_logger(__name__)
 

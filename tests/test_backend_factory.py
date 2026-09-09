@@ -8,8 +8,8 @@ import json
 from recommendation.data.adapters.backend_factory import build_backend_api_adapters
 from recommendation.data.adapters.base import AdapterBundle
 from recommendation.data.adapters.engagement import build_engagement_profile
-from recommendation.data.backend.identity import ExternalIdentityResolver
-from recommendation.data.schemas.engagement import EngagementProfile
+from recommendation.backend.identity import ExternalIdentityResolver
+from recommendation.schemas.engagement import EngagementProfile
 from tests._backend_fakes import FakeBackendClient
 
 _CATS = [{"slug": "groceries", "name": "Groceries"}]

@@ -52,10 +52,10 @@ from datetime import datetime
 
 import numpy as np
 
-from recommendation.data.schemas.engagement import PurchaseRecord
-from recommendation.data.schemas.product import Product
+from recommendation.schemas.engagement import PurchaseRecord
+from recommendation.schemas.product import Product
 from recommendation.features.recency import effective_weight
-from recommendation.utils.config import RecencyConfig
+from recommendation.config import RecencyConfig
 
 PRICE_TIERS = ["budget", "mid", "premium"]
 

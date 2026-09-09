@@ -21,7 +21,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 
-from recommendation.api.dependencies import RecommendationService, resolve_models_root
+from recommendation.api.service import RecommendationService, resolve_models_root
 from recommendation.api.errors import UnknownUserError
 from recommendation.api.schemas import (
     HealthResponse,
@@ -52,7 +52,7 @@ from recommendation.ui.data_access import (
     list_users,
     load_user_detail,
 )
-from recommendation.utils.logging import get_logger
+from recommendation.logging import get_logger
 
 logger = get_logger(__name__)
 

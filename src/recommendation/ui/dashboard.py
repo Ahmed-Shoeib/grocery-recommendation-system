@@ -36,7 +36,7 @@ from recommendation.ui.api_client import (
     UnknownUserError,
 )
 from recommendation.ui.service_loader import load_api_client
-from recommendation.utils.logging import get_logger
+from recommendation.logging import get_logger
 
 logger = get_logger(__name__)
 st.set_page_config(page_title="Grocery Recommendation Dashboard", layout="wide")

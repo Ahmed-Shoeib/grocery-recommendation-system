@@ -19,12 +19,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from recommendation.data.schemas.engagement import EngagementProfile
-from recommendation.data.schemas.product import Product
+from recommendation.schemas.engagement import EngagementProfile
+from recommendation.schemas.product import Product
 from recommendation.features.price import PriceCatalogContext
 from recommendation.features.user_features import UserFeatures, build_user_features
 from recommendation.retrieval.two_tower.splitting import UserSplit
-from recommendation.utils.config import FeatureConfig
+from recommendation.config import FeatureConfig
 
 
 @dataclass

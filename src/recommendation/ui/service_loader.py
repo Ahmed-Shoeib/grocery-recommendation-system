@@ -19,7 +19,7 @@ from __future__ import annotations
 import streamlit as st
 
 from recommendation.ui.api_client import RecommendationApiClient
-from recommendation.utils.config import get_config
+from recommendation.config import get_config
 
 
 @st.cache_resource(show_spinner=False)

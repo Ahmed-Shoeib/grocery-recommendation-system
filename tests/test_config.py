@@ -1,4 +1,4 @@
-from recommendation.utils.config import AppConfig, DEFAULT_CONFIG_PATH, load_config
+from recommendation.config import AppConfig, DEFAULT_CONFIG_PATH, load_config
 
 
 def test_default_config_file_exists():
@@ -52,7 +52,7 @@ def test_base_and_docker_configs_define_identical_retrieval_ann_fields():
     tuning fields must be mirrored in both, not just the one loaded by
     default, or the two environments would silently diverge in tuning.
     """
-    from recommendation.utils.config import REPO_ROOT
+    from recommendation.config import REPO_ROOT
 
     base = load_config(REPO_ROOT / "configs" / "base.yaml")
     docker = load_config(REPO_ROOT / "configs" / "docker.yaml")

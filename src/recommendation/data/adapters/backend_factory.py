@@ -7,7 +7,7 @@ Third `AdapterBundle` factory, alongside `adapters.factory
 learn that the data came from an HTTP API. Reuses the existing
 `InMemoryProductCatalogAdapter` / `InMemoryUserAdapter` /
 `InMemoryReviewAdapter` / `UserEventsAdapter` classes unchanged - the only
-new code is `data.backend.*` (HTTP + DTO -> Raw* mapping + identity
+new code is `backend.*` (HTTP + DTO -> Raw* mapping + identity
 resolution).
 
 Load model: fetch the whole catalog + activity stream once, in memory,
@@ -31,16 +31,16 @@ from recommendation.data.adapters.product_adapter import InMemoryProductCatalogA
 from recommendation.data.adapters.review_adapter import InMemoryReviewAdapter
 from recommendation.data.adapters.user_adapter import InMemoryUserAdapter
 from recommendation.data.adapters.user_events_adapter import build_user_events_adapters
-from recommendation.data.backend.client import BackendApiClient
-from recommendation.data.backend.identity import ExternalIdentityResolver
-from recommendation.data.backend.loader import (
+from recommendation.backend.client import BackendApiClient
+from recommendation.backend.identity import ExternalIdentityResolver
+from recommendation.backend.loader import (
     load_backend_catalog,
     load_backend_events,
     load_backend_reviews,
     load_backend_users,
 )
-from recommendation.utils.config import AppConfig, get_config, resolve_path
-from recommendation.utils.logging import get_logger
+from recommendation.config import AppConfig, get_config, resolve_path
+from recommendation.logging import get_logger
 
 logger = get_logger(__name__)
 

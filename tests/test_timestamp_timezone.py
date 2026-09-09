@@ -27,11 +27,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from recommendation.api.dependencies import _load_data_snapshot
+from recommendation.api.service import _load_data_snapshot
 from recommendation.data.sqlite.loader import _parse_timestamp
 from recommendation.features.recency import RecencyLeakageError
 from recommendation.features.user_features import build_user_features
-from recommendation.utils.config import AppConfig, PathsConfig, get_config, resolve_path
+from recommendation.config import AppConfig, PathsConfig, get_config, resolve_path
 
 DB_PATH = resolve_path(get_config().paths.data_sqlite)
 pytestmark = pytest.mark.skipif(not DB_PATH.exists(), reason="backend_shaped_synthetic.db not present")

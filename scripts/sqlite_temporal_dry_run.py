@@ -44,7 +44,7 @@ from recommendation.evaluation.temporal_future_purchase import (
 )
 from recommendation.features.product_features import build_product_features
 from recommendation.serving.eligibility import build_eligibility_rules
-from recommendation.utils.config import get_config
+from recommendation.config import get_config
 
 
 def main() -> None:

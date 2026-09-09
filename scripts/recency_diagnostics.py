@@ -35,7 +35,7 @@ from recommendation.data.sqlite.connection import open_readonly_connection
 from recommendation.data.sqlite.loader import load_events
 from recommendation.features.recency import recency_weight
 from recommendation.features.user_features import build_user_features
-from recommendation.utils.config import RecencyConfig, get_config
+from recommendation.config import RecencyConfig, get_config
 
 AGES_DAYS = [0, 7, 30, 60, 120, 210]
 

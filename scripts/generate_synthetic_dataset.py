@@ -16,8 +16,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from recommendation.data.synthetic.dataset import generate_synthetic_dataset
 from recommendation.data.synthetic.io import save_dataset
 from recommendation.data.synthetic.validation import validate_dataset
-from recommendation.utils.config import get_config
-from recommendation.utils.logging import get_logger, setup_logging
+from recommendation.config import get_config
+from recommendation.logging import get_logger, setup_logging
 
 logger = get_logger(__name__)
 

@@ -10,7 +10,7 @@ from __future__ import annotations
 from collections import defaultdict
 
 from recommendation.data.adapters.base import CartAdapter
-from recommendation.data.schemas.engagement import CartAffinityRecord
+from recommendation.schemas.engagement import CartAffinityRecord
 from recommendation.data.synthetic.raw_schemas import RawCart, RawCartItem
 
 

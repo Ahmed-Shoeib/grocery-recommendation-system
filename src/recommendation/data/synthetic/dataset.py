@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from recommendation.data.schemas.engagement import ChatbotContextRecord, ClickRecord, SearchRecord
+from recommendation.schemas.engagement import ChatbotContextRecord, ClickRecord, SearchRecord
 from recommendation.data.synthetic.catalog import build_catalog, build_categories, build_tags
 from recommendation.data.synthetic.chatbot import generate_chatbot_records
 from recommendation.data.synthetic.clicks import generate_click_records
@@ -38,7 +38,7 @@ from recommendation.data.synthetic.raw_schemas import (
 )
 from recommendation.data.synthetic.search import generate_search_records
 from recommendation.data.synthetic.users import generate_users
-from recommendation.utils.config import AppConfig, SyntheticDataConfig, get_config
+from recommendation.config import AppConfig, SyntheticDataConfig, get_config
 
 
 @dataclass

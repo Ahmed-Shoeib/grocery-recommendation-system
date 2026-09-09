@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from recommendation.features.product_features import ProductFeatures
 from recommendation.reranking.candidates import RankedCandidate
-from recommendation.utils.config import ReRankingConfig
+from recommendation.config import ReRankingConfig
 
 
 def deduplicate(candidates: list[RankedCandidate]) -> list[RankedCandidate]:

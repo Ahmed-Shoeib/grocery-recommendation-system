@@ -37,7 +37,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from recommendation.utils.config import RecencyConfig
+from recommendation.config import RecencyConfig
 
 
 class RecencyLeakageError(ValueError):

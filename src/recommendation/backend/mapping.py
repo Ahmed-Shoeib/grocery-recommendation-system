@@ -29,7 +29,7 @@ canonical signals are simply never produced by this source (exactly as
 
 from __future__ import annotations
 
-from recommendation.data.schemas.events import ActionType
+from recommendation.schemas.events import ActionType
 
 # Sentinel for "recognised backend action, deliberately not a signal".
 IGNORE = "IGNORE"

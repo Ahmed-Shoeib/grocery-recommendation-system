@@ -1,11 +1,11 @@
 import numpy as np
 
-from recommendation.data.schemas.engagement import EngagementProfile, PurchaseRecord
-from recommendation.data.schemas.product import Product
-from recommendation.data.schemas.user import UserProfile
+from recommendation.schemas.engagement import EngagementProfile, PurchaseRecord
+from recommendation.schemas.product import Product
+from recommendation.schemas.user import UserProfile
 from recommendation.retrieval.two_tower.examples import build_eval_cases, build_training_examples
 from recommendation.retrieval.two_tower.splitting import UserSplit
-from recommendation.utils.config import FeatureConfig
+from recommendation.config import FeatureConfig
 
 
 def _product(pid: int, category: str) -> Product:

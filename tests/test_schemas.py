@@ -1,7 +1,7 @@
 import pytest
 from pydantic import ValidationError
 
-from recommendation.data.schemas import (
+from recommendation.schemas import (
     ActionType,
     CartAffinityRecord,
     Category,

@@ -20,7 +20,7 @@ import pytest
 pytest.importorskip("scann")
 
 from recommendation.retrieval.index.scann_index import ScannVectorIndex  # noqa: E402
-from recommendation.utils.config import RetrievalConfig  # noqa: E402
+from recommendation.config import RetrievalConfig  # noqa: E402
 
 
 def _l2_normalize(x: np.ndarray) -> np.ndarray:

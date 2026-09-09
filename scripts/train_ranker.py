@@ -29,8 +29,8 @@ from recommendation.ranking.features import RANKING_FEATURE_NAMES
 from recommendation.ranking.serialization import save_ranker_artifacts
 from recommendation.ranking.train import train_ranker
 from recommendation.retrieval.two_tower.serialization import load_two_tower_artifacts
-from recommendation.utils.config import get_config, resolve_path
-from recommendation.utils.logging import get_logger, setup_logging
+from recommendation.config import get_config, resolve_path
+from recommendation.logging import get_logger, setup_logging
 
 logger = get_logger(__name__)
 

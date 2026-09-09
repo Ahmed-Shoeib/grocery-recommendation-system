@@ -25,7 +25,7 @@ import pytest
 
 pytest.importorskip("scann")
 
-from recommendation.utils.config import get_config, resolve_path  # noqa: E402
+from recommendation.config import get_config, resolve_path  # noqa: E402
 
 ARTIFACT_ROOT = resolve_path(get_config().paths.models_dir) / "sqlite_baseline"
 

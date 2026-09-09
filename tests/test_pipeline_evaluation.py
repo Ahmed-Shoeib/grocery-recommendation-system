@@ -21,7 +21,7 @@ from recommendation.retrieval.two_tower.splitting import build_user_splits
 from recommendation.retrieval.two_tower.train import train_two_tower
 from recommendation.serving.evaluation import evaluate_pipeline
 from recommendation.serving.pipeline import generate_recommendations
-from recommendation.utils.config import get_config
+from recommendation.config import get_config
 
 _FAKE_DIM = 16
 

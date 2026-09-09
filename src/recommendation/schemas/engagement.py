@@ -15,7 +15,7 @@ search generators don't produce real timestamps, so `action_time` is
 `None` on those records and falls back to a neutral (unweighted) recency
 contribution rather than being dropped; a `UserEventsAdapter`-sourced
 record always populates it from `UserInteraction.action_time`
-(`data.schemas.events`).
+(`schemas.events`).
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field
 
-from recommendation.data.schemas.user import UserProfile
+from recommendation.schemas.user import UserProfile
 
 
 class PurchaseRecord(BaseModel):

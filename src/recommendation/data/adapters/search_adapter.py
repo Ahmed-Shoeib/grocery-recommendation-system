@@ -11,7 +11,7 @@ from __future__ import annotations
 from collections import defaultdict
 
 from recommendation.data.adapters.base import SearchAdapter
-from recommendation.data.schemas.engagement import SearchRecord
+from recommendation.schemas.engagement import SearchRecord
 
 
 class SyntheticSearchAdapter(SearchAdapter):

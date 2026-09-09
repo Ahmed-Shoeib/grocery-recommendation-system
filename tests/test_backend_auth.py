@@ -15,15 +15,15 @@ from datetime import datetime, timedelta, timezone
 import pytest
 import requests
 
-from recommendation.data.backend.auth import ENV_CLIENT_ID, ENV_CLIENT_SECRET, ServiceTokenProvider
-from recommendation.data.backend.client import BackendApiClient
-from recommendation.data.backend.errors import (
+from recommendation.backend.auth import ENV_CLIENT_ID, ENV_CLIENT_SECRET, ServiceTokenProvider
+from recommendation.backend.client import BackendApiClient
+from recommendation.backend.errors import (
     BackendAuthError,
     BackendContractError,
     BackendCredentialsError,
     BackendUnavailableError,
 )
-from recommendation.utils.config import BackendApiConfig
+from recommendation.config import BackendApiConfig
 
 CLIENT_ID = "recs-service"
 CLIENT_SECRET = "s3cr3t-not-a-real-credential"

@@ -17,7 +17,7 @@ from recommendation.data.synthetic.dataset import generate_synthetic_dataset
 from recommendation.features.pipeline import run_feature_pipeline
 from recommendation.retrieval.two_tower.serialization import load_two_tower_artifacts, save_two_tower_artifacts
 from recommendation.retrieval.two_tower.train import train_two_tower
-from recommendation.utils.config import get_config
+from recommendation.config import get_config
 
 _FAKE_DIM = 16
 

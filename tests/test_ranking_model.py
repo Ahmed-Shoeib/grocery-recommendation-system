@@ -1,7 +1,7 @@
 import numpy as np
 
 from recommendation.ranking.model import build_ranker_model
-from recommendation.utils.config import RankingConfig
+from recommendation.config import RankingConfig
 
 
 def test_ranker_output_shape_and_range():

@@ -13,9 +13,9 @@ import pytest
 
 from recommendation.data.adapters.base import UserAdapter
 from recommendation.data.adapters.review_adapter import InMemoryReviewAdapter
-from recommendation.data.schemas.events import ActionType, UserInteraction
-from recommendation.data.schemas.product import Product
-from recommendation.data.schemas.user import UserProfile
+from recommendation.schemas.events import ActionType, UserInteraction
+from recommendation.schemas.product import Product
+from recommendation.schemas.user import UserProfile
 from recommendation.evaluation.temporal_future_purchase import (
     DEFAULT_MIN_PURCHASE_EVENTS_FOR_FULL_SPLIT,
     build_temporal_splits,
@@ -27,7 +27,7 @@ from recommendation.evaluation.temporal_training import (
     build_temporal_two_tower_examples,
     evaluate_temporal_retrieval,
 )
-from recommendation.utils.config import FeatureConfig
+from recommendation.config import FeatureConfig
 
 T0 = datetime(2026, 1, 1)
 
@@ -233,7 +233,7 @@ def test_future_purchase_is_never_sampled_as_a_negative(users_adapter, reviews_a
     all_purchased = all_purchased_product_ids_by_user(events_by_user)
     product_features = build_product_features(list(_product_lookup().values()), [], [], [])
 
-    from recommendation.utils.config import RankingConfig
+    from recommendation.config import RankingConfig
 
     train_out, val_out = build_temporal_ranking_dataset(
         train_examples, val_cases, all_purchased, product_features, {},
@@ -248,7 +248,7 @@ def test_future_purchase_is_never_sampled_as_a_negative(users_adapter, reviews_a
 
 def test_ranking_dataset_positives_are_labeled_one_and_negatives_zero(users_adapter, reviews_adapter):
     from recommendation.features.product_features import build_product_features
-    from recommendation.utils.config import RankingConfig
+    from recommendation.config import RankingConfig
 
     events_by_user, splits = _build_scenario()
     train_examples, _, val_cases, _ = build_temporal_two_tower_examples(

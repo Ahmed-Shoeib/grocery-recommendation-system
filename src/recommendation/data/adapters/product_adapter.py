@@ -4,13 +4,13 @@
 implementation would run in SQL: Product -> Category (+ parent Category)
 -> ProductTags -> Tag. A future SQL-backed adapter implementing
 `ProductCatalogAdapter` can replace this one without any change to
-callers, since both return `recommendation.data.schemas.product.Product`.
+callers, since both return `recommendation.schemas.product.Product`.
 """
 
 from __future__ import annotations
 
 from recommendation.data.adapters.base import ProductCatalogAdapter
-from recommendation.data.schemas.product import Product
+from recommendation.schemas.product import Product
 from recommendation.data.synthetic.raw_schemas import RawCategory, RawProduct, RawProductTag, RawTag
 
 

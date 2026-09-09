@@ -45,7 +45,7 @@ from pathlib import Path
 import numpy as np
 
 from recommendation.retrieval.index.base import SearchResult, VectorIndex
-from recommendation.utils.config import RetrievalConfig
+from recommendation.config import RetrievalConfig
 
 # ScaNN's asymmetric hashing has a hard floor, not a tunable one:
 # `.score_ah(..., hash_type="lut16")` (the default, used here) fixes

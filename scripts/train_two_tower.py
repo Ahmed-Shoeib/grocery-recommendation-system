@@ -18,8 +18,8 @@ from recommendation.embeddings.encoder import SentenceTransformerEncoder
 from recommendation.features.pipeline import run_feature_pipeline
 from recommendation.retrieval.two_tower.serialization import save_two_tower_artifacts
 from recommendation.retrieval.two_tower.train import train_two_tower
-from recommendation.utils.config import get_config, resolve_path
-from recommendation.utils.logging import get_logger, setup_logging
+from recommendation.config import get_config, resolve_path
+from recommendation.logging import get_logger, setup_logging
 
 logger = get_logger(__name__)
 

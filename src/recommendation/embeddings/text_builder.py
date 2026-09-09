@@ -9,7 +9,7 @@ inputs.
 
 from __future__ import annotations
 
-from recommendation.data.schemas.product import Product
+from recommendation.schemas.product import Product
 
 
 def build_product_text(product: Product) -> str:

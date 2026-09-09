@@ -12,13 +12,13 @@ from __future__ import annotations
 
 import numpy as np
 
-from recommendation.data.schemas.engagement import SearchRecord
+from recommendation.schemas.engagement import SearchRecord
 from recommendation.data.synthetic.affinity import product_affinity_scores, sample_product_ids
 from recommendation.data.synthetic.catalog import CATEGORY_NAME_BY_ID
 from recommendation.data.synthetic.personas import PERSONA_BY_KEY
 from recommendation.data.synthetic.raw_schemas import RawProduct, RawProductTag, RawTag, RawUser
 from recommendation.data.synthetic.users import UserLatentProfile
-from recommendation.utils.config import SyntheticDataConfig
+from recommendation.config import SyntheticDataConfig
 
 
 def _tags_by_product_id(product_tags: list[RawProductTag], tags: list[RawTag]) -> dict[int, list[str]]:

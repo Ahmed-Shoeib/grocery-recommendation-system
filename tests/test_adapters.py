@@ -9,8 +9,8 @@ from recommendation.data.adapters.review_adapter import InMemoryReviewAdapter
 from recommendation.data.adapters.search_adapter import SyntheticSearchAdapter
 from recommendation.data.adapters.user_adapter import InMemoryUserAdapter
 from recommendation.data.adapters.user_events_adapter import UserEventsAdapter, build_user_events_adapters
-from recommendation.data.schemas.engagement import ClickRecord, EngagementProfile
-from recommendation.data.schemas.events import ActionType, UserInteraction
+from recommendation.schemas.engagement import ClickRecord, EngagementProfile
+from recommendation.schemas.events import ActionType, UserInteraction
 from recommendation.data.synthetic.dataset import generate_synthetic_dataset
 from recommendation.data.synthetic.raw_schemas import (
     RawCart,
@@ -24,7 +24,7 @@ from recommendation.data.synthetic.raw_schemas import (
     RawTag,
     RawUser,
 )
-from recommendation.utils.config import get_config
+from recommendation.config import get_config
 
 
 def _small_dataset():
@@ -159,7 +159,7 @@ def test_review_adapter_groups_by_user():
 # --- Search / Chatbot adapters -------------------------------------------------
 
 def test_synthetic_search_adapter_groups_by_user():
-    from recommendation.data.schemas.engagement import SearchRecord
+    from recommendation.schemas.engagement import SearchRecord
 
     records = [SearchRecord(user_id=1, search_term="oat milk")]
     adapter = SyntheticSearchAdapter(records)

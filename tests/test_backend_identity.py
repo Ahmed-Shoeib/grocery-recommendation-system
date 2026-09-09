@@ -6,7 +6,7 @@ import json
 
 import pytest
 
-from recommendation.data.backend.identity import ExternalIdentityResolver, IdentityRegistryError
+from recommendation.backend.identity import ExternalIdentityResolver, IdentityRegistryError
 
 
 def test_same_key_always_resolves_to_same_id_within_a_session(tmp_path):

@@ -24,7 +24,8 @@ from typing import Callable, Literal
 import yaml
 from pydantic import BaseModel, Field
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
+# src/recommendation/config.py -> parents[0]=recommendation, [1]=src, [2]=repo root.
+REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CONFIG_PATH = REPO_ROOT / "configs" / "base.yaml"
 
 
@@ -46,7 +47,7 @@ class PathsConfig(BaseModel):
     # against those ids).
     backend_identity_registry: str = "data/processed/backend_identity_registry.json"
     # STEP 9 (docs/data-mapping.md section 18): which data source + trained
-    # artifact set `api.dependencies.build_recommendation_service` uses for
+    # artifact set `api.service.build_recommendation_service` uses for
     # LIVE serving. "sqlite" -> data_sqlite via build_sqlite_adapters,
     # artifacts from `{models_dir}/sqlite_baseline/` (the current STEP 7/8
     # RECENCY+PRICE pipeline). "synthetic" -> the original synthetic V1
@@ -72,7 +73,7 @@ class RefreshConfig(BaseModel):
     from them - product_features, engagement profiles, price context)
     from `paths.data_sqlite`, without a process restart. Trained model
     artifacts (Two-Tower/ranker/VectorIndex) are never affected by this -
-    see `api.dependencies.RecommendationService.maybe_refresh`.
+    see `api.service.RecommendationService.maybe_refresh`.
 
     `interval_seconds <= 0` disables periodic refresh (equivalent to the
     original startup-snapshot-only behavior).
@@ -88,7 +89,7 @@ class BackendApiConfig(BaseModel):
     **No credentials here, by design.** The gated endpoints
     (`/api/users/{guid}`, `/api/reviews`) authenticate with a service
     clientId/clientSecret, but those are read directly from the environment
-    by `data.backend.auth.ServiceTokenProvider` and never become fields on
+    by `backend.auth.ServiceTokenProvider` and never become fields on
     this model: config is loaded from committed YAML and is dumped in
     diagnostics/logs, so a secret placed here would leak into both. See
     docs/data-mapping.md section 19.

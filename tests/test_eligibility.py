@@ -1,6 +1,6 @@
 from recommendation.features.product_features import ProductFeatures
 from recommendation.serving.eligibility import apply_eligibility, build_eligibility_rules
-from recommendation.utils.config import EligibilityConfig
+from recommendation.config import EligibilityConfig
 
 
 def _pf(pid: int, is_active: bool = True, stock_quantity: int = 10) -> ProductFeatures:

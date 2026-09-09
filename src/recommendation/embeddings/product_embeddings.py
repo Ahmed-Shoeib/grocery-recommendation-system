@@ -20,7 +20,7 @@ from pathlib import Path
 
 import numpy as np
 
-from recommendation.data.schemas.product import Product
+from recommendation.schemas.product import Product
 from recommendation.embeddings.encoder import SentenceTransformerEncoder
 from recommendation.embeddings.text_builder import build_product_text
 

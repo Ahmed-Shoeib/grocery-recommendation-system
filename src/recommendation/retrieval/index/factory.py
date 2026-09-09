@@ -1,7 +1,7 @@
 """Backend selection and candidate-pool sizing for `VectorIndex`.
 
 Driven entirely by `configs/base.yaml: retrieval.*` (see
-`recommendation.utils.config.RetrievalConfig`) so switching backends or
+`recommendation.config.RetrievalConfig`) so switching backends or
 retuning pool size never touches calling code.
 """
 
@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from recommendation.retrieval.index.base import VectorIndex
 from recommendation.retrieval.index.faiss_index import FaissVectorIndex
-from recommendation.utils.config import RetrievalConfig
+from recommendation.config import RetrievalConfig
 
 
 def build_vector_index(config: RetrievalConfig) -> VectorIndex:

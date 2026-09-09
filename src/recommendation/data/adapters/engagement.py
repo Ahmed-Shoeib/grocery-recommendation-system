@@ -18,8 +18,8 @@ from recommendation.data.adapters.base import (
     SearchAdapter,
     UserAdapter,
 )
-from recommendation.data.schemas.engagement import EngagementProfile
-from recommendation.data.schemas.user import UserProfile
+from recommendation.schemas.engagement import EngagementProfile
+from recommendation.schemas.user import UserProfile
 
 
 def build_engagement_profile(

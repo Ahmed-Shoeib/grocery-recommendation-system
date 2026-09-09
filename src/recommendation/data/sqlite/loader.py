@@ -6,7 +6,7 @@ into an existing pydantic model - `RawCategory`/`RawTag`/`RawProduct`/
 `RawProductTag`/`RawUser`/`RawReview` (`recommendation.data.synthetic
 .raw_schemas` - despite the module path, these are ERD-shaped models, not
 synthetic-specific ones; see that module's docstring) or `UserInteraction`
-(`recommendation.data.schemas.events`). This is deliberate: it lets
+(`recommendation.schemas.events`). This is deliberate: it lets
 `adapters.sqlite_factory.build_sqlite_adapters` hand the results straight
 to the EXISTING `InMemoryProductCatalogAdapter`/`InMemoryUserAdapter`/
 `InMemoryReviewAdapter`/`UserEventsAdapter` without a single new adapter
@@ -25,7 +25,7 @@ from __future__ import annotations
 import sqlite3
 from datetime import datetime, timezone
 
-from recommendation.data.schemas.events import ActionType, UserInteraction
+from recommendation.schemas.events import ActionType, UserInteraction
 from recommendation.data.synthetic.raw_schemas import (
     RawCategory,
     RawProduct,
@@ -115,7 +115,7 @@ def _parse_timestamp(value: str | None) -> datetime | None:
     consumer expects (`features.recency`, `evaluation
     .temporal_future_purchase` - see those modules' "naive datetimes
     throughout" docstrings). Required contract, adopted so a fresh
-    `User_events` row (see `api.dependencies.RecommendationService
+    `User_events` row (see `api.service.RecommendationService
     .maybe_refresh`) can never be misread as "in the future" purely
     because of a timezone-convention mismatch between the backend writer
     and this server's own clock (`serving.pipeline.recommend`'s

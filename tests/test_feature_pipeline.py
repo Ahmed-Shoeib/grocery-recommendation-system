@@ -13,7 +13,7 @@ import numpy as np
 from recommendation.data.adapters.factory import build_synthetic_adapters
 from recommendation.data.synthetic.dataset import generate_synthetic_dataset
 from recommendation.features.pipeline import run_feature_pipeline
-from recommendation.utils.config import get_config
+from recommendation.config import get_config
 
 _FAKE_DIM = 16
 

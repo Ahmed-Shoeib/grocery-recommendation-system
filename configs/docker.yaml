@@ -8,7 +8,7 @@
 # (docker-compose.yml's `api` service), so this points there.
 #
 # Kept as a full standalone copy of base.yaml, not a partial override -
-# src/recommendation/utils/config.py loads each config file as a complete
+# src/recommendation/config.py loads each config file as a complete
 # AppConfig, it does not merge configs. If base.yaml's tunables change,
 # mirror the change here.
 #

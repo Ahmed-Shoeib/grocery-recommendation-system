@@ -4,7 +4,7 @@ tests. Duck-typed: only the methods `loader` / `backend_factory` call.
 
 from __future__ import annotations
 
-from recommendation.data.backend.dtos import ApiActivity, ApiCategory, ApiProduct, ApiReview, ApiUser
+from recommendation.backend.dtos import ApiActivity, ApiCategory, ApiProduct, ApiReview, ApiUser
 
 
 class FakeBackendClient:

@@ -4,7 +4,7 @@ import tensorflow as tf
 
 from recommendation.retrieval.two_tower.feature_encoding import TwoTowerFeatureEncoder
 from recommendation.retrieval.two_tower.model import L2Normalize, TwoTowerModel, build_item_tower, build_user_tower
-from recommendation.utils.config import TwoTowerConfig
+from recommendation.config import TwoTowerConfig
 
 
 @pytest.fixture

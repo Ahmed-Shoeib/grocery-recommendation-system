@@ -17,9 +17,9 @@ import pytest
 
 from recommendation.data.adapters.base import UserAdapter
 from recommendation.data.adapters.review_adapter import InMemoryReviewAdapter
-from recommendation.data.schemas.events import ActionType, UserInteraction
-from recommendation.data.schemas.product import Product
-from recommendation.data.schemas.user import UserProfile
+from recommendation.schemas.events import ActionType, UserInteraction
+from recommendation.schemas.product import Product
+from recommendation.schemas.user import UserProfile
 from recommendation.evaluation.temporal_future_purchase import (
     TemporalEligibilityTier,
     audit_no_leakage,
@@ -32,7 +32,7 @@ from recommendation.evaluation.temporal_future_purchase import (
 )
 from recommendation.features.product_features import ProductFeatures
 from recommendation.serving.eligibility import build_eligibility_rules
-from recommendation.utils.config import EligibilityConfig
+from recommendation.config import EligibilityConfig
 
 T0 = datetime(2026, 1, 1, 0, 0, 0)
 
@@ -373,7 +373,7 @@ def test_recency_over_point_in_time_profile_never_leaks(users_adapter, reviews_a
     be `>= cutoff`, so this must never raise `RecencyLeakageError`.
     """
     from recommendation.features.user_features import build_user_features
-    from recommendation.utils.config import FeatureConfig, RecencyConfig
+    from recommendation.config import FeatureConfig, RecencyConfig
 
     events = [
         ev(1, 10, ActionType.CLICK, t(1)),
@@ -425,10 +425,10 @@ def test_price_profile_over_point_in_time_profile_never_sees_the_future_target(u
     future purchase's price must have ZERO influence on the user's price
     profile - `typical_price` must reflect only the pre-cutoff purchase.
     """
-    from recommendation.data.schemas.product import Product
+    from recommendation.schemas.product import Product
     from recommendation.features.price import build_price_catalog_context
     from recommendation.features.user_features import build_user_features
-    from recommendation.utils.config import FeatureConfig, RecencyConfig
+    from recommendation.config import FeatureConfig, RecencyConfig
 
     events = [
         ev(1, 10, ActionType.PURCHASE, t(1)),  # old purchase, cheap product

@@ -33,7 +33,7 @@ import numpy as np
 import tensorflow as tf
 
 from recommendation.data.adapters.sqlite_factory import build_sqlite_adapters
-from recommendation.data.schemas.events import ActionType
+from recommendation.schemas.events import ActionType
 from recommendation.data.sqlite.connection import open_readonly_connection
 from recommendation.data.sqlite.loader import load_events
 from recommendation.embeddings.encoder import SentenceTransformerEncoder
@@ -69,8 +69,8 @@ from recommendation.retrieval.two_tower.serialization import save_two_tower_arti
 from recommendation.serving.cold_start import HistoryTier, determine_history_tier
 from recommendation.serving.eligibility import apply_eligibility, build_eligibility_rules
 from recommendation.serving.pipeline import generate_recommendations
-from recommendation.utils.config import get_config, resolve_path
-from recommendation.utils.logging import get_logger, setup_logging
+from recommendation.config import get_config, resolve_path
+from recommendation.logging import get_logger, setup_logging
 
 logger = get_logger(__name__)
 

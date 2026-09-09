@@ -1,7 +1,7 @@
 """Startup artifact/config validation.
 
 Runs BEFORE a `RecommendationService` is considered usable
-(`api.dependencies.build_recommendation_service` calls every function
+(`api.service.build_recommendation_service` calls every function
 here), so a missing, corrupt, or incompatible artifact fails loudly and
 immediately at process startup - never silently serves recommendations
 built from a ranker trained against a different feature schema, or a
@@ -18,7 +18,7 @@ from typing import Callable, TypeVar
 from recommendation.ranking.features import RANKING_FEATURE_NAMES
 from recommendation.ranking.serialization import RankerArtifacts
 from recommendation.retrieval.two_tower.serialization import TwoTowerArtifacts
-from recommendation.utils.config import AppConfig, RetrievalConfig
+from recommendation.config import AppConfig, RetrievalConfig
 
 T = TypeVar("T")
 
@@ -111,7 +111,7 @@ def validate_retrieval_config(config: RetrievalConfig) -> None:
     of degrading recommendation quality/fill-rate at first request.
     Deliberately NOT a deep check of the on-disk index's actual ANN
     structure against this config - the index is rebuilt fresh from
-    Two-Tower embeddings at every startup (`api.dependencies
+    Two-Tower embeddings at every startup (`api.service
     .build_recommendation_service` calls `vector_index.build(...)`, never
     `.load()`s a saved artifact for live serving), so there is no
     config/disk drift to catch there.

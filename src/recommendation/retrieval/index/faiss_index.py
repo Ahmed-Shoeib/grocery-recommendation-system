@@ -34,7 +34,7 @@ import faiss
 import numpy as np
 
 from recommendation.retrieval.index.base import SearchResult, VectorIndex
-from recommendation.utils.config import RetrievalConfig
+from recommendation.config import RetrievalConfig
 
 
 class FaissVectorIndex(VectorIndex):

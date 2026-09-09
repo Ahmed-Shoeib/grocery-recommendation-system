@@ -5,7 +5,7 @@ Proves end to end:
 
     backend REST API (/api/products, /api/categories, /api/user-activities,
                       + service-auth-gated /api/users/{guid}, /api/reviews)
-        -> recommendation.data.backend.client / auth / loader / identity
+        -> recommendation.backend.client / auth / loader / identity
         -> recommendation.data.adapters.backend_factory.build_backend_api_adapters
         -> canonical AdapterBundle / EngagementProfile
         -> existing feature engineering + cold-start tiering + eligibility gate
@@ -36,13 +36,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from recommendation.data.adapters.backend_factory import build_backend_api_adapters
 from recommendation.data.adapters.engagement import build_engagement_profile
-from recommendation.data.backend.auth import ENV_CLIENT_ID, ENV_CLIENT_SECRET
-from recommendation.data.backend.client import BackendApiClient
-from recommendation.data.backend.errors import BackendApiError, BackendAuthError
+from recommendation.backend.auth import ENV_CLIENT_ID, ENV_CLIENT_SECRET
+from recommendation.backend.client import BackendApiClient
+from recommendation.backend.errors import BackendApiError, BackendAuthError
 from recommendation.features.pipeline import run_feature_pipeline
 from recommendation.serving.cold_start import determine_history_tier
 from recommendation.serving.eligibility import apply_eligibility, build_eligibility_rules
-from recommendation.utils.config import get_config
+from recommendation.config import get_config
 
 
 def _check_service_auth(config) -> bool:
@@ -101,7 +101,7 @@ def main() -> int:
         return 1
 
     # Eligibility gate sees real stock values from this source. Use the
-    # same dedicated embedding cache path `api.dependencies._load_data_snapshot`
+    # same dedicated embedding cache path `api.service._load_data_snapshot`
     # uses for this source, so this script never clobbers the synthetic /
     # SQLite caches.
     feature_config = config.model_copy(

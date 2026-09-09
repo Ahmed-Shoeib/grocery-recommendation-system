@@ -2,7 +2,7 @@
 
 Adapters translate a data source (real backend ERD tables, or a synthetic
 V1 provider) into the canonical schemas defined in
-`recommendation.data.schemas`. Recommendation models depend only on the
+`recommendation.schemas`. Recommendation models depend only on the
 canonical schemas, never on adapter internals, so swapping a synthetic
 adapter for a real backend adapter later requires no model changes.
 

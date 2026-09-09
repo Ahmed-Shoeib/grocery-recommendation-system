@@ -1,5 +1,5 @@
-from recommendation.data.schemas.engagement import CartAffinityRecord, PurchaseRecord, ReviewRecord
-from recommendation.data.schemas.product import Product
+from recommendation.schemas.engagement import CartAffinityRecord, PurchaseRecord, ReviewRecord
+from recommendation.schemas.product import Product
 from recommendation.features.product_features import (
     build_product_features,
     compute_cart_add_counts,

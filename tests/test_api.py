@@ -18,7 +18,7 @@ from fastapi.testclient import TestClient
 
 from recommendation.api import routes as routes_module
 from recommendation.api.app import create_app
-from recommendation.api.dependencies import RecommendationService, resolve_models_root
+from recommendation.api.service import RecommendationService, resolve_models_root
 from recommendation.data.adapters.base import (
     AdapterBundle,
     CartAdapter,
@@ -30,9 +30,9 @@ from recommendation.data.adapters.base import (
     SearchAdapter,
     UserAdapter,
 )
-from recommendation.data.schemas.engagement import EngagementProfile, PurchaseRecord
-from recommendation.data.schemas.product import Product
-from recommendation.data.schemas.user import UserProfile
+from recommendation.schemas.engagement import EngagementProfile, PurchaseRecord
+from recommendation.schemas.product import Product
+from recommendation.schemas.user import UserProfile
 from recommendation.evaluation.offline_report import (
     REPORT_SCHEMA_VERSION,
     OfflineEvalSplitReport,
@@ -45,7 +45,7 @@ from recommendation.ranking.model import build_ranker_model
 from recommendation.retrieval.index.faiss_index import FaissVectorIndex
 from recommendation.retrieval.two_tower.feature_encoding import TwoTowerFeatureEncoder
 from recommendation.retrieval.two_tower.model import build_user_tower
-from recommendation.utils.config import (
+from recommendation.config import (
     ApiConfig,
     AppConfig,
     ColdStartConfig,

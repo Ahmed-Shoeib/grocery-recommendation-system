@@ -46,7 +46,7 @@ import numpy as np
 import tensorflow as tf
 
 from recommendation.data.adapters.base import AdapterBundle
-from recommendation.data.schemas.product import Product
+from recommendation.schemas.product import Product
 from recommendation.features.price import PriceCatalogContext
 from recommendation.features.product_features import ProductFeatures
 from recommendation.features.user_features import UserFeatures, build_user_features
@@ -66,8 +66,8 @@ from recommendation.serving.fallback import (
     top_affinity_category,
     waterfall_candidates,
 )
-from recommendation.utils.config import AppConfig, RetrievalConfig
-from recommendation.utils.logging import get_logger
+from recommendation.config import AppConfig, RetrievalConfig
+from recommendation.logging import get_logger
 
 logger = get_logger(__name__)
 
@@ -331,7 +331,7 @@ def recommend(
     training path). Deliberately UTC, not the server process's local
     clock (`datetime.now()`) - `data.sqlite.loader._parse_timestamp`
     parses every `action_time` under the same naive-UTC convention, so a
-    fresh `User_events` row (see `api.dependencies.RecommendationService
+    fresh `User_events` row (see `api.service.RecommendationService
     .maybe_refresh`) compares correctly against this reference_time
     regardless of which timezone the server machine itself runs in. Using
     the server's local clock here instead would make a genuinely-recent,

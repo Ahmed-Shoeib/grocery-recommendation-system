@@ -38,8 +38,8 @@ from dataclasses import dataclass
 import numpy as np
 import tensorflow as tf
 
-from recommendation.data.schemas.engagement import EngagementProfile
-from recommendation.data.schemas.product import Product
+from recommendation.schemas.engagement import EngagementProfile
+from recommendation.schemas.product import Product
 from recommendation.features.price import PriceCatalogContext
 from recommendation.features.product_features import ProductFeatures
 from recommendation.features.user_features import UserFeatures, build_user_features
@@ -48,7 +48,7 @@ from recommendation.retrieval.index.base import SearchResult, VectorIndex
 from recommendation.retrieval.two_tower.examples import build_eval_cases
 from recommendation.retrieval.two_tower.feature_encoding import TwoTowerFeatureEncoder
 from recommendation.retrieval.two_tower.splitting import UserSplit
-from recommendation.utils.config import FeatureConfig, RankingConfig
+from recommendation.config import FeatureConfig, RankingConfig
 
 
 @dataclass

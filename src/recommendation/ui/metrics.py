@@ -25,7 +25,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from recommendation.api.dependencies import RecommendationService
+from recommendation.api.service import RecommendationService
 from recommendation.retrieval.two_tower.examples import build_eval_cases
 from recommendation.retrieval.two_tower.splitting import build_user_splits
 from recommendation.serving.evaluation import PipelineEvalReport, evaluate_pipeline

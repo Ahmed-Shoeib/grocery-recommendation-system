@@ -18,8 +18,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 import uvicorn
 
 from recommendation.api.app import create_app
-from recommendation.utils.config import get_config
-from recommendation.utils.logging import setup_logging
+from recommendation.config import get_config
+from recommendation.logging import setup_logging
 
 _config = get_config()
 setup_logging(_config.log_level)

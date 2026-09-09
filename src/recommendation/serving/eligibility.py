@@ -37,7 +37,7 @@ from dataclasses import dataclass, field
 from typing import Callable
 
 from recommendation.features.product_features import ProductFeatures
-from recommendation.utils.config import EligibilityConfig
+from recommendation.config import EligibilityConfig
 
 
 @dataclass

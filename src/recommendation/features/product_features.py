@@ -6,7 +6,7 @@ aggregates give a recency-free "global popularity" / rating signal (per
 docs/data-mapping.md section 6 - no "trending", just all-time counts).
 
 Depends only on `recommendation.data.adapters.base` interfaces and
-`recommendation.data.schemas`, never on synthetic internals, so it works
+`recommendation.schemas`, never on synthetic internals, so it works
 unchanged once real adapters replace the synthetic ones.
 
 Price fields (STEP 6, docs/data-mapping.md section 15): `effective_price`/
@@ -23,8 +23,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from recommendation.data.schemas.engagement import CartAffinityRecord, PurchaseRecord, ReviewRecord
-from recommendation.data.schemas.product import Product
+from recommendation.schemas.engagement import CartAffinityRecord, PurchaseRecord, ReviewRecord
+from recommendation.schemas.product import Product
 from recommendation.features.price import (
     assign_price_tier,
     category_relative_price,

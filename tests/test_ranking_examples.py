@@ -1,16 +1,16 @@
 import numpy as np
 import pytest
 
-from recommendation.data.schemas.engagement import EngagementProfile, PurchaseRecord
-from recommendation.data.schemas.product import Product
-from recommendation.data.schemas.user import UserProfile
+from recommendation.schemas.engagement import EngagementProfile, PurchaseRecord
+from recommendation.schemas.product import Product
+from recommendation.schemas.user import UserProfile
 from recommendation.features.product_features import build_product_features
 from recommendation.ranking.examples import build_ranking_dataset
 from recommendation.retrieval.index.faiss_index import FaissVectorIndex
 from recommendation.retrieval.two_tower.feature_encoding import TwoTowerFeatureEncoder
 from recommendation.retrieval.two_tower.model import build_user_tower
 from recommendation.retrieval.two_tower.splitting import UserSplit
-from recommendation.utils.config import FeatureConfig, RankingConfig, TwoTowerConfig
+from recommendation.config import FeatureConfig, RankingConfig, TwoTowerConfig
 
 _EMBEDDING_DIM = 8
 _OUTPUT_DIM = 8
@@ -150,7 +150,7 @@ def test_val_loss_examples_use_val_product_never_test_product_as_positive(scenar
 
 
 def test_no_train_examples_for_users_without_train_products():
-    from recommendation.data.schemas.engagement import EngagementProfile as EP
+    from recommendation.schemas.engagement import EngagementProfile as EP
 
     profile = EP(user_id=2, profile=UserProfile(user_id=2), purchases=[])
     split = UserSplit(user_id=2, train_product_ids=[], val_product_id=None, test_product_id=None)

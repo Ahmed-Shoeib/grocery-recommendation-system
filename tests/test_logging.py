@@ -1,6 +1,6 @@
 import logging
 
-from recommendation.utils.logging import get_logger, setup_logging
+from recommendation.logging import get_logger, setup_logging
 
 
 def test_get_logger_returns_configured_logger():

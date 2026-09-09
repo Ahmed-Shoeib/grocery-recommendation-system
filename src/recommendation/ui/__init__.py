@@ -5,7 +5,7 @@ tool for inspecting the recommendation engine, not the storefront.
 lives in `data_access.py`/`metrics.py` (plain functions, no Streamlit
 import, unit-testable in isolation); recommendations themselves always
 come from `serving.pipeline.generate_recommendations` via the shared
-`RecommendationService` (`service_loader.py`, reusing `api.dependencies`
+`RecommendationService` (`service_loader.py`, reusing `api.service`
 in-process) - no recommendation logic is duplicated or reimplemented
 here.
 """

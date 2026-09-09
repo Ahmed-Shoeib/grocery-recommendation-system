@@ -3,9 +3,9 @@ import dataclasses
 import numpy as np
 import pytest
 
-from recommendation.data.schemas.engagement import EngagementProfile, PurchaseRecord
-from recommendation.data.schemas.product import Product
-from recommendation.data.schemas.user import UserProfile
+from recommendation.schemas.engagement import EngagementProfile, PurchaseRecord
+from recommendation.schemas.product import Product
+from recommendation.schemas.user import UserProfile
 from recommendation.features.product_features import build_product_features
 from recommendation.features.user_features import build_user_features
 from recommendation.ranking.features import RANKING_FEATURE_NAMES
@@ -15,7 +15,7 @@ from recommendation.retrieval.two_tower.feature_encoding import TwoTowerFeatureE
 from recommendation.retrieval.two_tower.model import build_user_tower
 from recommendation.serving.cold_start import HistoryTier
 from recommendation.serving.pipeline import generate_recommendations
-from recommendation.utils.config import AppConfig, ColdStartConfig, EligibilityConfig, FeatureConfig, RankingConfig, RetrievalConfig, TwoTowerConfig
+from recommendation.config import AppConfig, ColdStartConfig, EligibilityConfig, FeatureConfig, RankingConfig, RetrievalConfig, TwoTowerConfig
 
 _EMBEDDING_DIM = 8
 _OUTPUT_DIM = 8

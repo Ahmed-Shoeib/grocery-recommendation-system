@@ -16,7 +16,7 @@ import pytest
 from recommendation.retrieval.index.base import SearchResult, VectorIndex
 from recommendation.retrieval.index.eligibility_filter import EligibilityRestrictedIndex
 from recommendation.retrieval.index.faiss_index import FaissVectorIndex
-from recommendation.utils.config import RetrievalConfig
+from recommendation.config import RetrievalConfig
 
 
 def _l2_normalize(x: np.ndarray) -> np.ndarray:

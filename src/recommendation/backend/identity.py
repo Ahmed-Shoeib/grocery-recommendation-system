@@ -47,7 +47,7 @@ import tempfile
 import threading
 from pathlib import Path
 
-from recommendation.utils.logging import get_logger
+from recommendation.logging import get_logger
 
 logger = get_logger(__name__)
 
@@ -99,7 +99,7 @@ class _Namespace:
 
 class ExternalIdentityResolver:
     """Load once, resolve many, persist on `save()`. Not tied to any HTTP
-    client - `recommendation.data.backend.loader` drives it.
+    client - `recommendation.backend.loader` drives it.
     """
 
     def __init__(self, registry_path: str | Path, *, namespace_offsets: dict[str, int] | None = None) -> None:

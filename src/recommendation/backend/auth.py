@@ -15,7 +15,7 @@ Secret handling - the rules this module exists to enforce:
 
 - **Environment only.** `clientId`/`clientSecret` are read from
   `RECS_BACKEND_SERVICE_CLIENT_ID` / `RECS_BACKEND_SERVICE_CLIENT_SECRET`.
-  They are deliberately NOT fields on `utils.config.BackendApiConfig`:
+  They are deliberately NOT fields on `config.BackendApiConfig`:
   that model is loaded from a committed YAML file and is dumped/logged in
   diagnostics, so a secret placed there would leak into both.
 - **Memory only.** The token is cached on this instance and never written
@@ -45,15 +45,15 @@ from datetime import datetime, timedelta, timezone
 
 import requests
 
-from recommendation.data.backend.dtos import ApiServiceToken
-from recommendation.data.backend.errors import (
+from recommendation.backend.dtos import ApiServiceToken
+from recommendation.backend.errors import (
     BackendAuthError,
     BackendContractError,
     BackendCredentialsError,
     BackendUnavailableError,
 )
-from recommendation.utils.config import BackendApiConfig
-from recommendation.utils.logging import get_logger
+from recommendation.config import BackendApiConfig
+from recommendation.logging import get_logger
 
 logger = get_logger(__name__)
 

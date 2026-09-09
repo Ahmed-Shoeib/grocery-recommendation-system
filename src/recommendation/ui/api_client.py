@@ -68,7 +68,7 @@ class MalformedResponseError(ApiClientError):
 class RecommendationApiClient:
     """Thin, stateless wrapper around `requests` - one instance per
     configured `(base_url, timeout_seconds)` pair (see
-    `ui.service_loader.load_api_client`, `utils.config.DashboardConfig`).
+    `ui.service_loader.load_api_client`, `config.DashboardConfig`).
     """
 
     def __init__(self, base_url: str, timeout_seconds: float = 10.0) -> None:

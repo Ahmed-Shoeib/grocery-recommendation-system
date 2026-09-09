@@ -3,7 +3,7 @@ import numpy as np
 import pytest
 
 from recommendation.retrieval.index.faiss_index import FaissVectorIndex
-from recommendation.utils.config import RetrievalConfig
+from recommendation.config import RetrievalConfig
 
 
 def _l2_normalize(x: np.ndarray) -> np.ndarray:

@@ -28,8 +28,8 @@ import numpy as np
 from recommendation.evaluation.latency import measure_latency
 from recommendation.retrieval.index.embeddings_io import load_item_embeddings
 from recommendation.retrieval.index.factory import build_vector_index
-from recommendation.utils.config import get_config, resolve_path
-from recommendation.utils.logging import get_logger, setup_logging
+from recommendation.config import get_config, resolve_path
+from recommendation.logging import get_logger, setup_logging
 
 logger = get_logger(__name__)
 

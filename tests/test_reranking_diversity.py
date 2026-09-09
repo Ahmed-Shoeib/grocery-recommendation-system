@@ -1,7 +1,7 @@
 from recommendation.features.product_features import ProductFeatures
 from recommendation.reranking.candidates import RankedCandidate
 from recommendation.reranking.diversity import apply_diversity, deduplicate, rerank
-from recommendation.utils.config import ReRankingConfig
+from recommendation.config import ReRankingConfig
 
 
 def _pf(pid: int, category: str, brand: str | None = None) -> ProductFeatures:

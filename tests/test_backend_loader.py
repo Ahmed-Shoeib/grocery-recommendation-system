@@ -4,10 +4,10 @@ activity-drop policy (docs/data-mapping.md section 19).
 
 from datetime import datetime
 
-from recommendation.data.backend.dtos import ApiActivity
-from recommendation.data.backend.errors import BackendAuthError
-from recommendation.data.backend.identity import ExternalIdentityResolver
-from recommendation.data.backend.loader import (
+from recommendation.backend.dtos import ApiActivity
+from recommendation.backend.errors import BackendAuthError
+from recommendation.backend.identity import ExternalIdentityResolver
+from recommendation.backend.loader import (
     load_backend_catalog,
     load_backend_events,
     load_backend_reviews,

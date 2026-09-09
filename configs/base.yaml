@@ -1,7 +1,7 @@
 # Base configuration for the grocery recommendation system.
 # Every hyperparameter / path / threshold that later phases would otherwise
 # hard-code lives here so behavior can change without touching code.
-# Loaded by src/recommendation/utils/config.py into a typed AppConfig.
+# Loaded by src/recommendation/config.py into a typed AppConfig.
 #
 # Which file loads: RECS_CONFIG_PATH env var (defaults to this file).
 # Individual settings can then be overridden on top, without editing any
@@ -123,7 +123,7 @@ embedding:
 
 # Phase 3: user/product feature engineering weights.
 # click_weight is an unbenchmarked placeholder for the newly-added CLICK
-# signal - see FeatureConfig docstring (src/recommendation/utils/config.py).
+# signal - see FeatureConfig docstring (src/recommendation/config.py).
 features:
   click_weight: 0.1
   purchase_weight: 0.45

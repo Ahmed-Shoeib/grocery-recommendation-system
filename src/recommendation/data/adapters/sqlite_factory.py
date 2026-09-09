@@ -35,7 +35,7 @@ from recommendation.data.sqlite.loader import (
     load_tags,
     load_users,
 )
-from recommendation.utils.config import get_config, resolve_path
+from recommendation.config import get_config, resolve_path
 
 
 def build_sqlite_adapters(db_path: str | Path | None = None) -> AdapterBundle:

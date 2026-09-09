@@ -22,8 +22,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 import numpy as np
 
 from recommendation.data.adapters.factory import build_synthetic_adapters
-from recommendation.data.schemas.engagement import EngagementProfile
-from recommendation.data.schemas.user import UserProfile
+from recommendation.schemas.engagement import EngagementProfile
+from recommendation.schemas.user import UserProfile
 from recommendation.data.synthetic.dataset import generate_synthetic_dataset
 from recommendation.data.synthetic.validation import validate_dataset
 from recommendation.embeddings.encoder import SentenceTransformerEncoder
@@ -38,8 +38,8 @@ from recommendation.retrieval.two_tower.splitting import build_user_splits
 from recommendation.serving.cold_start import HistoryTier, determine_history_tier
 from recommendation.serving.evaluation import PipelineEvalReport, evaluate_pipeline
 from recommendation.serving.pipeline import generate_recommendations
-from recommendation.utils.config import get_config, resolve_path
-from recommendation.utils.logging import get_logger, setup_logging
+from recommendation.config import get_config, resolve_path
+from recommendation.logging import get_logger, setup_logging
 
 logger = get_logger(__name__)
 

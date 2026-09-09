@@ -11,7 +11,7 @@ import hashlib
 import numpy as np
 import pytest
 
-from recommendation.api.dependencies import RecommendationService
+from recommendation.api.service import RecommendationService
 from recommendation.data.adapters.factory import build_synthetic_adapters
 from recommendation.data.synthetic.dataset import generate_synthetic_dataset
 from recommendation.features.pipeline import run_feature_pipeline
@@ -20,7 +20,7 @@ from recommendation.retrieval.index.factory import build_vector_index
 from recommendation.retrieval.two_tower.serialization import TwoTowerArtifacts
 from recommendation.retrieval.two_tower.train import train_two_tower
 from recommendation.ui.metrics import compute_offline_metrics
-from recommendation.utils.config import get_config
+from recommendation.config import get_config
 
 _FAKE_DIM = 16
 

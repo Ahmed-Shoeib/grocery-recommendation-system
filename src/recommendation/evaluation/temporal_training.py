@@ -67,8 +67,8 @@ import numpy as np
 import tensorflow as tf
 
 from recommendation.data.adapters.base import ReviewAdapter, UserAdapter
-from recommendation.data.schemas.events import ActionType, UserInteraction
-from recommendation.data.schemas.product import Product
+from recommendation.schemas.events import ActionType, UserInteraction
+from recommendation.schemas.product import Product
 from recommendation.evaluation.retrieval_metrics import (
     mean_hit_rate_at_k,
     mean_ndcg_at_k,
@@ -89,7 +89,7 @@ from recommendation.retrieval.index.base import SearchResult, VectorIndex
 from recommendation.retrieval.two_tower.evaluation import rank_all_items
 from recommendation.retrieval.two_tower.examples import TrainingExample
 from recommendation.retrieval.two_tower.feature_encoding import TwoTowerFeatureEncoder
-from recommendation.utils.config import FeatureConfig, RankingConfig
+from recommendation.config import FeatureConfig, RankingConfig
 
 
 @dataclass

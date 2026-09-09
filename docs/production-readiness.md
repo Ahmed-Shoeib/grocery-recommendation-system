@@ -171,7 +171,7 @@ Every finding is classified as one of:
   a retrain** - `data.adapters.backend_factory.build_backend_api_adapters`
   (`paths.data_source: "backend_api"`) is a third, working `AdapterBundle`
   factory reading the real backend over its HTTP API
-  (`data.backend.*`, docs/data-mapping.md §19): configurable base URL,
+  (`backend.*`, docs/data-mapping.md §19): configurable base URL,
   timeouts, bounded retries, secure-by-default TLS, cursor pagination, a
   typed error hierarchy, a persistent slug/GUID→int identity resolver,
   and an explicit backend→canonical event map. The full data path is

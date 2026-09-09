@@ -19,11 +19,11 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
-from recommendation.api.dependencies import RecommendationService, build_recommendation_service
+from recommendation.api.service import RecommendationService, build_recommendation_service
 from recommendation.api.routes import router
 from recommendation.api.schemas import ErrorResponse
-from recommendation.utils.config import get_config
-from recommendation.utils.logging import get_logger
+from recommendation.config import get_config
+from recommendation.logging import get_logger
 
 logger = get_logger(__name__)
 
