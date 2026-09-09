@@ -1,8 +1,8 @@
 """Top-level feature pipeline: AdapterBundle -> product/user features + embeddings.
 
-Depends only on `recommendation.data.adapters.base.AdapterBundle` (an
+Depends only on `recommendation.adapters.base.AdapterBundle` (an
 interface type) and `recommendation.config.AppConfig` - nothing here
-imports `recommendation.data.synthetic`, so pointing a real-backend
+imports `recommendation.synthetic`, so pointing a real-backend
 `AdapterBundle` at this function requires no changes here (see
 docs/data-mapping.md).
 
@@ -17,8 +17,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 
-from recommendation.data.adapters.base import AdapterBundle
-from recommendation.data.adapters.engagement import build_engagement_profile
+from recommendation.adapters.base import AdapterBundle
+from recommendation.adapters.engagement import build_engagement_profile
 from recommendation.schemas.engagement import EngagementProfile
 from recommendation.embeddings.encoder import SentenceTransformerEncoder
 from recommendation.embeddings.product_embeddings import ProductEmbeddingCache, get_or_compute_product_embeddings

@@ -10,8 +10,8 @@ from __future__ import annotations
 
 import numpy as np
 
-from recommendation.data.synthetic.personas import Persona
-from recommendation.data.synthetic.raw_schemas import RawProduct
+from recommendation.synthetic.personas import Persona
+from recommendation.synthetic.raw_schemas import RawProduct
 
 BASELINE_SCORE = 1.0
 

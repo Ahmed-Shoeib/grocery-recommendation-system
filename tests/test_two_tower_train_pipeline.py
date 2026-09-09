@@ -12,8 +12,8 @@ import hashlib
 import numpy as np
 import pytest
 
-from recommendation.data.adapters.factory import build_synthetic_adapters
-from recommendation.data.synthetic.dataset import generate_synthetic_dataset
+from recommendation.adapters.factory import build_synthetic_adapters
+from recommendation.synthetic.dataset import generate_synthetic_dataset
 from recommendation.features.pipeline import run_feature_pipeline
 from recommendation.retrieval.two_tower.serialization import load_two_tower_artifacts, save_two_tower_artifacts
 from recommendation.retrieval.two_tower.train import train_two_tower

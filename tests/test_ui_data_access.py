@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 
 from recommendation.api.service import RecommendationService
-from recommendation.data.adapters.base import (
+from recommendation.adapters.base import (
     AdapterBundle,
     CartAdapter,
     ChatbotContextAdapter,

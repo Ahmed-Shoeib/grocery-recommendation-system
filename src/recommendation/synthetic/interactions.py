@@ -14,10 +14,10 @@ from datetime import datetime, timedelta
 
 import numpy as np
 
-from recommendation.data.synthetic.affinity import product_affinity_scores, sample_product_ids
-from recommendation.data.synthetic.catalog import CATEGORY_NAME_BY_ID
-from recommendation.data.synthetic.personas import PERSONA_BY_KEY
-from recommendation.data.synthetic.raw_schemas import (
+from recommendation.synthetic.affinity import product_affinity_scores, sample_product_ids
+from recommendation.synthetic.catalog import CATEGORY_NAME_BY_ID
+from recommendation.synthetic.personas import PERSONA_BY_KEY
+from recommendation.synthetic.raw_schemas import (
     RawCart,
     RawCartItem,
     RawOrder,
@@ -28,7 +28,7 @@ from recommendation.data.synthetic.raw_schemas import (
     RawTag,
     RawUser,
 )
-from recommendation.data.synthetic.users import UserLatentProfile
+from recommendation.synthetic.users import UserLatentProfile
 from recommendation.config import SyntheticDataConfig
 
 REFERENCE_NOW = datetime(2026, 8, 12)

@@ -3,8 +3,8 @@
 These mirror `docs/erd.jpeg` field-for-field (Category, Product, Tag,
 ProductTags, User, Cart, CartItem, Order, OrderItem, Review) and stand in
 for what a real ORM row / DB query result would look like. They exist only
-inside `recommendation.data.synthetic` and are consumed by the matching
-`InMemory*Adapter` implementations in `recommendation.data.adapters`.
+inside `recommendation.synthetic` and are consumed by the matching
+`InMemory*Adapter` implementations in `recommendation.adapters`.
 
 This is the seam a real backend integration replaces: swap the synthetic
 generator + these raw models for actual DB queries / an API client

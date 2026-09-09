@@ -8,7 +8,7 @@ way; nothing downstream imports this class directly.
 
 from __future__ import annotations
 
-from recommendation.data.adapters.base import ChatbotContextAdapter
+from recommendation.adapters.base import ChatbotContextAdapter
 from recommendation.schemas.engagement import ChatbotContextRecord
 
 

@@ -10,7 +10,7 @@ action_type in {CLICK, ADD_TO_CART, PURCHASE, SEARCH, CHATBOT}.
 This is NOT the previously-inspected data/sqlite/ecommerce.db POC (which
 used a pre-aggregated BehavioralLog table, not a per-action log) and does
 not modify it. It is also NOT the existing in-package synthetic generator
-under `recommendation.data.synthetic` (which stays as-is for unit/
+under `recommendation.synthetic` (which stays as-is for unit/
 regression tests) - this script is a separate, larger, more varied dataset
 meant for future adapter/integration experimentation.
 
@@ -41,10 +41,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 import numpy as np
 
-from recommendation.data.synthetic.affinity import product_affinity_scores, sample_product_ids
-from recommendation.data.synthetic.catalog import TAG_VOCABULARY, build_categories, build_tags
-from recommendation.data.synthetic.personas import AGE_GROUPS, PERSONA_BY_KEY, PERSONAS, Persona
-from recommendation.data.synthetic.raw_schemas import RawProduct
+from recommendation.synthetic.affinity import product_affinity_scores, sample_product_ids
+from recommendation.synthetic.catalog import TAG_VOCABULARY, build_categories, build_tags
+from recommendation.synthetic.personas import AGE_GROUPS, PERSONA_BY_KEY, PERSONAS, Persona
+from recommendation.synthetic.raw_schemas import RawProduct
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_OUT = REPO_ROOT / "data" / "sqlite" / "backend_shaped_synthetic.db"

@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from collections import defaultdict
 
-from recommendation.data.adapters.base import ReviewAdapter
+from recommendation.adapters.base import ReviewAdapter
 from recommendation.schemas.engagement import ReviewRecord
-from recommendation.data.synthetic.raw_schemas import RawReview
+from recommendation.synthetic.raw_schemas import RawReview
 
 
 class InMemoryReviewAdapter(ReviewAdapter):

@@ -1,5 +1,5 @@
-from recommendation.data.synthetic.dataset import generate_synthetic_dataset
-from recommendation.data.synthetic.validation import validate_dataset
+from recommendation.synthetic.dataset import generate_synthetic_dataset
+from recommendation.synthetic.validation import validate_dataset
 from recommendation.config import load_config
 
 

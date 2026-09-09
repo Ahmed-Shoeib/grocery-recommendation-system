@@ -1,7 +1,7 @@
 """SQLite data-access layer for the backend-shaped synthetic database.
 
 This package is the ONLY place in the codebase that knows SQL/sqlite3 -
-`recommendation.data.adapters.sqlite_factory.build_sqlite_adapters` uses it
+`recommendation.adapters.sqlite_factory.build_sqlite_adapters` uses it
 to populate the same `AdapterBundle` interface type the synthetic path
 already produces, so feature engineering, Two-Tower, the ranker, and
 serving never know (or need to know) that a request originated from a

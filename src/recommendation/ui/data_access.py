@@ -28,7 +28,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from recommendation.api.service import RecommendationService
-from recommendation.data.adapters.engagement import build_engagement_profile
+from recommendation.adapters.engagement import build_engagement_profile
 from recommendation.schemas.engagement import EngagementProfile
 from recommendation.schemas.product import Product
 from recommendation.features.user_features import UserFeatures, build_user_features

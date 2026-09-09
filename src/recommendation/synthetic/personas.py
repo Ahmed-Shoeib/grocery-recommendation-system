@@ -1,7 +1,7 @@
 """Latent grocery-shopper personas used to correlate synthetic interactions.
 
 Each persona is a soft bias over product categories and attribute tags, not
-a hard rule: `recommendation.data.synthetic.affinity` turns these weights
+a hard rule: `recommendation.synthetic.affinity` turns these weights
 plus per-user Gaussian noise into a probability distribution over the
 catalog, so e.g. a health-conscious user interacts with Greek yogurt/oats/
 protein products *more often on average*, not exclusively. This is what

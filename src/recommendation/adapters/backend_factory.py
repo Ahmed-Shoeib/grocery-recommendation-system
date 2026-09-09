@@ -26,11 +26,11 @@ SQLite factory's `User_events`-only contract).
 
 from __future__ import annotations
 
-from recommendation.data.adapters.base import AdapterBundle
-from recommendation.data.adapters.product_adapter import InMemoryProductCatalogAdapter
-from recommendation.data.adapters.review_adapter import InMemoryReviewAdapter
-from recommendation.data.adapters.user_adapter import InMemoryUserAdapter
-from recommendation.data.adapters.user_events_adapter import build_user_events_adapters
+from recommendation.adapters.base import AdapterBundle
+from recommendation.adapters.product_adapter import InMemoryProductCatalogAdapter
+from recommendation.adapters.review_adapter import InMemoryReviewAdapter
+from recommendation.adapters.user_adapter import InMemoryUserAdapter
+from recommendation.adapters.user_events_adapter import build_user_events_adapters
 from recommendation.backend.client import BackendApiClient
 from recommendation.backend.identity import ExternalIdentityResolver
 from recommendation.backend.loader import (

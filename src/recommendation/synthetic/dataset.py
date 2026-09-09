@@ -20,11 +20,11 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from recommendation.schemas.engagement import ChatbotContextRecord, ClickRecord, SearchRecord
-from recommendation.data.synthetic.catalog import build_catalog, build_categories, build_tags
-from recommendation.data.synthetic.chatbot import generate_chatbot_records
-from recommendation.data.synthetic.clicks import generate_click_records
-from recommendation.data.synthetic.interactions import generate_carts, generate_orders, generate_reviews
-from recommendation.data.synthetic.raw_schemas import (
+from recommendation.synthetic.catalog import build_catalog, build_categories, build_tags
+from recommendation.synthetic.chatbot import generate_chatbot_records
+from recommendation.synthetic.clicks import generate_click_records
+from recommendation.synthetic.interactions import generate_carts, generate_orders, generate_reviews
+from recommendation.synthetic.raw_schemas import (
     RawCart,
     RawCartItem,
     RawCategory,
@@ -36,8 +36,8 @@ from recommendation.data.synthetic.raw_schemas import (
     RawTag,
     RawUser,
 )
-from recommendation.data.synthetic.search import generate_search_records
-from recommendation.data.synthetic.users import generate_users
+from recommendation.synthetic.search import generate_search_records
+from recommendation.synthetic.users import generate_users
 from recommendation.config import AppConfig, SyntheticDataConfig, get_config
 
 

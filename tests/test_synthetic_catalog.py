@@ -1,6 +1,6 @@
 import numpy as np
 
-from recommendation.data.synthetic.catalog import (
+from recommendation.synthetic.catalog import (
     CATEGORY_ID_BY_NAME,
     TAG_VOCABULARY,
     build_catalog,

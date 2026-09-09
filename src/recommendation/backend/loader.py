@@ -1,6 +1,6 @@
 """Backend DTOs -> canonical `Raw*` / `UserInteraction` models.
 
-The exact counterpart of `recommendation.data.sqlite.loader`: it produces
+The exact counterpart of `recommendation.sqlite.loader`: it produces
 the SAME models the synthetic generator and the SQLite loader produce, so
 `adapters.backend_factory.build_backend_api_adapters` can hand them
 straight to the existing `InMemoryProductCatalogAdapter` /
@@ -34,7 +34,7 @@ from recommendation.backend.errors import BackendAuthError, BackendCredentialsEr
 from recommendation.backend.identity import ExternalIdentityResolver
 from recommendation.backend.mapping import is_known, map_action_type
 from recommendation.schemas.events import UserInteraction
-from recommendation.data.synthetic.raw_schemas import (
+from recommendation.synthetic.raw_schemas import (
     RawCategory,
     RawProduct,
     RawProductTag,
@@ -192,7 +192,7 @@ def load_backend_events(
                 product_id=product_id,
                 action_type=canonical,
                 # naive backend timestamp is treated as UTC wall-clock,
-                # matching data.sqlite.loader._parse_timestamp / the
+                # matching sqlite.loader._parse_timestamp / the
                 # reference_time convention in serving.pipeline.
                 action_time=_as_naive_utc(row.timestamp),
             )

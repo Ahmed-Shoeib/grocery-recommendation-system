@@ -168,7 +168,7 @@ Every finding is classified as one of:
 - **No TLS** - plain HTTP; a real deployment needs a reverse proxy/
   ingress terminating TLS in front of this service.
 - **Real backend REST adapters exist; live serving from them still needs
-  a retrain** - `data.adapters.backend_factory.build_backend_api_adapters`
+  a retrain** - `adapters.backend_factory.build_backend_api_adapters`
   (`paths.data_source: "backend_api"`) is a third, working `AdapterBundle`
   factory reading the real backend over its HTTP API
   (`backend.*`, docs/data-mapping.md §19): configurable base URL,

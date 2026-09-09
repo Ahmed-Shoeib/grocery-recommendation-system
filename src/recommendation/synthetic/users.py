@@ -13,9 +13,9 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from recommendation.data.synthetic.catalog import ALL_BRANDS, CATEGORY_ID_BY_NAME
-from recommendation.data.synthetic.personas import AGE_GROUPS, PERSONAS, Persona
-from recommendation.data.synthetic.raw_schemas import RawUser
+from recommendation.synthetic.catalog import ALL_BRANDS, CATEGORY_ID_BY_NAME
+from recommendation.synthetic.personas import AGE_GROUPS, PERSONAS, Persona
+from recommendation.synthetic.raw_schemas import RawUser
 from recommendation.config import SyntheticDataConfig
 
 

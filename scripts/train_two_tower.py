@@ -11,9 +11,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from recommendation.data.adapters.factory import build_synthetic_adapters
-from recommendation.data.synthetic.dataset import generate_synthetic_dataset
-from recommendation.data.synthetic.validation import validate_dataset
+from recommendation.adapters.factory import build_synthetic_adapters
+from recommendation.synthetic.dataset import generate_synthetic_dataset
+from recommendation.synthetic.validation import validate_dataset
 from recommendation.embeddings.encoder import SentenceTransformerEncoder
 from recommendation.features.pipeline import run_feature_pipeline
 from recommendation.retrieval.two_tower.serialization import save_two_tower_artifacts

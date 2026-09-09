@@ -31,10 +31,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 import numpy as np
 import tensorflow as tf
 
-from recommendation.data.adapters.sqlite_factory import build_sqlite_adapters
+from recommendation.adapters.sqlite_factory import build_sqlite_adapters
 from recommendation.schemas.events import ActionType
-from recommendation.data.sqlite.connection import open_readonly_connection
-from recommendation.data.sqlite.loader import load_events
+from recommendation.sqlite.connection import open_readonly_connection
+from recommendation.sqlite.loader import load_events
 from recommendation.embeddings.encoder import SentenceTransformerEncoder
 from recommendation.embeddings.product_embeddings import get_or_compute_product_embeddings
 from recommendation.evaluation.latency import measure_latency

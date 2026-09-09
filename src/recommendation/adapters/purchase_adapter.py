@@ -13,9 +13,9 @@ from __future__ import annotations
 
 from collections import defaultdict
 
-from recommendation.data.adapters.base import PurchaseAdapter
+from recommendation.adapters.base import PurchaseAdapter
 from recommendation.schemas.engagement import PurchaseRecord
-from recommendation.data.synthetic.raw_schemas import RawOrder, RawOrderItem
+from recommendation.synthetic.raw_schemas import RawOrder, RawOrderItem
 
 DEFAULT_COUNTED_STATUSES = frozenset({"DELIVERED", "COMPLETED"})
 

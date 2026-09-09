@@ -15,8 +15,8 @@ from datetime import datetime, timedelta
 import numpy as np
 import pytest
 
-from recommendation.data.adapters.base import UserAdapter
-from recommendation.data.adapters.review_adapter import InMemoryReviewAdapter
+from recommendation.adapters.base import UserAdapter
+from recommendation.adapters.review_adapter import InMemoryReviewAdapter
 from recommendation.schemas.events import ActionType, UserInteraction
 from recommendation.schemas.product import Product
 from recommendation.schemas.user import UserProfile

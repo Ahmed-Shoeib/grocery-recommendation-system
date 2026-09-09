@@ -28,14 +28,14 @@ import numpy as np
 import tensorflow as tf
 
 from recommendation.api.errors import UnknownUserError
-from recommendation.data.adapters.base import AdapterBundle
-from recommendation.data.adapters.backend_factory import build_backend_api_adapters
-from recommendation.data.adapters.factory import build_synthetic_adapters
-from recommendation.data.adapters.sqlite_factory import build_sqlite_adapters
+from recommendation.adapters.base import AdapterBundle
+from recommendation.adapters.backend_factory import build_backend_api_adapters
+from recommendation.adapters.factory import build_synthetic_adapters
+from recommendation.adapters.sqlite_factory import build_sqlite_adapters
 from recommendation.schemas.engagement import EngagementProfile
 from recommendation.schemas.product import Product
-from recommendation.data.synthetic.dataset import generate_synthetic_dataset
-from recommendation.data.synthetic.validation import validate_dataset
+from recommendation.synthetic.dataset import generate_synthetic_dataset
+from recommendation.synthetic.validation import validate_dataset
 from recommendation.embeddings.encoder import SentenceTransformerEncoder
 from recommendation.features.pipeline import run_feature_pipeline
 from recommendation.features.price import PriceCatalogContext, build_price_catalog_context

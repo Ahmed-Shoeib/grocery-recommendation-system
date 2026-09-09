@@ -19,7 +19,7 @@ from dataclasses import dataclass
 import numpy as np
 import tensorflow as tf
 
-from recommendation.data.adapters.base import AdapterBundle
+from recommendation.adapters.base import AdapterBundle
 from recommendation.embeddings.encoder import SentenceTransformerEncoder
 from recommendation.features.pipeline import FeaturePipelineResult
 from recommendation.features.price import build_price_catalog_context

@@ -19,11 +19,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from recommendation.data.adapters.factory import build_synthetic_adapters
+from recommendation.adapters.factory import build_synthetic_adapters
 from recommendation.schemas.engagement import EngagementProfile
 from recommendation.schemas.user import UserProfile
-from recommendation.data.synthetic.dataset import generate_synthetic_dataset
-from recommendation.data.synthetic.validation import validate_dataset
+from recommendation.synthetic.dataset import generate_synthetic_dataset
+from recommendation.synthetic.validation import validate_dataset
 from recommendation.embeddings.encoder import SentenceTransformerEncoder
 from recommendation.evaluation.latency import measure_latency
 from recommendation.features.pipeline import run_feature_pipeline

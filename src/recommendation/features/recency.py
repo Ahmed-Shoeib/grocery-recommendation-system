@@ -19,12 +19,12 @@ pre-cutoff event counts). For live serving, `reference_time` is the
 request/current time.
 
 Naive `datetime`s throughout (no `tzinfo`), matching every other timestamp
-already flowing through this codebase (`data.sqlite.loader._parse_timestamp`,
+already flowing through this codebase (`sqlite.loader._parse_timestamp`,
 `evaluation.temporal_future_purchase`'s own cutoffs) - callers must not mix
 naive and timezone-aware datetimes here.
 
 That naive representation's fixed meaning is UTC wall-clock time:
-`data.sqlite.loader._parse_timestamp` normalizes every parsed `action_time`
+`sqlite.loader._parse_timestamp` normalizes every parsed `action_time`
 to naive-UTC, and `serving.pipeline.recommend` builds its live
 `reference_time` the same way (`datetime.now(timezone.utc)`, tzinfo
 stripped) rather than from the server process's local clock - otherwise a

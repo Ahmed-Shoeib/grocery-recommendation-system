@@ -9,7 +9,7 @@ searched items, chatbot context, the user profile, and reviews into one
 
 from __future__ import annotations
 
-from recommendation.data.adapters.base import (
+from recommendation.adapters.base import (
     CartAdapter,
     ChatbotContextAdapter,
     ClickAdapter,

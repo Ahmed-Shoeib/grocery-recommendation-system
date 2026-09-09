@@ -4,7 +4,7 @@ No `SearchHistory` table exists in the ERD (docs/data-mapping.md section
 4), so this produces canonical `SearchRecord`s directly - there is no raw
 backend shape to mirror. A future real search provider (API/table/event
 pipeline) only needs to implement `SearchAdapter`
-(`recommendation.data.adapters.search_adapter`); this generator is not
+(`recommendation.adapters.search_adapter`); this generator is not
 part of that interface.
 """
 
@@ -13,11 +13,11 @@ from __future__ import annotations
 import numpy as np
 
 from recommendation.schemas.engagement import SearchRecord
-from recommendation.data.synthetic.affinity import product_affinity_scores, sample_product_ids
-from recommendation.data.synthetic.catalog import CATEGORY_NAME_BY_ID
-from recommendation.data.synthetic.personas import PERSONA_BY_KEY
-from recommendation.data.synthetic.raw_schemas import RawProduct, RawProductTag, RawTag, RawUser
-from recommendation.data.synthetic.users import UserLatentProfile
+from recommendation.synthetic.affinity import product_affinity_scores, sample_product_ids
+from recommendation.synthetic.catalog import CATEGORY_NAME_BY_ID
+from recommendation.synthetic.personas import PERSONA_BY_KEY
+from recommendation.synthetic.raw_schemas import RawProduct, RawProductTag, RawTag, RawUser
+from recommendation.synthetic.users import UserLatentProfile
 from recommendation.config import SyntheticDataConfig
 
 

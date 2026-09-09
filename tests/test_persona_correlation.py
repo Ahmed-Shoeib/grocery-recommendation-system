@@ -8,9 +8,9 @@ Uses the full default-size dataset (300 users) for stable statistics.
 
 from collections import defaultdict
 
-from recommendation.data.synthetic.catalog import CATEGORY_NAME_BY_ID
-from recommendation.data.synthetic.dataset import generate_synthetic_dataset
-from recommendation.data.synthetic.personas import PERSONA_BY_KEY
+from recommendation.synthetic.catalog import CATEGORY_NAME_BY_ID
+from recommendation.synthetic.dataset import generate_synthetic_dataset
+from recommendation.synthetic.personas import PERSONA_BY_KEY
 from recommendation.config import get_config
 
 _DATASET = generate_synthetic_dataset(get_config())

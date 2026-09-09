@@ -3,7 +3,7 @@ canonical schemas the synthetic generator path already uses.
 
 Every function here does a `SELECT *`-equivalent read and maps each row
 into an existing pydantic model - `RawCategory`/`RawTag`/`RawProduct`/
-`RawProductTag`/`RawUser`/`RawReview` (`recommendation.data.synthetic
+`RawProductTag`/`RawUser`/`RawReview` (`recommendation.synthetic
 .raw_schemas` - despite the module path, these are ERD-shaped models, not
 synthetic-specific ones; see that module's docstring) or `UserInteraction`
 (`recommendation.schemas.events`). This is deliberate: it lets
@@ -26,7 +26,7 @@ import sqlite3
 from datetime import datetime, timezone
 
 from recommendation.schemas.events import ActionType, UserInteraction
-from recommendation.data.synthetic.raw_schemas import (
+from recommendation.synthetic.raw_schemas import (
     RawCategory,
     RawProduct,
     RawProductTag,

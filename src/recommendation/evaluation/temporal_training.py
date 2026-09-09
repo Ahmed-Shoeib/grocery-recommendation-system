@@ -66,7 +66,7 @@ from datetime import datetime
 import numpy as np
 import tensorflow as tf
 
-from recommendation.data.adapters.base import ReviewAdapter, UserAdapter
+from recommendation.adapters.base import ReviewAdapter, UserAdapter
 from recommendation.schemas.events import ActionType, UserInteraction
 from recommendation.schemas.product import Product
 from recommendation.evaluation.retrieval_metrics import (

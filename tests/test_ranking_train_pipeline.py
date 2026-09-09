@@ -11,8 +11,8 @@ import hashlib
 import numpy as np
 import pytest
 
-from recommendation.data.adapters.factory import build_synthetic_adapters
-from recommendation.data.synthetic.dataset import generate_synthetic_dataset
+from recommendation.adapters.factory import build_synthetic_adapters
+from recommendation.synthetic.dataset import generate_synthetic_dataset
 from recommendation.features.pipeline import run_feature_pipeline
 from recommendation.ranking.serialization import load_ranker_artifacts, save_ranker_artifacts
 from recommendation.ranking.train import train_ranker

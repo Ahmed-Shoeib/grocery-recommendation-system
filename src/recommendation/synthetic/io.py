@@ -15,8 +15,8 @@ from pathlib import Path
 from pydantic import TypeAdapter
 
 from recommendation.schemas.engagement import ChatbotContextRecord, ClickRecord, SearchRecord
-from recommendation.data.synthetic.dataset import SyntheticDataset
-from recommendation.data.synthetic.raw_schemas import (
+from recommendation.synthetic.dataset import SyntheticDataset
+from recommendation.synthetic.raw_schemas import (
     RawCart,
     RawCartItem,
     RawCategory,

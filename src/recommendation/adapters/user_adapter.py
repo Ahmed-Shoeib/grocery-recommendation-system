@@ -10,9 +10,9 @@ raises, it just yields a profile with less signal.
 
 from __future__ import annotations
 
-from recommendation.data.adapters.base import UserAdapter
+from recommendation.adapters.base import UserAdapter
 from recommendation.schemas.user import UserProfile
-from recommendation.data.synthetic.raw_schemas import RawCategory, RawUser
+from recommendation.synthetic.raw_schemas import RawCategory, RawUser
 
 
 class InMemoryUserAdapter(UserAdapter):

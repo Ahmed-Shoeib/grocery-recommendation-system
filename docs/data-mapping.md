@@ -163,7 +163,7 @@ etc.) are needed on `User_events` itself.
 
 `schemas.events.UserInteraction` (`user_id`, `product_id`,
 `action_type`, `action_time`) is the canonical, source-agnostic shape of
-one `User_events` row. `data.adapters.user_events_adapter
+one `User_events` row. `adapters.user_events_adapter
 .UserEventsAdapter` is the seam that will translate real `User_events`
 rows into `UserInteraction`s and, from there, into the SAME per-signal
 canonical records (`ClickRecord`, `PurchaseRecord`, `CartAffinityRecord`,
@@ -187,7 +187,7 @@ Future (real backend):
 ```
 
 `build_user_events_adapters(events, products_adapter, users_adapter,
-reviews_adapter)` (`data.adapters.user_events_adapter`) is the real-backend
+reviews_adapter)` (`adapters.user_events_adapter`) is the real-backend
 counterpart of today's `build_synthetic_adapters` - it returns the same
 `AdapterBundle` type, so no call site depending on it needs to change once
 a real `User_events` query replaces the synthetic generators.
@@ -263,14 +263,14 @@ individually timestamped) - replacing an earlier-inspected POC
 (`ecommerce.db`) that used a pre-aggregated, non-conforming activity table
 and is kept only as an untouched historical reference, not integrated.
 
-`recommendation.data.adapters.sqlite_factory.build_sqlite_adapters` is the
+`recommendation.adapters.sqlite_factory.build_sqlite_adapters` is the
 adapter path for this source - the SQLite counterpart of
 `adapters.factory.build_synthetic_adapters`, returning the exact same
 `AdapterBundle` type:
 
 ```
 data/sqlite/backend_shaped_synthetic.db
-    -> recommendation.data.sqlite.loader (SQL -> RawCategory/RawProduct/
+    -> recommendation.sqlite.loader (SQL -> RawCategory/RawProduct/
        RawUser/RawReview/UserInteraction - the SAME raw/canonical models
        the synthetic generator path already produces)
     -> InMemoryProductCatalogAdapter / InMemoryUserAdapter /
@@ -281,14 +281,14 @@ data/sqlite/backend_shaped_synthetic.db
 ```
 
 No new adapter *classes* were needed - only the SQL-to-Raw-object mapping
-in `data.sqlite.loader`. Access is read-only (`data.sqlite.connection
+in `sqlite.loader`. Access is read-only (`sqlite.connection
 .open_readonly_connection`, SQLite `mode=ro` URI - verified to actually
 reject writes, not just a naming convention); this dataset must never be
 mutated by the recommender.
 
 **Purchase/cart authoritative source (avoiding double-counting):**
 `User_events` (`action_type = PURCHASE` / `ADD_TO_CART`) is the sole
-engagement-truth source consumed by this adapter path. `data.sqlite.loader`
+engagement-truth source consumed by this adapter path. `sqlite.loader`
 never queries `Cart`/`Cart_Item` or `"Order"`/`Order_Item` at all -
 those tables exist in the database (kept relationally consistent with
 `User_events` by the generator, see `scripts
@@ -318,7 +318,7 @@ scope boundary.
 
 **Future real backend integration:** per this section's flow above,
 swapping this database for a real backend DB/API means writing a new
-`build_<real>_adapters` factory (or updating `data.sqlite.loader`'s SQL if
+`build_<real>_adapters` factory (or updating `sqlite.loader`'s SQL if
 the real backend also happens to be SQLite/SQL-compatible) - it does not
 mean touching `EngagementProfile`, feature engineering, Two-Tower, the
 ranker, or serving. The adapter boundary is exactly where this integration
@@ -557,7 +557,7 @@ leave-one-out-by-product-id protocol (`retrieval.two_tower.splitting`,
 currently-trained Two-Tower/ranker artifacts under `models/` were fit
 against; it remains what `scripts/train_two_tower.py`/`train_ranker.py`/
 `run_pipeline.py` use. The temporal protocol targets `data
-/sqlite/backend_shaped_synthetic.db` (via `data.adapters.sqlite_factory
+/sqlite/backend_shaped_synthetic.db` (via `adapters.sqlite_factory
 .build_sqlite_adapters`), which has real per-event `action_time` values -
 **this database is entirely SYNTHETIC, mirroring the expected backend
 structure; it is NOT real production data**, and must never be described
@@ -895,7 +895,7 @@ implementation of Phase N," not as an independent stage after Phase 11.
 |---|---|
 | §2 UserProfile fields | Phase 2 |
 | §3 Cold-start tiers | Phase 7 - originally four signals, now sized against five (click added to the canonical `User_events` contract, Phase 2) |
-| §4 Click/Search/Chatbot adapters; `User_events` contract, `UserInteraction`, `UserEventsAdapter` | Phase 2 - search/chatbot synthetic adapters, the confirmed `User_events` contract (click signal + synthetic adapter, `UserInteraction` canonical event, `UserEventsAdapter` future real-backend adapter, action_time preservation), and the backend-shaped SQLite integration (`backend_shaped_synthetic.db`, `adapters.sqlite_factory.build_sqlite_adapters`, `data.sqlite.*`) |
+| §4 Click/Search/Chatbot adapters; `User_events` contract, `UserInteraction`, `UserEventsAdapter` | Phase 2 - search/chatbot synthetic adapters, the confirmed `User_events` contract (click signal + synthetic adapter, `UserInteraction` canonical event, `UserEventsAdapter` future real-backend adapter, action_time preservation), and the backend-shaped SQLite integration (`backend_shaped_synthetic.db`, `adapters.sqlite_factory.build_sqlite_adapters`, `sqlite.*`) |
 | §5 Eligibility/business rules policy (hard pre-retrieval gate + final lightweight validation) | Phase 7 (policy interface, originally applied last) / Phase 11 (moved to a hard pre-retrieval gate) |
 | §6 Popularity | Phase 2 (data) / Phase 7 (fallback ranking) |
 | §8 Offline evaluation | Phase 4 (Recall/HitRate) / Phase 5 (latency) / Phase 6 (Precision/NDCG/MRR) / Phase 7 (coverage/diversity/duplicate/fill-rate/cold-start/pipeline latency) / Phase 8 (HTTP end-to-end latency) |
@@ -1537,7 +1537,7 @@ kind, and imports none of `api.service`, `serving.*`,
 correctness bug, not new functionality): now branches on the new
 `config.paths.data_source: Literal["synthetic", "sqlite"]` setting
 (default `"sqlite"` - `configs/base.yaml`/`configs/docker.yaml`, override
-via `RECS_DATA_SOURCE`). `"sqlite"` builds `data.adapters.sqlite_factory
+via `RECS_DATA_SOURCE`). `"sqlite"` builds `adapters.sqlite_factory
 .build_sqlite_adapters()` and loads artifacts from
 `{models_dir}/sqlite_baseline/{two_tower,ranker}` (the STEP 7/8 approved
 RECENCY+PRICE artifacts: item_numeric=9, user_numeric=9, ranker=29
@@ -1567,7 +1567,7 @@ layer, and passes it explicitly into `build_user_features()`. No
 feature functions themselves. `datetime.now()` (naive, no `tzinfo`) is
 the deliberate, CONSISTENT choice: every SQLite-sourced timestamp in this
 project is parsed via `datetime.fromisoformat()` without a timezone
-(`data.adapters.sqlite_*`), so comparing a naive "now" against naive
+(`adapters.sqlite_*`), so comparing a naive "now" against naive
 event timestamps is correct; introducing `datetime.now(timezone.utc)`
 here would silently break every age-in-days computation by mixing aware
 and naive datetimes. (The API's own `RecommendationMeta.generated_at`
@@ -1892,7 +1892,7 @@ those canonical signals are simply never produced by this source (which
 
 Timestamps: `/api/user-activities` `timestamp` is naive (no offset). It
 is treated as UTC wall-clock - byte-for-byte the convention
-`data.sqlite.loader._parse_timestamp` and `serving.pipeline`'s
+`sqlite.loader._parse_timestamp` and `serving.pipeline`'s
 `reference_time` already use (section 4's "Timestamps", the STEP handling
 UTC), so recency weighting and temporal logic need no change.
 

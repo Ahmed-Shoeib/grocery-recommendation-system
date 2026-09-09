@@ -1,18 +1,18 @@
-from recommendation.data.adapters.cart_adapter import InMemoryCartAdapter
-from recommendation.data.adapters.chatbot_adapter import SyntheticChatbotAdapter
-from recommendation.data.adapters.click_adapter import SyntheticClickAdapter
-from recommendation.data.adapters.engagement import build_engagement_profile
-from recommendation.data.adapters.factory import build_synthetic_adapters
-from recommendation.data.adapters.product_adapter import InMemoryProductCatalogAdapter
-from recommendation.data.adapters.purchase_adapter import InMemoryPurchaseAdapter
-from recommendation.data.adapters.review_adapter import InMemoryReviewAdapter
-from recommendation.data.adapters.search_adapter import SyntheticSearchAdapter
-from recommendation.data.adapters.user_adapter import InMemoryUserAdapter
-from recommendation.data.adapters.user_events_adapter import UserEventsAdapter, build_user_events_adapters
+from recommendation.adapters.cart_adapter import InMemoryCartAdapter
+from recommendation.adapters.chatbot_adapter import SyntheticChatbotAdapter
+from recommendation.adapters.click_adapter import SyntheticClickAdapter
+from recommendation.adapters.engagement import build_engagement_profile
+from recommendation.adapters.factory import build_synthetic_adapters
+from recommendation.adapters.product_adapter import InMemoryProductCatalogAdapter
+from recommendation.adapters.purchase_adapter import InMemoryPurchaseAdapter
+from recommendation.adapters.review_adapter import InMemoryReviewAdapter
+from recommendation.adapters.search_adapter import SyntheticSearchAdapter
+from recommendation.adapters.user_adapter import InMemoryUserAdapter
+from recommendation.adapters.user_events_adapter import UserEventsAdapter, build_user_events_adapters
 from recommendation.schemas.engagement import ClickRecord, EngagementProfile
 from recommendation.schemas.events import ActionType, UserInteraction
-from recommendation.data.synthetic.dataset import generate_synthetic_dataset
-from recommendation.data.synthetic.raw_schemas import (
+from recommendation.synthetic.dataset import generate_synthetic_dataset
+from recommendation.synthetic.raw_schemas import (
     RawCart,
     RawCartItem,
     RawCategory,

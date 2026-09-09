@@ -12,7 +12,7 @@ just report.
 
 from __future__ import annotations
 
-from recommendation.data.synthetic.dataset import SyntheticDataset
+from recommendation.synthetic.dataset import SyntheticDataset
 
 
 def validate_dataset(dataset: SyntheticDataset) -> list[str]:

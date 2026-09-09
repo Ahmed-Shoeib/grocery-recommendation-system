@@ -284,7 +284,7 @@ def test_canonical_reviews_reach_the_shared_review_adapter(tmp_path):
     per-user `ReviewRecord`s with resolved internal ids and the right
     rating/product mapping.
     """
-    from recommendation.data.adapters.review_adapter import InMemoryReviewAdapter
+    from recommendation.adapters.review_adapter import InMemoryReviewAdapter
     from recommendation.features.product_features import compute_review_stats
 
     catalog = _catalog_with_backend_ids(tmp_path, {3: 11, 4: 12})

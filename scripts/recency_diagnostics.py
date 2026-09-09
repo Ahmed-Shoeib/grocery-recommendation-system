@@ -29,10 +29,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from recommendation.data.adapters.engagement import build_engagement_profile
-from recommendation.data.adapters.sqlite_factory import build_sqlite_adapters
-from recommendation.data.sqlite.connection import open_readonly_connection
-from recommendation.data.sqlite.loader import load_events
+from recommendation.adapters.engagement import build_engagement_profile
+from recommendation.adapters.sqlite_factory import build_sqlite_adapters
+from recommendation.sqlite.connection import open_readonly_connection
+from recommendation.sqlite.loader import load_events
 from recommendation.features.recency import recency_weight
 from recommendation.features.user_features import build_user_features
 from recommendation.config import RecencyConfig, get_config

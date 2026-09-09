@@ -29,9 +29,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from recommendation.data.adapters.sqlite_factory import build_sqlite_adapters
-from recommendation.data.sqlite.connection import open_readonly_connection
-from recommendation.data.sqlite.loader import load_events
+from recommendation.adapters.sqlite_factory import build_sqlite_adapters
+from recommendation.sqlite.connection import open_readonly_connection
+from recommendation.sqlite.loader import load_events
 from recommendation.evaluation.temporal_future_purchase import (
     DEFAULT_MIN_PURCHASE_EVENTS_FOR_FULL_SPLIT,
     TemporalEligibilityTier,

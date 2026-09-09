@@ -45,7 +45,7 @@ from dataclasses import dataclass, field
 import numpy as np
 import tensorflow as tf
 
-from recommendation.data.adapters.base import AdapterBundle
+from recommendation.adapters.base import AdapterBundle
 from recommendation.schemas.product import Product
 from recommendation.features.price import PriceCatalogContext
 from recommendation.features.product_features import ProductFeatures
@@ -329,7 +329,7 @@ def recommend(
     `reference_time=` the current naive-UTC time (wall-clock "now" is
     legitimate here, unlike in offline evaluation or the non-temporal
     training path). Deliberately UTC, not the server process's local
-    clock (`datetime.now()`) - `data.sqlite.loader._parse_timestamp`
+    clock (`datetime.now()`) - `sqlite.loader._parse_timestamp`
     parses every `action_time` under the same naive-UTC convention, so a
     fresh `User_events` row (see `api.service.RecommendationService
     .maybe_refresh`) compares correctly against this reference_time
@@ -347,13 +347,13 @@ def recommend(
     """
     from datetime import datetime, timezone
 
-    from recommendation.data.adapters.engagement import build_engagement_profile
+    from recommendation.adapters.engagement import build_engagement_profile
 
     profile = build_engagement_profile(
         user_id, bundle.users, bundle.purchases, bundle.cart, bundle.clicks, bundle.search, bundle.chatbot, bundle.reviews
     )
     # Naive UTC "now" - NOT datetime.now() (the server process's local
-    # clock) - so this matches data.sqlite.loader._parse_timestamp's
+    # clock) - so this matches sqlite.loader._parse_timestamp's
     # naive-UTC parsing convention regardless of server timezone. See this
     # function's docstring.
     now_utc_naive = datetime.now(timezone.utc).replace(tzinfo=None)

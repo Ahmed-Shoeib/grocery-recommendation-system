@@ -1,7 +1,7 @@
-from recommendation.data.synthetic.dataset import generate_synthetic_dataset
-from recommendation.data.synthetic.io import load_dataset, save_dataset
-from recommendation.data.synthetic.raw_schemas import RawOrder, RawOrderItem
-from recommendation.data.synthetic.validation import validate_dataset
+from recommendation.synthetic.dataset import generate_synthetic_dataset
+from recommendation.synthetic.io import load_dataset, save_dataset
+from recommendation.synthetic.raw_schemas import RawOrder, RawOrderItem
+from recommendation.synthetic.validation import validate_dataset
 from recommendation.config import get_config
 
 

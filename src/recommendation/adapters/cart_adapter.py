@@ -9,9 +9,9 @@ from __future__ import annotations
 
 from collections import defaultdict
 
-from recommendation.data.adapters.base import CartAdapter
+from recommendation.adapters.base import CartAdapter
 from recommendation.schemas.engagement import CartAffinityRecord
-from recommendation.data.synthetic.raw_schemas import RawCart, RawCartItem
+from recommendation.synthetic.raw_schemas import RawCart, RawCartItem
 
 
 class InMemoryCartAdapter(CartAdapter):

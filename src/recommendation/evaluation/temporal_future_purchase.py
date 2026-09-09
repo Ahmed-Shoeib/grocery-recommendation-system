@@ -11,7 +11,7 @@ replacement for it - that protocol is what the currently-trained Two-Tower/
 ranker artifacts were fit against and remains the one used by
 `scripts/train_two_tower.py`/`train_ranker.py`/`run_pipeline.py`. This
 module targets `data/sqlite/backend_shaped_synthetic.db` (via the SQLite
-adapters, `data.adapters.sqlite_factory`), which has real per-event
+adapters, `adapters.sqlite_factory`), which has real per-event
 timestamps the original protocol was explicitly designed to work without
 (see docs/data-mapping.md section 1/7/12's "V1 leakage limitation - no
 timestamps").
@@ -57,9 +57,9 @@ from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 
-from recommendation.data.adapters.base import ReviewAdapter, UserAdapter
-from recommendation.data.adapters.user_events_adapter import UserEventsAdapter
-from recommendation.data.adapters.engagement import build_engagement_profile
+from recommendation.adapters.base import ReviewAdapter, UserAdapter
+from recommendation.adapters.user_events_adapter import UserEventsAdapter
+from recommendation.adapters.engagement import build_engagement_profile
 from recommendation.schemas.engagement import EngagementProfile
 from recommendation.schemas.events import ActionType, UserInteraction
 from recommendation.features.product_features import ProductFeatures

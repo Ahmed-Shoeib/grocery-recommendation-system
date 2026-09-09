@@ -6,7 +6,7 @@ Proves end to end:
     backend REST API (/api/products, /api/categories, /api/user-activities,
                       + service-auth-gated /api/users/{guid}, /api/reviews)
         -> recommendation.backend.client / auth / loader / identity
-        -> recommendation.data.adapters.backend_factory.build_backend_api_adapters
+        -> recommendation.adapters.backend_factory.build_backend_api_adapters
         -> canonical AdapterBundle / EngagementProfile
         -> existing feature engineering + cold-start tiering + eligibility gate
 
@@ -34,8 +34,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from recommendation.data.adapters.backend_factory import build_backend_api_adapters
-from recommendation.data.adapters.engagement import build_engagement_profile
+from recommendation.adapters.backend_factory import build_backend_api_adapters
+from recommendation.adapters.engagement import build_engagement_profile
 from recommendation.backend.auth import ENV_CLIENT_ID, ENV_CLIENT_SECRET
 from recommendation.backend.client import BackendApiClient
 from recommendation.backend.errors import BackendApiError, BackendAuthError

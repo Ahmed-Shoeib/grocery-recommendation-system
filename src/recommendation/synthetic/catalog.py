@@ -20,7 +20,7 @@ import re
 
 import numpy as np
 
-from recommendation.data.synthetic.raw_schemas import RawCategory, RawProduct, RawProductTag, RawTag
+from recommendation.synthetic.raw_schemas import RawCategory, RawProduct, RawProductTag, RawTag
 
 # --- Categories -------------------------------------------------------
 # (id, name, parent_id)

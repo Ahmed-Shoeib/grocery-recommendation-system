@@ -10,8 +10,8 @@ import hashlib
 import numpy as np
 import pytest
 
-from recommendation.data.adapters.factory import build_synthetic_adapters
-from recommendation.data.synthetic.dataset import generate_synthetic_dataset
+from recommendation.adapters.factory import build_synthetic_adapters
+from recommendation.synthetic.dataset import generate_synthetic_dataset
 from recommendation.features.pipeline import run_feature_pipeline
 from recommendation.ranking.train import train_ranker
 from recommendation.retrieval.index.factory import build_vector_index

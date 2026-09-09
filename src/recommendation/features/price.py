@@ -32,7 +32,7 @@ Layers, cheapest to most derived:
 transaction price) is populated ONLY for the ERD-based synthetic path
 (`Order`/`OrderItem.UnitPrice`) - the confirmed `User_events` contract
 (and therefore the SQLite-sourced path) carries no price at all (see
-`data.adapters.user_events_adapter` module docstring: "`User_events`
+`adapters.user_events_adapter` module docstring: "`User_events`
 never carries order_id, unit_price, quantity..."). For a `User_events`-
 sourced purchase, `build_user_price_profile` falls back to the product's
 CURRENT `effective_price` as the best available proxy for "what did this

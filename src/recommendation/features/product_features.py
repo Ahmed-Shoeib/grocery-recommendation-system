@@ -5,7 +5,7 @@ useful ranking signals a text encoder can't see, and purchase/cart/review
 aggregates give a recency-free "global popularity" / rating signal (per
 docs/data-mapping.md section 6 - no "trending", just all-time counts).
 
-Depends only on `recommendation.data.adapters.base` interfaces and
+Depends only on `recommendation.adapters.base` interfaces and
 `recommendation.schemas`, never on synthetic internals, so it works
 unchanged once real adapters replace the synthetic ones.
 

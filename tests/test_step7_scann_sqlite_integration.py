@@ -148,7 +148,7 @@ def test_scann_and_faiss_agree_on_step7_embeddings(two_tower_artifacts):
 # --- eligibility still excludes inactive/out-of-stock ----------------------
 
 def test_pre_retrieval_eligibility_excludes_inactive_and_out_of_stock(two_tower_artifacts):
-    from recommendation.data.adapters.sqlite_factory import build_sqlite_adapters
+    from recommendation.adapters.sqlite_factory import build_sqlite_adapters
     from recommendation.features.product_features import build_product_features
     from recommendation.retrieval.index.eligibility_filter import EligibilityRestrictedIndex
     from recommendation.retrieval.index.scann_index import ScannVectorIndex
@@ -176,8 +176,8 @@ def test_pre_retrieval_eligibility_excludes_inactive_and_out_of_stock(two_tower_
 # --- full SQLite-trained pipeline produces recommendations with ScaNN -----
 
 def test_full_pipeline_produces_valid_recommendations_with_scann(two_tower_artifacts, ranker_artifacts):
-    from recommendation.data.adapters.engagement import build_engagement_profile
-    from recommendation.data.adapters.sqlite_factory import build_sqlite_adapters
+    from recommendation.adapters.engagement import build_engagement_profile
+    from recommendation.adapters.sqlite_factory import build_sqlite_adapters
     from recommendation.embeddings.encoder import SentenceTransformerEncoder
     from recommendation.embeddings.product_embeddings import get_or_compute_product_embeddings
     from recommendation.features.price import build_price_catalog_context

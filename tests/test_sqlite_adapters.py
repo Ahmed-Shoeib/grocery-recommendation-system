@@ -1,5 +1,5 @@
 """Tests for the SQLite integration layer:
-`recommendation.data.sqlite.*` + `adapters.sqlite_factory.build_sqlite_adapters`.
+`recommendation.sqlite.*` + `adapters.sqlite_factory.build_sqlite_adapters`.
 
 Runs against the real, committed `data/sqlite/backend_shaped_synthetic.db`
 (deterministically generated - see `scripts/generate_backend_shaped_sqlite.py`)
@@ -17,10 +17,10 @@ from datetime import datetime
 
 import pytest
 
-from recommendation.data.adapters.engagement import build_engagement_profile
-from recommendation.data.adapters.sqlite_factory import build_sqlite_adapters
-from recommendation.data.sqlite.connection import open_readonly_connection
-from recommendation.data.sqlite.loader import load_events, load_reviews
+from recommendation.adapters.engagement import build_engagement_profile
+from recommendation.adapters.sqlite_factory import build_sqlite_adapters
+from recommendation.sqlite.connection import open_readonly_connection
+from recommendation.sqlite.loader import load_events, load_reviews
 from recommendation.config import get_config, resolve_path
 
 DB_PATH = resolve_path(get_config().paths.data_sqlite)
@@ -276,7 +276,7 @@ def test_loader_module_never_queries_cart_or_order_tables():
     """
     import inspect
 
-    from recommendation.data.sqlite import loader
+    from recommendation.sqlite import loader
 
     source = inspect.getsource(loader)
     for forbidden in ("FROM Cart_Item", "FROM Order_Item", 'FROM "Order"'):

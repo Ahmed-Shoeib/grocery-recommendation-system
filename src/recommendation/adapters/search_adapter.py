@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 
-from recommendation.data.adapters.base import SearchAdapter
+from recommendation.adapters.base import SearchAdapter
 from recommendation.schemas.engagement import SearchRecord
 
 

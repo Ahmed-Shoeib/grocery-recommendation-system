@@ -1,7 +1,7 @@
 """Sanity-check-only script (no training) proving:
 
     data/sqlite/backend_shaped_synthetic.db
-        -> SQLite adapters (recommendation.data.adapters.sqlite_factory)
+        -> SQLite adapters (recommendation.adapters.sqlite_factory)
         -> canonical EngagementProfile / UserFeatures / ProductFeatures
         -> existing feature engineering
 
@@ -20,8 +20,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from recommendation.data.adapters.engagement import build_engagement_profile
-from recommendation.data.adapters.sqlite_factory import build_sqlite_adapters
+from recommendation.adapters.engagement import build_engagement_profile
+from recommendation.adapters.sqlite_factory import build_sqlite_adapters
 from recommendation.features.pipeline import run_feature_pipeline
 from recommendation.serving.cold_start import determine_history_tier
 from recommendation.serving.eligibility import apply_eligibility, build_eligibility_rules

@@ -12,7 +12,7 @@ shapes:
         -> recommendation.backend.dtos      (external response models)
         -> recommendation.backend.loader    (DTO -> Raw* / UserInteraction,
                                                    via ExternalIdentityResolver)
-        -> recommendation.data.adapters.backend_factory.build_backend_api_adapters
+        -> recommendation.adapters.backend_factory.build_backend_api_adapters
         -> AdapterBundle   (identical interface to the synthetic / SQLite paths)
         -> EngagementProfile -> feature engineering -> Two-Tower -> ranker -> serving
 

@@ -29,11 +29,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from recommendation.data.adapters.engagement import build_engagement_profile
-from recommendation.data.adapters.sqlite_factory import build_sqlite_adapters
+from recommendation.adapters.engagement import build_engagement_profile
+from recommendation.adapters.sqlite_factory import build_sqlite_adapters
 from recommendation.schemas.events import ActionType
-from recommendation.data.sqlite.connection import open_readonly_connection
-from recommendation.data.sqlite.loader import load_events
+from recommendation.sqlite.connection import open_readonly_connection
+from recommendation.sqlite.loader import load_events
 from recommendation.features.price import build_price_catalog_context, price_relative_distance
 from recommendation.features.product_features import build_product_features
 from recommendation.features.user_features import UserFeatures, build_user_features

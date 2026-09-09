@@ -1,6 +1,6 @@
 """Focused tests for the timestamp/timezone fix.
 
-`data.sqlite.loader._parse_timestamp` and `serving.pipeline.recommend`'s
+`sqlite.loader._parse_timestamp` and `serving.pipeline.recommend`'s
 `reference_time` construction now share one explicit convention: a naive
 datetime (no `tzinfo`) always represents UTC wall-clock time; a value that
 DOES carry explicit offset/`Z` info is converted to UTC first. Before this
@@ -28,7 +28,7 @@ from types import SimpleNamespace
 import pytest
 
 from recommendation.api.service import _load_data_snapshot
-from recommendation.data.sqlite.loader import _parse_timestamp
+from recommendation.sqlite.loader import _parse_timestamp
 from recommendation.features.recency import RecencyLeakageError
 from recommendation.features.user_features import build_user_features
 from recommendation.config import AppConfig, PathsConfig, get_config, resolve_path

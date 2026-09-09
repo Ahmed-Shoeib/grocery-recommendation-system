@@ -19,7 +19,7 @@ from fastapi.testclient import TestClient
 from recommendation.api import routes as routes_module
 from recommendation.api.app import create_app
 from recommendation.api.service import RecommendationService, resolve_models_root
-from recommendation.data.adapters.base import (
+from recommendation.adapters.base import (
     AdapterBundle,
     CartAdapter,
     ChatbotContextAdapter,

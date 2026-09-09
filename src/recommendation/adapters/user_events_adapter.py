@@ -38,7 +38,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 
-from recommendation.data.adapters.base import (
+from recommendation.adapters.base import (
     CartAdapter,
     ChatbotContextAdapter,
     ClickAdapter,
@@ -47,7 +47,7 @@ from recommendation.data.adapters.base import (
     SearchAdapter,
     UserAdapter,
 )
-from recommendation.data.adapters.base import AdapterBundle, ProductCatalogAdapter
+from recommendation.adapters.base import AdapterBundle, ProductCatalogAdapter
 from recommendation.schemas.engagement import (
     CartAffinityRecord,
     ChatbotContextRecord,

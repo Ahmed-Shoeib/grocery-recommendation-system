@@ -9,9 +9,9 @@ callers, since both return `recommendation.schemas.product.Product`.
 
 from __future__ import annotations
 
-from recommendation.data.adapters.base import ProductCatalogAdapter
+from recommendation.adapters.base import ProductCatalogAdapter
 from recommendation.schemas.product import Product
-from recommendation.data.synthetic.raw_schemas import RawCategory, RawProduct, RawProductTag, RawTag
+from recommendation.synthetic.raw_schemas import RawCategory, RawProduct, RawProductTag, RawTag
 
 
 class InMemoryProductCatalogAdapter(ProductCatalogAdapter):

@@ -2,7 +2,7 @@
 
 `product_features.py` and `user_features.py` consume only the canonical
 schemas (`recommendation.schemas`); `pipeline.py` is the one place
-that also depends on `recommendation.data.adapters.base.AdapterBundle` (an
+that also depends on `recommendation.adapters.base.AdapterBundle` (an
 interface type, not a concrete synthetic/backend implementation) to wire
 everything together end to end.
 """

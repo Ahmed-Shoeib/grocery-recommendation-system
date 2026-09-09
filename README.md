@@ -270,18 +270,17 @@ docs/
   data-mapping.md            ERD reconciliation, scope boundaries, every design decision's rationale
   production-readiness.md    Critical review (Ready now / Acceptable limitation / Must address / Future)
 models/                     Serialized model artifacts (gitignored - regenerable). sqlite_baseline/ = current SQLite-serving artifacts + the persisted offline report.
-src/recommendation/
+src/recommendation/          one package per architectural concern - depth 2, no grouping-only parent folders
   config.py                  All config models + YAML/env loading (RECS_* overrides) - the single most-imported module
   logging.py                 Centralized logging setup (setup_logging / get_logger)
   schemas/                   Canonical pydantic contracts (Category, Product, UserProfile, EngagementProfile, UserInteraction, ...) - source-agnostic; the stability boundary every layer depends on
   backend/                   Real backend HTTP integration (the ONLY code that speaks HTTP): auth (service token), client, dtos, identity resolver, loader, action-type mapping
-  data/                      Turning a data source into canonical schemas
-    adapters/                Canonical adapter layer (8 ABCs + in-memory impls) + the synthetic / sqlite / backend adapter factories
-    sqlite/                  SQLite baseline source loader (connection + raw-row -> Raw* mapping)
-    synthetic/               Synthetic dataset generator (personas, catalog, interactions, ...)
+  adapters/                  Canonical adapter layer (8 ABCs + in-memory impls) + the synthetic / sqlite / backend adapter factories - the boundary every data source maps INTO
+  sqlite/                    SQLite baseline source loader (connection + raw-row -> Raw* mapping)
+  synthetic/                 Synthetic dataset generator (personas, catalog, interactions, ...)
   embeddings/                Sentence-Transformer product-text encoding + cache
   features/                  EngagementProfile -> user / product feature vectors (price, recency, pipeline)
-  retrieval/                 Candidate generation
+  retrieval/                 Candidate generation - the one place two levels deep, because the model and the ANN index are substantial independent concerns:
     two_tower/               User Tower / Item Tower model + training + feature encoding
     index/                   VectorIndex (ScaNN primary/production - Docker, FAISS Windows dev fallback) + EligibilityRestrictedIndex (query-time pre-retrieval eligibility wrapper)
   ranking/                   Neural ranker over VectorIndex candidates (features, model, train, evaluation, serialization)
@@ -303,6 +302,8 @@ docker-compose.yml           train (profile-gated) / api / dashboard orchestrati
 | Backend API calls (HTTP, retries, TLS, pagination) | `backend/client.py` |
 | Service-auth token exchange | `backend/auth.py` |
 | Backend wire DTOs | `backend/dtos.py` |
+| Data adapters (any source -> canonical schemas) | `adapters/` - `base.py` (8 ABCs) + `factory.py` / `sqlite_factory.py` / `backend_factory.py` |
+| SQLite / synthetic source loaders | `sqlite/`, `synthetic/` |
 | Canonical internal schemas | `schemas/` (`product.py`, `user.py`, `engagement.py`, `events.py`, `category.py`) |
 | Feature construction | `features/` (`user_features.py`, `product_features.py`, `price.py`, `recency.py`, `pipeline.py`) |
 | Two-Tower model | `retrieval/two_tower/model.py` |
@@ -650,11 +651,11 @@ Summarized here; full rationale for each in `docs/data-mapping.md` and
 ### How the real backend will replace synthetic adapters
 
 Every model/feature/serving component depends on the `AdapterBundle`
-interface (`src/recommendation/data/adapters/base.py`) - eight ABCs
+interface (`src/recommendation/adapters/base.py`) - eight ABCs
 (`ProductCatalogAdapter`, `UserAdapter`, `PurchaseAdapter`,
 `CartAdapter`, `ClickAdapter`, `ReviewAdapter`, `SearchAdapter`,
 `ChatbotContextAdapter`) - never on the fact that
-`data.adapters.factory.build_synthetic_adapters` currently populates
+`adapters.factory.build_synthetic_adapters` currently populates
 them from in-memory synthetic data. Pointing the system at the real
 backend is: implement one `build_backend_adapters(...)` factory
 returning the same `AdapterBundle` from real SQL/API calls, then swap
@@ -662,7 +663,7 @@ the one call site (`scripts/*.py`, `api.service
 .build_recommendation_service`) - no change to features, models,
 ranking, re-ranking, eligibility, the API, or the dashboard.
 
-This pattern is no longer just theoretical: `data.adapters.sqlite_factory
+This pattern is no longer just theoretical: `adapters.sqlite_factory
 .build_sqlite_adapters` is a second, working `AdapterBundle` factory,
 reading the backend-ERD-shaped, entirely-synthetic
 `data/sqlite/backend_shaped_synthetic.db` (`scripts
@@ -673,7 +674,7 @@ live API/dashboard data source, and it is read-only by construction. A
 real backend factory would follow the exact same shape.
 
 And now there is a **third** working factory:
-`data.adapters.backend_factory.build_backend_api_adapters`
+`adapters.backend_factory.build_backend_api_adapters`
 (`paths.data_source: "backend_api"`) reads the **real backend over its
 HTTP REST API** - there is no direct DB access. `backend.*` is the
 only code that knows HTTP / the backend's JSON wire shapes / its

@@ -7,7 +7,7 @@ the data came from `data/sqlite/backend_shaped_synthetic.db` rather than
 the in-memory synthetic generators. Reuses the existing
 `InMemoryProductCatalogAdapter`/`InMemoryUserAdapter`/
 `InMemoryReviewAdapter`/`UserEventsAdapter` classes, adding only the
-SQL-to-Raw-object mapping in `data.sqlite.loader`.
+SQL-to-Raw-object mapping in `sqlite.loader`.
 
 Purchase/cart double-counting note: this factory never reads `Cart`/
 `Cart_Item` or `"Order"`/`Order_Item` - `User_events` (ADD_TO_CART/
@@ -20,13 +20,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from recommendation.data.adapters.base import AdapterBundle
-from recommendation.data.adapters.product_adapter import InMemoryProductCatalogAdapter
-from recommendation.data.adapters.review_adapter import InMemoryReviewAdapter
-from recommendation.data.adapters.user_adapter import InMemoryUserAdapter
-from recommendation.data.adapters.user_events_adapter import build_user_events_adapters
-from recommendation.data.sqlite.connection import open_readonly_connection
-from recommendation.data.sqlite.loader import (
+from recommendation.adapters.base import AdapterBundle
+from recommendation.adapters.product_adapter import InMemoryProductCatalogAdapter
+from recommendation.adapters.review_adapter import InMemoryReviewAdapter
+from recommendation.adapters.user_adapter import InMemoryUserAdapter
+from recommendation.adapters.user_events_adapter import build_user_events_adapters
+from recommendation.sqlite.connection import open_readonly_connection
+from recommendation.sqlite.loader import (
     load_categories,
     load_events,
     load_product_tags,
