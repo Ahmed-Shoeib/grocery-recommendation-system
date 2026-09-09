@@ -267,7 +267,42 @@ def test_missing_and_aware_timestamps_are_normalized_to_naive_utc(tmp_path):
 def test_auth_failure_degrades_instead_of_failing_the_load(tmp_path):
     class Unauthorized(FakeBackendClient):
         def list_reviews(self):
-            raise BackendAuthError("GET /api/reviews returned 401", status_code=401)
+            raise BackendAuthError("GET /api/reviews returned 403", status_code=403)
 
     catalog = _catalog_with_backend_ids(tmp_path, {})
     assert load_backend_reviews(Unauthorized(), catalog, {1: "g1"}) == []
+
+
+def test_canonical_reviews_reach_the_shared_review_adapter(tmp_path):
+    """The downstream half of the boundary: once `load_backend_reviews`
+    resolves rows (backend-id map populated, as it will be when the
+    backend exposes its product id), the `RawReview`s it returns are the
+    exact type `InMemoryReviewAdapter` consumes for the synthetic and
+    SQLite sources - so `EngagementProfile.reviews` and
+    `build_product_features` (already covered by test_product_features.py)
+    need no backend-specific code. Here we assert the hand-off:
+    per-user `ReviewRecord`s with resolved internal ids and the right
+    rating/product mapping.
+    """
+    from recommendation.data.adapters.review_adapter import InMemoryReviewAdapter
+    from recommendation.features.product_features import compute_review_stats
+
+    catalog = _catalog_with_backend_ids(tmp_path, {3: 11, 4: 12})
+    raw_reviews = load_backend_reviews(
+        FakeBackendClient(reviews=[
+            {"reviewId": 1, "userId": 7, "productId": 3, "rating": 5, "comment": "a",
+             "createdAt": "2026-09-01T10:00:00"},
+            {"reviewId": 2, "userId": 7, "productId": 4, "rating": 3, "comment": "b",
+             "createdAt": "2026-09-02T10:00:00"},
+        ]),
+        catalog,
+        {5: "7"},
+    )
+    assert {r.product_id for r in raw_reviews} == {11, 12}
+
+    review_adapter = InMemoryReviewAdapter(raw_reviews)
+    records = review_adapter.get_reviews(5)                # EngagementProfile.reviews source
+    assert sorted((r.product_id, r.rating) for r in records) == [(11, 5.0), (12, 3.0)]
+
+    stats = compute_review_stats(review_adapter.list_all_reviews())
+    assert stats[11] == (5.0, 1) and stats[12] == (3.0, 1)

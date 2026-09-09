@@ -38,7 +38,7 @@ from recommendation.data.adapters.backend_factory import build_backend_api_adapt
 from recommendation.data.adapters.engagement import build_engagement_profile
 from recommendation.data.backend.auth import ENV_CLIENT_ID, ENV_CLIENT_SECRET
 from recommendation.data.backend.client import BackendApiClient
-from recommendation.data.backend.errors import BackendApiError
+from recommendation.data.backend.errors import BackendApiError, BackendAuthError
 from recommendation.features.pipeline import run_feature_pipeline
 from recommendation.serving.cold_start import determine_history_tier
 from recommendation.serving.eligibility import apply_eligibility, build_eligibility_rules
@@ -58,6 +58,16 @@ def _check_service_auth(config) -> bool:
         return True
     try:
         raw_reviews = client.list_reviews()
+    except BackendAuthError as exc:
+        if exc.status_code == 403:
+            # Token is valid (it works for /api/users/{guid}); this client
+            # just lacks the /api/reviews scope. Degrade like the loader
+            # does - not a smoke-test failure. See docs/data-mapping.md 19.6.
+            print("\nservice auth: token OK, but GET /api/reviews -> 403 "
+                  "(service client lacks the reviews scope) - degrading to 0 reviews")
+            return True
+        print(f"\nFAIL: service auth configured but /api/reviews returned {exc.status_code}: {exc}")
+        return False
     except BackendApiError as exc:
         print(f"\nFAIL: service auth configured but /api/reviews failed: {type(exc).__name__}: {exc}")
         return False

@@ -50,7 +50,10 @@ def test_engagement_profile_builds_from_backend_bundle(tmp_path):
     assert len(profile.purchases) == 1
     assert profile.searches == []          # backend has no SEARCH activity
     assert profile.chatbot_context is None  # backend has no CHATBOT activity
-    assert profile.reviews == []            # /api/reviews not implemented
+    # /api/reviews is integrated, but every row is currently unjoinable
+    # (int32 ids vs slug/GUID identity) so it produces no canonical reviews
+    # through the factory - see docs/data-mapping.md 19.6.
+    assert profile.reviews == []
 
 
 def test_purchase_signal_comes_only_from_activities_not_orders(tmp_path):

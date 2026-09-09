@@ -2028,14 +2028,30 @@ retrain (Two-Tower/ANN/ranker product embeddings are indexed by that
 internal id). Plan for that retrain when the backend actually ships
 product ids; nothing to do before then.
 
-### 19.6 Reviews - `/api/reviews` IMPLEMENTED, integrated, blocked on identity
+### 19.6 Reviews - `/api/reviews` integrated in code; blocked live on a scope grant, then on identity
 
 **Superseded**: the pre-2026-09-09 version of this section described
 `/api/reviews` as non-existent and specified a *guessed* contract
 (GUID `userId`, `productSlug`, cursor pagination). The endpoint now
 exists and the real contract differs on every one of those points. The
 guess is gone from the code; what follows is verified against the live
-OpenAPI document and the live endpoint.
+OpenAPI document.
+
+**Live status (2026-09-09).** The endpoint could not be read end to end:
+with a valid service token (the same token that successfully enriches all
+316 users via `/api/users/{guid}`), `GET /api/reviews` returns **`403`
+with an empty body** - the recommender's service client is authenticated
+but **not authorized** for this route. Swagger exposes a per-client scope
+system
+(`CreateServiceClientRequest`, `UpdateServiceClientScopesRequest`), so
+this is a one-line backend grant, not a code issue. The integration
+handles it correctly: `403` does **not** trigger a token refresh/retry (a
+new token carries the same scopes), `client.list_reviews()` raises
+`BackendAuthError`, and `loader.load_backend_reviews` catches it and
+degrades to `[]` with a single warning - the rest of the load is
+unaffected (verified live). The row-shape contract below is therefore
+from the live OpenAPI document only; the row *values* remain unverified
+until the scope is granted.
 
 #### Verified contract (2026-09-09)
 
@@ -2043,7 +2059,7 @@ OpenAPI document and the live endpoint.
 |---|---|
 | Path | `GET /api/reviews` |
 | Swagger tag | `AiProductReview` - added for this recommender, distinct from the browser-facing `ProductReview` routes |
-| Auth | **Required.** Unauthenticated → `401` with an empty body. Service Bearer token (19.11) |
+| Auth | **Required.** Unauthenticated → `401`; authenticated-but-unauthorized (current service client) → `403`, empty body. Service Bearer token (19.11) |
 | Query parameters | **None** |
 | Pagination | **None** - a single flat array, unlike every other list endpoint here |
 | Envelope | `AiProductReviewResponseListApiResponse`: `{success, statusCode, message, data: [...]}` - note `data` is the **array itself**, not `{data, pagination}` |
@@ -2063,15 +2079,15 @@ seven fields below are all there is):
 | `createdAt` | `date-time` | naive UTC, same convention as `/api/user-activities.timestamp` |
 | `updatedAt` | `date-time?` | nullable; not consumed - `RawReview` has one timestamp |
 
-#### The identity gap - why reviews still yield nothing
+#### The identity gap - the second blocker, after the scope grant
 
-`/api/reviews` is the only endpoint that addresses users and products by
-**numeric primary key**. Everything else this integration consumes uses
-GUID (users) and slug (products), and **no endpoint exposes both keys for
-the same row**, so there is no join key. The rows are real and are
-fetched; every one is then dropped by the same policy that governs
-activities - an unresolvable external reference must never be attached to
-*a* product (section 5, 19.5).
+Even once the `403` is resolved, `/api/reviews` is the only endpoint that
+addresses users and products by **numeric primary key**. Everything else
+this integration consumes uses GUID (users) and slug (products), and **no
+endpoint exposes both keys for the same row**, so there is no join key.
+Fetched rows are then dropped by the same policy that governs activities -
+an unresolvable external reference must never be attached to *a* product
+(section 5, 19.5).
 
 The only join available today would be
 `GET /api/products/{productSlug}/reviews` (tag `ProductReview`, returns
@@ -2119,18 +2135,25 @@ Drop policy, each counted and logged separately:
 `tests/test_backend_loader.py::test_resolvable_reviews_become_canonical_raw_reviews`
 already exercises that path with the map populated.
 
-### 19.11 Service-to-service authentication - IMPLEMENTED
+### 19.11 Service-to-service authentication - IMPLEMENTED & verified live
 
 `POST /api/auth/service/token` with `{clientId, clientSecret}` returns
-`{accessToken, expiresAtUtc}`, lifetime ~15 minutes. Implemented in
+`{accessToken, expiresAtUtc}` (a JWT, ~15 minute lifetime). Implemented in
 `data.backend.auth.ServiceTokenProvider`; it is the only component that
 performs the exchange or holds a token.
 
-| Endpoint | Auth |
-|---|---|
-| `GET /api/products`, `/api/categories`, `/api/user-activities` | **public** - no `Authorization` header sent |
-| `GET /api/users/{guid}` | Bearer; best-effort (a failure yields a bare profile, never a failed load) |
-| `GET /api/reviews` | Bearer |
+**Verified live 2026-09-09** with the recommender's own service client:
+the exchange succeeds, the token is cached and reused, and
+`GET /api/users/{guid}` with it enriched **all 316** users (previously 0 -
+the endpoint had never been called with a token). `GET /api/reviews` with
+the *same* token returns `403` - the client is authenticated but lacks
+that route's scope (see 19.6; backend grant needed).
+
+| Endpoint | Auth | Live result with the recommender's service client |
+|---|---|---|
+| `GET /api/products`, `/api/categories`, `/api/user-activities` | **public** - no `Authorization` header sent | 83 / 5 / 38,294 rows |
+| `GET /api/users/{guid}` | Bearer; best-effort (a failure yields a bare profile, never a failed load) | **200** - 316/316 enriched |
+| `GET /api/reviews` | Bearer | **403** - scope not granted; degrades to `[]` |
 
 Behaviour:
 
@@ -2149,7 +2172,10 @@ Behaviour:
   conservative 5-minute TTL rather than being treated as immortal.
 - **One refresh + one retry on 401.** A token this process still believes
   valid can be rejected (backend restart, revoked client, clock skew); a
-  second 401 raises, so a bad credential cannot spin.
+  second 401 raises, so a bad credential cannot spin. A **403** is *not*
+  retried - it is an authorization gap a fresh token will not fix - and is
+  surfaced to the caller (`get_user` degrades to a bare profile;
+  `load_backend_reviews` degrades to `[]`).
 - **Thread-safe.** Double-checked locking, so the background refresh
   thread and request threads crossing an expiry boundary perform exactly
   one exchange between them.
@@ -2257,15 +2283,23 @@ never blocks the data load.
    or one per order - the mapping assumes each row is one product
    interaction. *Question asked, awaiting answer.* No code change pending
    the reply; `PlaceOrder -> PURCHASE` is unchanged.
-4. **Per-environment service credentials** for the recommender, so it can
+4. **Grant the recommender's service client the `/api/reviews` scope.**
+   The client-credentials flow is implemented and verified (19.11), and
+   the token already works for `/api/users/{guid}`, but
+   `GET /api/reviews` returns `403` for this client - it needs that
+   route's scope added (`UpdateServiceClientScopesRequest`). This is the
+   *first* blocker for the review signal; the identity join (ask 1) is
+   the second.
+5. **Per-environment service credentials** for the recommender, so it can
    authenticate in production rather than relying on temporarily issued
-   ones. The client-credentials flow itself is now implemented (19.11);
-   this is a provisioning item only.
+   ones - a provisioning item only.
 
 **Closed / withdrawn:**
 
-- ~~`GET /api/reviews`~~ - **implemented by the backend and integrated**
-  (19.6). Only the identity join remains, which is ask 1.
+- ~~`GET /api/reviews` (implement the endpoint)~~ - **the endpoint now
+  exists and the client-side integration is complete** (19.6). Two
+  blockers remain, both now tracked as asks 4 and 1: the `/api/reviews`
+  scope grant, then the numeric-vs-slug/GUID identity join.
 - ~~`GET /api/users/{userId}` without authentication~~ - superseded by the
   service-auth flow, now implemented (19.11). Keeping the endpoint
   Bearer-gated is the right shape: a profile is PII and the recommender is
@@ -2379,7 +2413,8 @@ data-mapping work.
 Deterministic, offline (fake session / fake client - never the live
 backend): `tests/test_backend_client.py` (envelope, both cursor param
 styles, page-size cap, retry, error classification, TLS flag, the
-unpaginated `/api/reviews` array + its Bearer header and 401 retry),
+unpaginated `/api/reviews` array + its Bearer header, the one-refresh 401
+retry, and that a persistent 401 raises rather than looping),
 `tests/test_backend_auth.py` (token acquisition, cache reuse,
 refresh-before-expiry, expiry fallback, `invalidate`, single exchange
 under 8 concurrent callers, missing/blank credentials with **no** network
@@ -2405,7 +2440,14 @@ registry persistence).
 Live (network, **not** part of `pytest`):
 `scripts/backend_api_smoke_test.py` -
 `RECS_BACKEND_API_BASE_URL=… RECS_BACKEND_TLS_VERIFY=false
-RECS_DATA_SOURCE=backend_api python scripts/backend_api_smoke_test.py`.
+RECS_DATA_SOURCE=backend_api python scripts/backend_api_smoke_test.py`,
+optionally with `RECS_BACKEND_SERVICE_CLIENT_ID` /
+`RECS_BACKEND_SERVICE_CLIENT_SECRET` to exercise the service-auth path.
 Proves the REST data flows through the canonical pipeline with no schema
 change, and that the identity registry is byte-identical on a second run.
+It prints token *metadata* only, never the token. Last run (2026-09-09):
+83 products / 5 categories / 38,294 activities → 38,087 interactions /
+316 users; with credentials, 316/316 profiles enriched and
+`GET /api/reviews` → `403` (scope), degrading to 0 reviews without
+affecting the load.
 
