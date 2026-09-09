@@ -36,7 +36,6 @@ from recommendation.evaluation.temporal_future_purchase import (
     DEFAULT_MIN_PURCHASE_EVENTS_FOR_FULL_SPLIT,
     TemporalEligibilityTier,
     audit_no_leakage,
-    build_point_in_time_engagement_profile,
     build_temporal_splits,
     events_before_cutoff,
     group_events_by_user,

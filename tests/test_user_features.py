@@ -458,7 +458,7 @@ def test_recent_purchase_pulls_semantic_embedding_toward_itself():
     disabled_config = _config(purchase_weight=1.0, recency=RecencyConfig(enabled=False))
     baseline_features = build_user_features(profile, _products(), _embeddings(), disabled_config, reference_time=T0)
 
-    p1, p2 = _embeddings()[1], _embeddings()[2]
+    p1 = _embeddings()[1]
     # Cosine similarity to the recent product's own vector should be higher
     # under recency weighting than under the unweighted 50/50 baseline.
     def cos(a, b):

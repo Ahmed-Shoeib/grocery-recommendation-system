@@ -31,8 +31,8 @@ READS it.
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from dataclasses import asdict, dataclass
+from datetime import datetime
 from pathlib import Path
 
 REPORT_SCHEMA_VERSION = 1

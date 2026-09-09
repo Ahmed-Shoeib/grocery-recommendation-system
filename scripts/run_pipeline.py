@@ -19,8 +19,6 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-import numpy as np
-
 from recommendation.data.adapters.factory import build_synthetic_adapters
 from recommendation.schemas.engagement import EngagementProfile
 from recommendation.schemas.user import UserProfile

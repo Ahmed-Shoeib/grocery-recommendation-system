@@ -19,6 +19,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import numpy as np
+
 from recommendation.schemas.engagement import EngagementProfile
 from recommendation.schemas.product import Product
 from recommendation.features.price import PriceCatalogContext

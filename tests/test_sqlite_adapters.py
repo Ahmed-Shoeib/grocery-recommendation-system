@@ -14,14 +14,13 @@ from __future__ import annotations
 
 import sqlite3
 from datetime import datetime
-from pathlib import Path
 
 import pytest
 
 from recommendation.data.adapters.engagement import build_engagement_profile
 from recommendation.data.adapters.sqlite_factory import build_sqlite_adapters
 from recommendation.data.sqlite.connection import open_readonly_connection
-from recommendation.data.sqlite.loader import load_events, load_products, load_reviews, load_users
+from recommendation.data.sqlite.loader import load_events, load_reviews
 from recommendation.config import get_config, resolve_path
 
 DB_PATH = resolve_path(get_config().paths.data_sqlite)

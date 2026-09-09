@@ -1,5 +1,3 @@
-import pytest
-
 from recommendation.features.product_features import ProductFeatures
 from recommendation.serving.fallback import (
     blend_candidate_lists,

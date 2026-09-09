@@ -14,7 +14,7 @@ from recommendation.data.adapters.factory import build_synthetic_adapters
 from recommendation.data.synthetic.dataset import generate_synthetic_dataset
 from recommendation.features.pipeline import run_feature_pipeline
 from recommendation.ranking.train import train_ranker
-from recommendation.retrieval.index.factory import build_vector_index, candidate_pool_size
+from recommendation.retrieval.index.factory import build_vector_index
 from recommendation.retrieval.two_tower.examples import build_eval_cases
 from recommendation.retrieval.two_tower.serialization import TwoTowerArtifacts
 from recommendation.retrieval.two_tower.splitting import build_user_splits

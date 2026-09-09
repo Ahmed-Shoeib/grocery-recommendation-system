@@ -20,7 +20,6 @@ ranker random seeds come from `config.two_tower.random_seed`/
 from __future__ import annotations
 
 import hashlib
-import json
 import random
 import sys
 from collections import Counter
@@ -59,7 +58,7 @@ from recommendation.evaluation.temporal_training import (
 )
 from recommendation.features.price import build_price_catalog_context
 from recommendation.features.product_features import build_product_features
-from recommendation.ranking.features import RANKING_FEATURE_NAMES, build_ranking_feature_vector
+from recommendation.ranking.features import RANKING_FEATURE_NAMES
 from recommendation.ranking.model import build_ranker_model
 from recommendation.ranking.serialization import save_ranker_artifacts
 from recommendation.retrieval.index.factory import build_vector_index, candidate_pool_size

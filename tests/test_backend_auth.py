@@ -24,45 +24,13 @@ from recommendation.backend.errors import (
     BackendUnavailableError,
 )
 from recommendation.config import BackendApiConfig
+from tests._backend_fakes import FakeResponse, FakeSession
 
 CLIENT_ID = "recs-service"
 CLIENT_SECRET = "s3cr3t-not-a-real-credential"
 TOKEN = "header.payload.signature"
 
 _T0 = datetime(2026, 9, 9, 12, 0, 0, tzinfo=timezone.utc)
-
-
-class FakeResponse:
-    def __init__(self, status_code=200, json_body=None, text=""):
-        self.status_code = status_code
-        self._json = json_body
-        self.text = text or ""
-
-    @property
-    def ok(self):
-        return 200 <= self.status_code < 300
-
-    def json(self):
-        if self._json is None:
-            raise ValueError("no json")
-        return self._json
-
-
-class FakeSession:
-    def __init__(self, responses):
-        self.headers = {}
-        self._responses = list(responses)
-        self.calls = []
-
-    def request(self, method, url, params=None, timeout=None, verify=None, headers=None, json=None):
-        self.calls.append({
-            "method": method, "url": url, "params": params or {}, "verify": verify,
-            "headers": headers or {}, "json": json,
-        })
-        item = self._responses.pop(0)
-        if isinstance(item, Exception):
-            raise item
-        return item
 
 
 class Clock:

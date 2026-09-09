@@ -43,10 +43,6 @@ _ACTION_TYPE_MAP: dict[str, ActionType | str] = {
     "removedfromfavorites": IGNORE,
 }
 
-# Backend values that are known and intentionally dropped - distinguished
-# from genuinely unknown values so the loader only warns about the latter.
-KNOWN_IGNORED = frozenset(k for k, v in _ACTION_TYPE_MAP.items() if v == IGNORE)
-
 
 def map_action_type(backend_action_type: str) -> ActionType | None:
     """Returns the canonical `ActionType`, or `None` if this backend action
