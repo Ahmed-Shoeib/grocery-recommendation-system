@@ -2,6 +2,7 @@
 activity-drop policy (docs/data-mapping.md section 19).
 """
 
+import json
 from datetime import datetime
 
 from recommendation.backend.dtos import ApiActivity
@@ -130,6 +131,58 @@ def test_search_product_activity_maps_to_canonical_search(tmp_path):
     interactions, _ = load_backend_events(activities, r, catalog)
     assert len(interactions) == 1
     assert interactions[0].action_type.value == "SEARCH"
+
+
+def test_products_activities_and_reviews_all_resolve_to_the_same_canonical_product(tmp_path):
+    """The end-to-end cross-source identity guarantee the 2026-09-15
+    atomic switch exists to provide: a product's internal id, as assigned
+    by the catalog load, is the SAME id an activity row and a review row
+    referencing that product's `Product.Id` resolve to - no separate,
+    ambiguous, or slug-derived identity for any of the three sources.
+    """
+    r = _resolver(tmp_path)
+    prods = [{"slug": "orange-juice", "productId": 501, "name": "OJ", "price": 4.0, "categorySlug": "groceries"}]
+    catalog = load_backend_catalog(FakeBackendClient(products=prods, categories=_CATS), r)
+    internal_id = catalog.products[0].id
+
+    activities = [ApiActivity.model_validate({
+        "userId": "g1", "actionType": "AddToCart", "productId": 501, "timestamp": "2026-08-01T10:00:00",
+    })]
+    interactions, guid_by_internal = load_backend_events(activities, r, catalog)
+    assert interactions[0].product_id == internal_id
+
+    reviews = load_backend_reviews(
+        FakeBackendClient(reviews=[
+            {"reviewId": 1, "userId": 7, "userGuid": "g1", "productId": 501, "rating": 5, "createdAt": "2026-09-01T10:00:00"},
+        ]),
+        catalog,
+        guid_by_internal,
+    )
+    assert len(reviews) == 1
+    assert reviews[0].product_id == internal_id
+    # And the review's user resolves to the same internal user the activity did.
+    assert reviews[0].user_id == interactions[0].user_id
+
+
+def test_full_catalog_load_never_leaves_a_slug_keyed_entry_when_every_product_has_an_id(tmp_path):
+    """No mixed slug/ProductId duplicates: once every product source row
+    carries `product_id` (the live shape since the switch - every row
+    from `GET /api/ai/products` has one), the resolver's `product`
+    namespace must be keyed entirely by stringified ids, never by any
+    product's slug.
+    """
+    r = _resolver(tmp_path)
+    prods = [
+        {"slug": "orange-juice", "productId": 501, "name": "OJ", "price": 4.0, "categorySlug": "groceries"},
+        {"slug": "headphones", "productId": 502, "name": "Headphones", "price": 99.0, "categorySlug": "electronics"},
+    ]
+    load_backend_catalog(FakeBackendClient(products=prods, categories=_CATS), r)
+    r.save()
+
+    doc = json.loads((tmp_path / "reg.json").read_text(encoding="utf-8"))
+    keys = set(doc["namespaces"]["product"]["by_key"].keys())
+    assert keys == {"501", "502"}
+    assert "orange-juice" not in keys and "headphones" not in keys
 
 
 def test_ids_are_stable_across_a_reload(tmp_path):

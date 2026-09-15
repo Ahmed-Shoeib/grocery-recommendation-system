@@ -1,5 +1,6 @@
 """ExternalIdentityResolver: deterministic, persistent, namespace-isolated
-slug/GUID -> int resolution (docs/data-mapping.md section 19).
+backend-ProductId/slug/GUID -> int resolution (docs/data-mapping.md
+section 19.5).
 """
 
 import json
@@ -14,6 +15,49 @@ def test_same_key_always_resolves_to_same_id_within_a_session(tmp_path):
     first = r.resolve_product("orange-juice")
     assert r.resolve_product("orange-juice") == first
     assert r.resolve_product("milk") != first
+
+
+def test_same_product_id_key_resolves_consistently_across_restart(tmp_path):
+    """Same as the slug case, using the shape the resolver actually sees
+    from `GET /api/ai/products` since the 2026-09-15 switch: a stringified
+    backend `Product.Id`, e.g. `"82"`.
+    """
+    path = tmp_path / "reg.json"
+    r1 = ExternalIdentityResolver(path)
+    first = r1.resolve_product("82")
+    r1.save()
+
+    r2 = ExternalIdentityResolver(path)
+    assert r2.resolve_product("82") == first
+
+
+def test_registry_migration_old_slug_keyed_entries_are_orphaned_not_reused(tmp_path):
+    """Simulates the 2026-09-15 migration scenario directly at the
+    resolver level: a registry populated under the OLD slug-keyed regime
+    (pre-switch) must not collide with, or get silently reused by, the
+    NEW `Product.Id`-keyed regime for what is conceptually the same
+    product - no ambiguous mixed identity. The old slug key stays valid
+    (harmless, orphaned) and the new id-keyed lookup gets a distinct,
+    fresh internal id, proving there is never a slug/ProductId duplicate
+    pointing at one id.
+    """
+    path = tmp_path / "reg.json"
+    old = ExternalIdentityResolver(path)
+    old_id = old.resolve_product("apple-golden-delicious")  # legacy slug-keyed entry
+    old.save()
+
+    new = ExternalIdentityResolver(path)
+    new_id = new.resolve_product("82")  # same real-world product, new key shape
+    assert new_id != old_id
+    # Both keys remain independently resolvable - no collision, no mixing.
+    assert new.peek_product("apple-golden-delicious") == old_id
+    assert new.peek_product("82") == new_id
+    new.save()
+
+    # And it's stable across yet another restart.
+    again = ExternalIdentityResolver(path)
+    assert again.peek_product("82") == new_id
+    assert again.peek_product("apple-golden-delicious") == old_id
 
 
 def test_namespaces_are_isolated(tmp_path):

@@ -17,11 +17,13 @@ candidate. `RecommendationService.maybe_refresh` re-invokes this on the
 configured TTL so `User_events`-style rows the backend records after
 startup become visible without a restart.
 
-Purchase/cart authoritative source: `/api/user-activities` (PlaceOrder /
-AddToCart rows) is the sole engagement-truth source consumed here -
-`/api/orders` and `/api/cart` are never read, so the same real-world
-action cannot be double-counted through two code paths (mirrors the
-SQLite factory's `User_events`-only contract).
+Purchase/cart authoritative source: `GET /api/ai/user-activities`
+(PlaceOrder / AddToCart rows - the authoritative activity source since
+the 2026-09-15 switch to the Ai-tagged routes, docs/data-mapping.md 19.5)
+is the sole engagement-truth source consumed here - `/api/orders` and
+`/api/cart` are never read, so the same real-world action cannot be
+double-counted through two code paths (mirrors the SQLite factory's
+`User_events`-only contract).
 """
 
 from __future__ import annotations

@@ -48,12 +48,44 @@ def test_engagement_profile_builds_from_backend_bundle(tmp_path):
     assert len(profile.clicks) == 1
     assert len(profile.cart_items) == 1
     assert len(profile.purchases) == 1
-    assert profile.searches == []          # backend has no SEARCH activity
-    assert profile.chatbot_context is None  # backend has no CHATBOT activity
-    # /api/reviews is integrated, but every row is currently unjoinable
-    # (int32 ids vs slug/GUID identity) so it produces no canonical reviews
-    # through the factory - see docs/data-mapping.md 19.6.
+    assert profile.searches == []          # this fixture's _ACTS has no SearchProduct rows
+    assert profile.chatbot_context is None  # this fixture's _ACTS has no Chatbot rows
+    # This fixture's _PRODS carries no productId, so /api/reviews rows
+    # (which this bundle never fetches anyway - no reviews in FakeBackendClient
+    # by default) would be product-unjoinable if present. See the dedicated
+    # productId-bearing fixture test below for the live-shape, all-signals case.
     assert profile.reviews == []
+
+
+def test_engagement_profile_with_product_id_bearing_fixture_gets_all_five_signals(tmp_path):
+    """The live shape since the 2026-09-15 switch: every product/activity
+    row carries `productId`, and reviews resolve on both sides. Exercises
+    SEARCH, CHATBOT, and the review product+user join through the full
+    factory, not just the loader unit tests.
+    """
+    prods = [{"slug": "orange-juice", "productId": 501, "name": "OJ", "price": 4.0, "categorySlug": "groceries"}]
+    acts = [
+        {"userId": "guid-1", "actionType": "SearchProduct", "productId": 501, "timestamp": "2026-08-01T09:00:00"},
+        {"userId": "guid-1", "actionType": "Chatbot", "productId": 501, "timestamp": "2026-08-01T09:01:00"},
+        {"userId": "guid-1", "actionType": "AddToCart", "productId": 501, "timestamp": "2026-08-02T09:00:00"},
+    ]
+    client = FakeBackendClient(
+        products=prods, categories=_CATS, activities=acts,
+        reviews=[{"reviewId": 1, "userId": 9, "userGuid": "guid-1", "productId": 501, "rating": 5,
+                  "createdAt": "2026-09-01T10:00:00"}],
+    )
+    resolver = ExternalIdentityResolver(tmp_path / "reg.json")
+    bundle = build_backend_api_adapters(client=client, resolver=resolver)
+
+    profile = build_engagement_profile(
+        1, bundle.users, bundle.purchases, bundle.cart, bundle.clicks, bundle.search, bundle.chatbot, bundle.reviews
+    )
+    assert len(profile.searches) == 1
+    assert profile.chatbot_context is not None
+    assert profile.chatbot_context.mentioned_product_ids == [1]  # internal id of productId 501
+    assert len(profile.cart_items) == 1
+    assert len(profile.reviews) == 1
+    assert profile.reviews[0].product_id == 1
 
 
 def test_purchase_signal_comes_only_from_activities_not_orders(tmp_path):

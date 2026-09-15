@@ -678,19 +678,21 @@ And now there is a **third** working factory:
 (`paths.data_source: "backend_api"`) reads the **real backend over its
 HTTP REST API** - there is no direct DB access. `backend.*` is the
 only code that knows HTTP / the backend's JSON wire shapes / its
-product-id + slug + GUID identifiers; a persistent `ExternalIdentityResolver`
-maps those to the stable internal `int` ids the canonical schemas and the
-trained artifacts require, so nothing downstream changes. Product
-identity prefers the backend's stable `Product.Id` the moment a consumed
-source provides one, falling back to slug otherwise (today: always slug -
-see `docs/data-mapping.md` §19.5). See `docs/data-mapping.md` §19 for the
-full endpoint list, DTO→canonical mapping, identity design, the
-service-auth flow (§19.11), the `/api/reviews` integration and its
-outstanding user-identity join (§19.6), TLS/error/freshness behaviour,
-and what the backend team still needs to change. It is **opt-in and needs
-a retrain against the real catalog** before it can serve live
-`/recommendations` (`models/backend_api/` artifacts don't exist); the
-data path itself is verified end to end by
+identifiers; a persistent `ExternalIdentityResolver` maps those to the
+stable internal `int` ids the canonical schemas and the trained artifacts
+require, so nothing downstream changes. **Since the 2026-09-15 atomic
+switch** to `GET /api/ai/products`/`GET /api/ai/user-activities` (the
+authoritative product/activity sources, Bearer-gated - service
+credentials are now required, not optional), the backend's stable
+`Product.Id` is the authoritative product identity end to end; slug is
+metadata only (`docs/data-mapping.md` §19.5). See `docs/data-mapping.md`
+§19 for the full endpoint list, DTO→canonical mapping, identity design,
+the service-auth flow (§19.11), the `/api/reviews` integration (both the
+product and user identity joins are closed and live-verified - §19.6),
+TLS/error/freshness behaviour, and remaining backend-side items (§19.8).
+It is **opt-in and needs a retrain against the real catalog** before it
+can serve live `/recommendations` (`models/backend_api/` artifacts don't
+exist); the data path itself is verified end to end by
 `scripts/backend_api_smoke_test.py` (live, not part of `pytest`).
 
 ## Development phases

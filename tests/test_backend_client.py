@@ -28,36 +28,83 @@ def _envelope(rows, *, has_next=False, next_cursor=None):
     return {"success": True, "data": {"data": rows, "pagination": {"hasNext": has_next, "nextCursor": next_cursor}}}
 
 
-def test_list_products_unwraps_envelope_and_pagination():
-    client, session = _client([
-        FakeResponse(json_body=_envelope([{"slug": "a", "name": "A", "price": 1.0, "stockQuantity": 5}],
-                                         has_next=True, next_cursor="C2")),
-        FakeResponse(json_body=_envelope([{"slug": "b", "name": "B", "price": 2.0, "stockQuantity": 0}])),
-    ])
+# --- /api/ai/products - authoritative product source since 2026-09-15 --
+#
+# Bearer-gated, a flat array like /api/reviews (no pagination), carries
+# productId on every row.
+
+
+def test_list_products_parses_flat_ai_array_and_sends_bearer():
+    client, session = _client(
+        [FakeResponse(json_body={"success": True, "data": [
+            {"productId": 82, "slug": "a", "name": "A", "price": 1.0, "stockQuantity": 5},
+            {"productId": 83, "slug": "b", "name": "B", "price": 2.0, "stockQuantity": 0},
+        ]})],
+        token_provider=_StubProvider("tok"),
+    )
     products = client.list_products()
-    assert [p.slug for p in products] == ["a", "b"]
-    # second call carried the cursor from page 1
-    assert session.calls[1]["params"]["Cursor"] == "C2"
+    assert [(p.slug, p.product_id) for p in products] == [("a", 82), ("b", 83)]
+    assert session.calls[0]["headers"]["Authorization"] == "Bearer tok"
+    assert session.calls[0]["params"] == {}, "GET /api/ai/products takes no query parameters"
+    assert len(session.calls) == 1, "not paginated - exactly one request"
 
 
-def test_catalog_page_size_is_capped_at_100():
-    client, session = _client([FakeResponse(json_body=_envelope([]))], page_size=500)
-    client.list_products()
-    assert session.calls[0]["params"]["Limit"] == 100
+def test_list_products_null_data_is_empty_not_an_error():
+    client, _ = _client(
+        [FakeResponse(json_body={"success": True, "data": None})], token_provider=_StubProvider(),
+    )
+    assert client.list_products() == []
 
 
-def test_activities_use_lowercase_cursor_and_pagesize_params():
-    client, session = _client([FakeResponse(json_body=_envelope([]))], page_size=200)
+def test_list_products_rejects_a_non_array_data_payload():
+    client, _ = _client(
+        [FakeResponse(json_body=_envelope([]))],  # cursor-paginated shape, not a flat array
+        token_provider=_StubProvider(),
+    )
+    with pytest.raises(BackendContractError):
+        client.list_products()
+
+
+def test_list_products_requires_credentials_no_fallback_to_legacy_endpoint():
+    """No silent degrade to the legacy slug-only /api/products - a mixed
+    identity scheme across loads is worse than a loud failure (client.py
+    module docstring). No request is sent at all.
+    """
+    client, session = _client([], token_provider=_NoCredentialsProvider())
+    with pytest.raises(BackendCredentialsError):
+        client.list_products()
+    assert session.calls == []
+
+
+# --- /api/ai/user-activities - authoritative activity source since
+# 2026-09-15 - Bearer-gated, cursor-paginated, carries productId per row.
+
+
+def test_list_activities_uses_ai_endpoint_cursor_params_and_bearer():
+    client, session = _client([FakeResponse(json_body=_envelope([]))], page_size=200, token_provider=_StubProvider("tok"))
     client.list_activities()
-    assert "pageSize" in session.calls[0]["params"]
     assert session.calls[0]["params"]["pageSize"] == 200  # not a catalog endpoint, not capped
+    assert session.calls[0]["headers"]["Authorization"] == "Bearer tok"
+
+
+def test_list_activities_requires_credentials_no_fallback_to_legacy_endpoint():
+    client, session = _client([], token_provider=_NoCredentialsProvider())
+    with pytest.raises(BackendCredentialsError):
+        client.list_activities()
+    assert session.calls == []
 
 
 def test_has_next_without_cursor_raises_pagination_error():
     client, _ = _client([FakeResponse(json_body=_envelope([{"slug": "a", "name": "A", "price": 1.0}],
                                                           has_next=True, next_cursor=None))])
     with pytest.raises(BackendPaginationError):
-        client.list_products()
+        client.list_categories()
+
+
+def test_categories_page_size_is_capped_at_100():
+    client, session = _client([FakeResponse(json_body=_envelope([]))], page_size=500)
+    client.list_categories()
+    assert session.calls[0]["params"]["Limit"] == 100
 
 
 def test_success_false_envelope_is_a_contract_error():
@@ -87,6 +134,36 @@ def test_retryable_status_is_retried_then_succeeds(monkeypatch):
     ], max_retries=2)
     assert client.list_categories() == []
     assert len(session.calls) == 2
+
+
+def test_transient_500_is_retried_then_succeeds(monkeypatch):
+    """500 was added to the retryable set 2026-09-15 after directly
+    observing /api/products, /api/categories and /api/ai/products all
+    return a transient-looking HTTP 500 for ~30 minutes before recovering
+    on their own (docs/data-mapping.md 19.5/19.8) - this is now a real,
+    bounded-retry transient-failure class, not just 429/502/503/504.
+    """
+    monkeypatch.setattr("recommendation.backend.client.time.sleep", lambda *_: None)
+    client, session = _client([
+        FakeResponse(status_code=500, text="try later"),
+        FakeResponse(json_body=_envelope([])),
+    ], max_retries=2)
+    assert client.list_categories() == []
+    assert len(session.calls) == 2
+
+
+def test_persistent_500_still_raises_never_hidden(monkeypatch):
+    """A 500 that outlasts the retry budget must still surface loudly as
+    BackendResponseError, exactly like any other non-2xx status - never
+    silently swallowed into an empty/degraded result.
+    """
+    monkeypatch.setattr("recommendation.backend.client.time.sleep", lambda *_: None)
+    client, session = _client(
+        [FakeResponse(status_code=500, text="kaboom")] * 3, max_retries=2,
+    )
+    with pytest.raises(BackendResponseError):
+        client.list_categories()
+    assert len(session.calls) == 3  # 1 initial + 2 retries, then gives up
 
 
 def test_get_product_404_returns_none():
@@ -218,10 +295,21 @@ def test_list_reviews_backend_reported_failure_raises_contract_error():
         client.list_reviews()
 
 
-def test_non_retryable_5xx_raises_response_error():
+def test_5xx_with_zero_retry_budget_raises_immediately():
     client, _ = _client([FakeResponse(status_code=500, text="kaboom")], max_retries=0)
     with pytest.raises(BackendResponseError):
         client.list_categories()
+
+
+def test_non_retryable_4xx_never_retried_even_with_budget(monkeypatch):
+    """400 is not in the retryable set at all - one attempt, immediate
+    raise, regardless of max_retries.
+    """
+    monkeypatch.setattr("recommendation.backend.client.time.sleep", lambda *_: None)
+    client, session = _client([FakeResponse(status_code=400, text="bad request")], max_retries=2)
+    with pytest.raises(BackendResponseError):
+        client.list_categories()
+    assert len(session.calls) == 1
 
 
 def test_tls_verify_flag_is_passed_through():

@@ -3,8 +3,9 @@ deterministic pytest suite (it needs network access to a running backend).
 
 Proves end to end:
 
-    backend REST API (/api/products, /api/categories, /api/user-activities,
-                      + service-auth-gated /api/users/{guid}, /api/reviews)
+    backend REST API (GET /api/ai/products, GET /api/ai/user-activities,
+                      GET /api/categories, + Bearer-gated
+                      /api/users/{guid}, /api/reviews)
         -> recommendation.backend.client / auth / loader / identity
         -> recommendation.adapters.backend_factory.build_backend_api_adapters
         -> canonical AdapterBundle / EngagementProfile
@@ -12,7 +13,7 @@ Proves end to end:
 
 Does NOT train, retrain, rebuild an index, or write model artifacts. It
 DOES write the identity registry (that is the point - run it twice and the
-slug/GUID -> int mapping must be identical the second time).
+ProductId/GUID -> int mapping must be identical the second time).
 
 Usage:
     RECS_BACKEND_API_BASE_URL=https://<host>:<port> \
@@ -22,9 +23,13 @@ Usage:
     RECS_BACKEND_SERVICE_CLIENT_SECRET=... \
     python scripts/backend_api_smoke_test.py
 
-The two credential vars are optional: without them the gated endpoints are
-skipped and the rest of the run still proves the public path. This script
-prints token *metadata* only - never the token itself.
+**Both credential vars are now REQUIRED** (docs/data-mapping.md 19.5): the
+2026-09-15 atomic switch made `GET /api/ai/products`/
+`GET /api/ai/user-activities` (Bearer-gated) the authoritative
+catalog/activity sources, so without credentials the whole load fails -
+this script detects that up front and fails clearly rather than letting an
+unhandled exception fly. This script prints token *metadata* only - never
+the token itself.
 """
 
 from __future__ import annotations
@@ -46,16 +51,23 @@ from recommendation.config import get_config
 
 
 def _check_service_auth(config) -> bool:
-    """Exercise the client-credentials exchange and the two gated endpoints
-    directly, so a failure is attributed to auth rather than surfacing later
-    as "no reviews". Prints token metadata only.
+    """Exercise the client-credentials exchange and the Bearer-gated
+    endpoints directly, so a failure is attributed to auth rather than
+    surfacing later as a confusing catalog-load crash. Prints token
+    metadata only.
+
+    Since the 2026-09-15 atomic source switch, `GET /api/ai/products`/
+    `GET /api/ai/user-activities` are Bearer-gated and mandatory - missing
+    credentials now fail the whole run (returns `False`), not just the
+    optional reviews/profile-enrichment signals.
     """
     client = BackendApiClient(config.backend_api)
     if not client.has_service_credentials():
-        print("\nservice auth: NOT configured "
-              f"({ENV_CLIENT_ID}/{ENV_CLIENT_SECRET} unset) - /api/users/{{guid}} and "
-              "/api/reviews will be skipped")
-        return True
+        print(f"\nFAIL: service credentials NOT configured ({ENV_CLIENT_ID}/{ENV_CLIENT_SECRET} unset) - "
+              "GET /api/ai/products and GET /api/ai/user-activities are Bearer-gated and mandatory "
+              "since the 2026-09-15 source switch (docs/data-mapping.md 19.5); the catalog/activity "
+              "load cannot proceed without them.")
+        return False
     try:
         raw_reviews = client.list_reviews()
     except BackendAuthError as exc:
@@ -74,11 +86,14 @@ def _check_service_auth(config) -> bool:
     print(f"\nservice auth: OK (token acquired and reused) - GET /api/reviews returned {len(raw_reviews)} row(s)")
     if raw_reviews:
         sample = raw_reviews[0]
-        print(f"  sample row: reviewId={sample.review_id} userId={sample.user_id} "
+        print(f"  sample row: reviewId={sample.review_id} userId={sample.user_id} userGuid={sample.user_guid} "
               f"productId={sample.product_id} rating={sample.rating} createdAt={sample.created_at}")
-        resolvable = sum(1 for r in raw_reviews if r.product_id is not None)
-        print(f"  {resolvable}/{len(raw_reviews)} row(s) carry a productId; the catalog is keyed by slug, "
-              "so these cannot be joined until /api/products exposes its product id")
+        with_product_id = sum(1 for r in raw_reviews if r.product_id is not None)
+        with_user_guid = sum(1 for r in raw_reviews if r.user_guid is not None)
+        print(f"  {with_product_id}/{len(raw_reviews)} row(s) carry a productId, "
+              f"{with_user_guid}/{len(raw_reviews)} carry a userGuid - actual join success/failure "
+              "against the live catalog and activity-stream users is reported below, after the "
+              "full catalog load (see 'reviews join diagnostics' in the log output).")
     return True
 
 

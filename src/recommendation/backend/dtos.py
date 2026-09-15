@@ -68,27 +68,30 @@ class ApiPagination(BaseModel):
 
 
 class ApiProduct(BaseModel):
-    """`/api/products` (list) and `/api/products/{slug}` (detail). The list
-    projection omits `description` and `tags`; the detail projection
-    includes them. As verified live 2026-09-14, `ProductResponse` /
-    `ProductSummaryResponse` (the schemas backing these two routes) still
-    expose NO numeric id, NO brand, NO sale price / discount, NO
-    `isActive` flag, NO ingredients - see `loader` for how the canonical
-    `RawProduct` is populated from what exists.
+    """Models two related but distinct wire shapes with one tolerant DTO
+    (`extra="ignore"`, every backend-specific field optional):
 
-    `product_id` models the backend's stable `Product.Id` - present on the
-    new `AiProductResponse` schema (`GET /api/ai/products`, `productId:
-    int32`, verified via the live OpenAPI document 2026-09-14) but NOT on
-    `ProductResponse`/`ProductSummaryResponse` itself. It is kept on this
-    DTO (rather than a separate one) so `loader.load_backend_catalog` can
-    key identity resolution on it the moment a product source populates it
-    - `extra="ignore"`/default-`None` means today, with `/api/products`
-    the only product source this integration reads, the field is always
-    `None` and slug remains the resolution key (see `identity.py`'s
-    per-namespace key-scheme guard for what happens the day this flips).
-    `/api/ai/products` itself is NOT consumed here: it is Bearer-gated and
-    the recommender's service credentials return `403` on it as of
-    2026-09-14 (no granted scope) - see docs/data-mapping.md section 19.5.
+    - `GET /api/ai/products` (`AiProductResponse`) - the **authoritative
+      `backend_api` product source since the 2026-09-15 atomic switch**
+      (docs/data-mapping.md 19.5). Bearer-gated, a flat array (no
+      pagination). Carries `productId: int32` (`product_id` below) on
+      every row - the stable backend `Product.Id`, now the primary
+      resolver key in `loader.load_backend_catalog`. Also carries `slug`,
+      `name`, `description`, `price`, `stockQuantity`, `categorySlug`,
+      `tags` - but NOT `altText`/`productImageUrl` (always `None` for this
+      source; UI-display metadata only, not consumed by features/embeddings).
+    - `GET /api/products`/`GET /api/products/{slug}` (`ProductResponse`/
+      `ProductSummaryResponse`) - the legacy, public, slug-only shape.
+      Still modeled here (rather than a separate DTO) because
+      `BackendApiClient.get_product` - a general-purpose, low-risk,
+      currently-unused single-lookup helper - still calls the detail
+      route. No production `backend_api` data path calls the legacy list
+      route anymore. This shape has NO `product_id` (always `None`), NO
+      brand, NO sale price/discount, NO `isActive`, NO ingredients -
+      verified live, most recently 2026-09-15.
+
+    See `loader.load_backend_catalog` for how the canonical `RawProduct`
+    is populated from whichever shape actually arrived.
     """
 
     model_config = _WIRE
@@ -121,20 +124,25 @@ class ApiCategory(BaseModel):
 
 
 class ApiActivity(BaseModel):
-    """One `/api/user-activities` row: a user GUID, a PascalCase action
-    type, an optional product slug (null for actions the backend records
-    without resolving a product, e.g. some `RemoveFromCart` rows), and a
-    naive timestamp - confirmed by the backend team (2026-09-14) to be
-    UTC wall-clock, not local time (`loader._as_naive_utc` already treated
-    it that way; this is now a confirmed contract, not an assumption).
+    """Models both the authoritative and legacy `user-activities` row
+    shapes with one tolerant DTO:
 
-    `product_id` mirrors `ApiProduct.product_id`: modeled from the new
-    `AiUserActivityResponse` schema (`GET /api/ai/user-activities`,
-    `productId: int32?`, verified via the live OpenAPI document
-    2026-09-14), always `None` on `/api/user-activities` itself (schema
-    `UserActivitiesResponse` has no such field, verified live) - kept here
-    so `loader.load_backend_events` can prefer it the day this endpoint
-    (or its Ai-tagged counterpart) actually populates it.
+    - `GET /api/ai/user-activities` (`AiUserActivityResponse`) - the
+      **authoritative `backend_api` activity source since the 2026-09-15
+      atomic switch** (docs/data-mapping.md 19.5). Bearer-gated,
+      cursor-paginated. Carries `productId: int32?` (`product_id` below,
+      nullable in the schema but not observed null live) instead of
+      `slug` - this shape has **no slug field at all**.
+    - `GET /api/user-activities` (`UserActivitiesResponse`) - the legacy,
+      public, slug-only shape. No production `backend_api` data path
+      calls it anymore; kept modeled here for the shared DTO and for
+      tests that exercise the loader's generic id-or-slug resolution
+      logic without needing a live Ai-shaped fixture.
+
+    Both shapes share `userId` (GUID) and `actionType` (PascalCase). The
+    naive `timestamp` is confirmed by the backend team to be UTC
+    wall-clock, not local time (`loader._as_naive_utc` already treated it
+    that way; this is now a confirmed contract, not an assumption).
     """
 
     model_config = _WIRE
@@ -170,17 +178,14 @@ class ApiReview(BaseModel):
     real join key.
 
     Product side: `product_id` is the backend's int32 `Product.Id`,
-    matching `ApiProduct.product_id`/`ApiActivity.product_id`.
-    `loader.load_backend_reviews` -> `_resolve_review_product` joins
-    automatically the moment any consumed product source populates
-    `ApiProduct.product_id` (`BackendCatalog.product_id_by_backend_id`).
-    **Unverified live as of 2026-09-15**: `/api/products` and
-    `/api/ai/products` (the only two possible sources of that map) are
-    both returning HTTP 500 server errors (confirmed by repeated retries,
-    a genuine backend-side regression, not an auth/scope issue) - see
-    docs/data-mapping.md 19.5/19.8. The live review rows' `productId`
-    values (91, 147) cannot currently be cross-checked against any
-    catalog for this reason.
+    matching `ApiProduct.product_id`/`ApiActivity.product_id`. **Closed
+    and live-verified 2026-09-15**: `loader.load_backend_reviews` ->
+    `_resolve_review_product` joins against
+    `BackendCatalog.product_id_by_backend_id`, which `load_backend_catalog`
+    now populates from `GET /api/ai/products` (the authoritative product
+    source since the atomic switch - docs/data-mapping.md 19.5) for every
+    product in the catalog. See docs/data-mapping.md 19.6 for live join
+    counts.
 
     `rating` is `int32` with no declared bounds on this response, though
     the write side (`CreateProductReviewRequest`) constrains it to 1-5;

@@ -1,11 +1,18 @@
-"""Persistent external-identity resolution: slug / GUID -> stable internal int.
+"""Persistent external-identity resolution: backend ProductId / slug / GUID
+-> stable internal int.
 
-The backend addresses products and categories by SLUG and users by GUID,
-and exposes no numeric ids. The recommender core, the canonical schemas,
+The backend addresses categories by SLUG and users by GUID (neither
+exposes a numeric id). Products are addressed by the backend's stable
+`Product.Id` (`GET /api/ai/products`/`GET /api/ai/user-activities`, the
+authoritative `backend_api` sources since the 2026-09-15 atomic switch -
+docs/data-mapping.md 19.5) - the *immutable id + mutable slug* contract
+this module originally compromised around now exists, and slug is
+metadata only for products. The recommender core, the canonical schemas,
 and every trained model artifact operate on integer ids. This resolver is
-the single boundary that bridges the two, and it is the ONLY component
-that holds backend identifiers - nothing downstream of the adapter layer
-ever sees a slug or a GUID.
+the single boundary that bridges external keys (of whichever kind a
+source provides) to those integers, and it is the ONLY component that
+holds backend identifiers - nothing downstream of the adapter layer ever
+sees a product id, a slug, or a GUID.
 
 Guarantees:
 
@@ -32,11 +39,13 @@ Guarantees:
   id to two keys, or whose counter has fallen behind its keys, raises /
   self-repairs loudly rather than silently minting a duplicate id.
 
-Slug mutability: if the backend changes a product's slug, this resolver
-treats the new slug as a new product (new id); the old id is orphaned but
-harmless. The robust backend contract is *immutable id + mutable slug*;
-until that exists, this compromise is isolated here. See
-docs/data-mapping.md section 19.
+Key mutability: if a product's *resolver key* changes between loads (e.g.
+a slug rename before the 2026-09-15 switch, or - in principle, though not
+expected against a stable `Product.Id` - a source starting/stopping
+sending `product_id`), this resolver treats the new key as a new product
+(new id); the old id is orphaned but harmless. See docs/data-mapping.md
+section 19.5 for the slug->ProductId migration this behaviour absorbed
+without any change to this module.
 """
 
 from __future__ import annotations

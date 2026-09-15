@@ -52,8 +52,13 @@ refresh:
 
 # Real backend REST API connection (only used when paths.data_source ==
 # "backend_api" - docs/data-mapping.md section 19). NO credentials/tokens
-# here or anywhere in the codebase: the recommender calls only public /
-# soon-public endpoints and sends no Authorization header.
+# here or anywhere in this file/codebase: service credentials are read
+# from RECS_BACKEND_SERVICE_CLIENT_ID/_SECRET (env only, see
+# backend/auth.py). As of the 2026-09-15 atomic product/activity source
+# switch (19.5), backend_api's primary catalog/activity reads
+# (GET /api/ai/products, GET /api/ai/user-activities) are Bearer-gated and
+# REQUIRE those service credentials to be set - they are no longer
+# optional/best-effort. Only GET /api/categories remains public.
 #   base_url      MUST be set per environment (or via RECS_BACKEND_API_BASE_URL).
 #   tls_verify    keep true; set false ONLY for a dev backend with a
 #                 self-signed cert, and prefer the env var

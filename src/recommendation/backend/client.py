@@ -7,14 +7,28 @@ statuses, TLS verification, the `{success, data}` response envelope, and
 both pagination styles the backend uses. Output is always a list of
 `recommendation.backend.dtos` models - HTTP details never escape.
 
-Auth: per-request, never session-wide. `/api/products`, `/api/categories`
-and `/api/user-activities` are public and are called with NO Authorization
-header. `/api/users/{guid}` and `/api/reviews` are Bearer-gated, and are
-called with a token from `auth.ServiceTokenProvider` (the
-`POST /api/auth/service/token` client-credentials exchange). The header is
-attached to the individual protected request rather than to
+Auth: per-request, never session-wide. `/api/categories` (and the unused,
+legacy `/api/products/{slug}` single-lookup helper `get_product`) are
+public and called with NO Authorization header. Every endpoint in the
+primary `backend_api` data path - `/api/ai/products`,
+`/api/ai/user-activities`, `/api/users/{guid}`, `/api/reviews` - is
+Bearer-gated, using a token from `auth.ServiceTokenProvider` (the
+`POST /api/auth/service/token` client-credentials exchange). The header
+is attached to the individual protected request rather than to
 `Session.headers`, so a token can never leak onto a public call. See
-docs/data-mapping.md section 19.
+docs/data-mapping.md section 19.5.
+
+**`list_products`/`list_activities` require service credentials as of the
+2026-09-15 atomic switch to `/api/ai/products`/`/api/ai/user-activities`**
+(docs/data-mapping.md 19.5) - these are the authoritative catalog/activity
+sources for `backend_api` and are no longer best-effort. With no
+credentials configured, both raise `BackendCredentialsError` immediately
+(no request sent) rather than silently falling back to the legacy
+slug-only `/api/products`/`/api/user-activities`: a fallback here would
+let a single deployment mix identity schemes across loads/refreshes,
+which is worse than a loud, immediate, unambiguous failure. The legacy
+plain endpoints are intentionally not called by this client at all
+anymore - a single authoritative path per data type, no parallel default.
 
 TLS: `verify` defaults to on. The dev backend presents a self-signed
 `CN=localhost` certificate on a bare IP; for local work set
@@ -51,9 +65,17 @@ from recommendation.logging import get_logger
 
 logger = get_logger(__name__)
 
-_RETRYABLE_STATUS = frozenset({429, 502, 503, 504})
+_RETRYABLE_STATUS = frozenset({429, 500, 502, 503, 504})
+# 500 was added 2026-09-15 after directly observing /api/products,
+# /api/categories and /api/ai/products all return persistent-looking
+# HTTP 500 for ~30 minutes before recovering on their own with no
+# client-side change (docs/data-mapping.md 19.5/19.8) - a real,
+# demonstrated transient-failure class for this backend, not a guess.
+# `max_retries` still bounds it: a *genuinely* persistent 500 exhausts
+# the budget and raises `BackendResponseError` exactly like any other
+# non-2xx status - this never silently hides a real, lasting failure.
 _MAX_PAGES = 10_000  # hard stop so a broken `hasNext` can never loop forever
-_CATALOG_MAX_LIMIT = 100  # backend rejects Limit > 100 on /api/products and /api/categories with HTTP 400
+_CATALOG_MAX_LIMIT = 100  # backend rejects Limit > 100 on /api/categories with HTTP 400
 
 
 class BackendApiClient:
@@ -181,6 +203,7 @@ class BackendApiClient:
         limit_param: str,
         max_page_size: int | None = None,
         extra_params: dict[str, Any] | None = None,
+        auth: bool = False,
     ) -> list[dict]:
         page_size = self._config.page_size
         if max_page_size is not None:
@@ -192,7 +215,7 @@ class BackendApiClient:
             params[limit_param] = page_size
             if cursor is not None:
                 params[cursor_param] = cursor
-            data = self._request(path, params)
+            data = self._request(path, params, auth=auth)
             if not isinstance(data, dict) or "data" not in data:
                 raise BackendContractError(f"GET {path}: paginated response missing 'data' list")
             rows = data.get("data") or []
@@ -212,12 +235,31 @@ class BackendApiClient:
     # --- typed endpoints -------------------------------------------
 
     def list_products(self) -> list[ApiProduct]:
-        rows = self._iter_cursor(
-            "/api/products", cursor_param="Cursor", limit_param="Limit", max_page_size=_CATALOG_MAX_LIMIT
-        )
-        return [ApiProduct.model_validate(r) for r in rows]
+        """Authoritative `backend_api` product source (docs/data-mapping.md
+        19.5): `GET /api/ai/products` - Bearer-gated, carries the backend's
+        stable `Product.Id` on every row. A flat array like `/api/reviews`
+        (Swagger declares no query parameters for this route, unlike the
+        legacy cursor-paginated `/api/products`, which this client no
+        longer calls at all). Requires service credentials - see the
+        module docstring for why there is deliberately no slug-only
+        fallback here.
+        """
+        data = self._request("/api/ai/products", auth=True)
+        if data is None:
+            return []
+        if not isinstance(data, list):
+            raise BackendContractError(
+                f"GET /api/ai/products: expected a JSON array in 'data', got {type(data).__name__}"
+            )
+        return [ApiProduct.model_validate(r) for r in data]
 
     def get_product(self, slug: str) -> ApiProduct | None:
+        """Legacy single-product lookup via the public `/api/products/{slug}`
+        detail route. Unused by the primary `backend_api` data path (which
+        now reads the whole catalog from `list_products` /
+        `GET /api/ai/products` instead) - kept only as a general-purpose,
+        low-risk HTTP capability, not a parallel catalog source.
+        """
         try:
             data = self._request(f"/api/products/{slug}")
         except BackendResponseError as exc:
@@ -233,7 +275,16 @@ class BackendApiClient:
         return [ApiCategory.model_validate(r) for r in rows]
 
     def list_activities(self) -> list[ApiActivity]:
-        rows = self._iter_cursor("/api/user-activities", cursor_param="cursor", limit_param="pageSize")
+        """Authoritative `backend_api` activity source (docs/data-mapping.md
+        19.5): `GET /api/ai/user-activities` - Bearer-gated, cursor-paginated
+        like the legacy `/api/user-activities` (same `cursor`/`pageSize`
+        param names), but carries `productId` per row instead of `slug`.
+        This client no longer calls the legacy plain endpoint at all.
+        Requires service credentials - see the module docstring.
+        """
+        rows = self._iter_cursor(
+            "/api/ai/user-activities", cursor_param="cursor", limit_param="pageSize", auth=True
+        )
         return [ApiActivity.model_validate(r) for r in rows]
 
     def list_reviews(self) -> list[ApiReview]:
