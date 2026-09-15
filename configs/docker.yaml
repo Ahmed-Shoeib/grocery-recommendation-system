@@ -129,8 +129,9 @@ two_tower:
   dropout_rate: 0.1
   temperature: 0.05
   category_embedding_dim: 16
-  brand_embedding_dim: 16
-  age_group_embedding_dim: 8
+  # brand_embedding_dim / age_group_embedding_dim REMOVED (production-safe
+  # contract redesign, docs/production-feature-parity-audit.md) - see
+  # configs/base.yaml's two_tower section for the full rationale.
   price_tier_embedding_dim: 8
   min_distinct_products_for_holdout: 3
   eval_k_values: [5, 10, 20]
@@ -183,16 +184,20 @@ cold_start:
 
 # Phase 7/11: hard global catalog-eligibility policy, applied as both a
 # pre-retrieval gate and a final lightweight validation (docs/data-mapping.md section 5).
+# require_active REMOVED (production-safe contract redesign, docs/
+# production-feature-parity-audit.md) - see configs/base.yaml's
+# eligibility section for the full rationale.
 eligibility:
-  require_active: true
   require_in_stock: true
 
 # Phase 7: re-ranking (dedup + diversity). Continuous score-penalty
 # trade-off, not a hard quota - see RerankingConfig docstring.
+# brand_repetition_penalty REMOVED (production-safe contract redesign,
+# docs/production-feature-parity-audit.md) - see configs/base.yaml's
+# reranking section for the full rationale.
 reranking:
   diversity_strength: 0.5
   category_repetition_penalty: 0.15
-  brand_repetition_penalty: 0.08
 
 # Phase 6: neural ranker. Consumes candidates retrieved by VectorIndex
 # (Phase 5) plus richer per-candidate features than the Two-Tower model

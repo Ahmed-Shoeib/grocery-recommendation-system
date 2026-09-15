@@ -182,8 +182,9 @@ class UserPriceProfile:
                                      recent price shift is recognized -
                                      see `build_user_price_profile`).
       "preferred_category_prior"  - zero usable purchases, but the user
-                                     has a `preferredCategory`; falls back
-                                     to that category's catalog median.
+                                     has >=1 `preferred_categories` entry;
+                                     falls back to the (mean of) those
+                                     categories' catalog median(s).
       "catalog_prior"             - zero usable purchases AND no
                                      preferred category; falls back to the
                                      whole-catalog median. This is the
@@ -215,7 +216,7 @@ def _purchase_price(purchase: PurchaseRecord, product_lookup: dict[int, Product]
 def build_user_price_profile(
     purchases: list[PurchaseRecord],
     product_lookup: dict[int, Product],
-    preferred_category: str | None,
+    preferred_categories: list[str],
     price_context: PriceCatalogContext,
     reference_time: datetime | None,
     recency_config: RecencyConfig,
@@ -249,9 +250,14 @@ def build_user_price_profile(
         tier = assign_price_tier(typical, price_context.catalog_tier_boundaries)
         return UserPriceProfile(typical, spread, tier, len(priced), "purchase_history")
 
-    if preferred_category is not None and preferred_category in price_context.category_median_price:
-        typical = price_context.category_median_price[preferred_category]
-        spread = price_context.category_std_price.get(preferred_category, 0.0)
+    # Multiple favorite categories contribute naturally here too (no
+    # arbitrary "pick one" reduction, docs/production-feature-parity-audit.md):
+    # average the catalog median/spread over every favorite category that
+    # actually has one, rather than only the first.
+    priced_categories = [c for c in preferred_categories if c in price_context.category_median_price]
+    if priced_categories:
+        typical = float(np.mean([price_context.category_median_price[c] for c in priced_categories]))
+        spread = float(np.mean([price_context.category_std_price.get(c, 0.0) for c in priced_categories]))
         tier = assign_price_tier(typical, price_context.catalog_tier_boundaries)
         return UserPriceProfile(typical, spread, tier, 0, "preferred_category_prior")
 

@@ -19,7 +19,6 @@ import numpy as np
 import tensorflow as tf
 
 from recommendation.adapters.base import AdapterBundle
-from recommendation.schemas.engagement import EngagementProfile
 from recommendation.embeddings.encoder import SentenceTransformerEncoder
 from recommendation.features.pipeline import FeaturePipelineResult
 from recommendation.features.price import build_price_catalog_context
@@ -58,21 +57,18 @@ def _set_seeds(seed: int) -> None:
     tf.random.set_seed(seed)
 
 
-def _fit_encoder(
-    bundle: AdapterBundle, engagement_profiles: dict[int, EngagementProfile], config: AppConfig
-) -> TwoTowerFeatureEncoder:
-    """Vocabularies are fit from OBSERVED data only - the product catalog
-    for category/brand (static item metadata, not user behavior) and the
-    actual `age_group` values present on user profiles (whatever taxonomy
-    the backend uses) - never from a hard-coded synthetic-specific list,
-    so this works unchanged against a real backend's own age-group buckets.
+def _fit_encoder(bundle: AdapterBundle, config: AppConfig) -> TwoTowerFeatureEncoder:
+    """The category vocabulary is fit from OBSERVED data only - the
+    product catalog's category names (static item metadata, not user
+    behavior) - never from a hard-coded synthetic-specific list, so this
+    works unchanged against a real backend's own category set. No
+    brand/age-group vocabularies are fit any more (production-safe
+    contract redesign, docs/production-feature-parity-audit.md) - the real
+    backend has neither `Product.Brand` nor `User.AgeGroup`.
     """
     products = bundle.products.list_products()
-    observed_age_groups = sorted({p.profile.age_group for p in engagement_profiles.values() if p.profile.age_group})
     return TwoTowerFeatureEncoder.fit(
         category_names=[p.category_name for p in products if p.category_name],
-        brand_names=[p.brand for p in products if p.brand],
-        age_groups=observed_age_groups,
         prices=[p.price for p in products],
         embedding_dim=config.embedding.embedding_dim,
     )
@@ -104,7 +100,7 @@ def train_two_tower(
     product_features = feature_result.product_features
     engagement_profiles = feature_result.engagement_profiles
 
-    encoder = _fit_encoder(bundle, engagement_profiles, config)
+    encoder = _fit_encoder(bundle, config)
 
     splits = build_user_splits(
         engagement_profiles,

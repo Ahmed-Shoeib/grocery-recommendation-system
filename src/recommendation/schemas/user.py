@@ -1,23 +1,31 @@
 """Canonical UserProfile schema.
 
-`preferred_category` and `age_group` are confirmed backend additions to the
-`User` entity (not yet reflected in docs/erd.jpeg, which predates the
-change - see docs/data-mapping.md, section 2). Both are modeled as
-Optional so inference degrades gracefully for users created before the
-migration lands, rather than requiring them.
+PRODUCTION-SAFE FEATURE CONTRACT (docs/production-feature-parity-audit.md):
 
-`age_group` is treated as an opaque categorical label from the backend: no
-assumed semantics or hard-coded age-based stereotypes are attached to it
-here or in any downstream feature. Its predictive value is something to be
-validated experimentally in the ranking model, not assumed up front.
+- `preferred_categories`: production-safe. The real backend models this as
+  a `FavoriteCategory[]` join (`GET /api/users/{guid}`'s
+  `preferredCategories` array - `backend.dtos.ApiUser`), a LIST, not a
+  single scalar - so this field is a list here too, matching that shape
+  exactly rather than arbitrarily collapsing to "the first favorite."
+  SQLite/synthetic sources that only ever have one preferred category
+  populate a length-<=1 list; nothing downstream needs to special-case
+  that. Empty list = no signal (same as `None` used to mean).
+- `age_group`: LEGACY / METADATA ONLY, kept Optional so a source that
+  genuinely has no concept of it (the real backend's `UserResponse` schema
+  has no such field at all - confirmed absent, not just unpopulated) still
+  produces a valid profile. No production Two-Tower or ranker feature
+  consumes this field any more - see `retrieval.two_tower.feature_encoding`
+  and `ranking.features` module docstrings. Left on the schema rather than
+  removed so a UI/debug view can still show it if a source happens to
+  provide it, and so no downstream code needs defensive `getattr`.
 """
 
 from __future__ import annotations
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class UserProfile(BaseModel):
     user_id: int
-    preferred_category: str | None = None
+    preferred_categories: list[str] = Field(default_factory=list)
     age_group: str | None = None

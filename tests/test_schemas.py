@@ -34,13 +34,21 @@ def test_product_requires_core_fields_but_tags_default_empty():
         Product(id=1, category_id=1, slug="oat-milk", name="Oat Milk")  # missing price
 
 
-def test_user_profile_preferred_category_and_age_group_are_optional():
+def test_user_profile_preferred_categories_and_age_group_are_optional():
     user = UserProfile(user_id=42)
-    assert user.preferred_category is None
+    assert user.preferred_categories == []
     assert user.age_group is None
 
-    user_with_profile = UserProfile(user_id=42, preferred_category="Healthy Snacks", age_group="25-34")
-    assert user_with_profile.preferred_category == "Healthy Snacks"
+    user_with_profile = UserProfile(user_id=42, preferred_categories=["Healthy Snacks"], age_group="25-34")
+    assert user_with_profile.preferred_categories == ["Healthy Snacks"]
+
+
+def test_user_profile_preferred_categories_accepts_multiple():
+    """Real backend `FavoriteCategory[]` shape (docs/production-feature-parity-audit.md)
+    - not reduced to a single scalar.
+    """
+    user = UserProfile(user_id=1, preferred_categories=["Dairy", "Snacks", "Produce"])
+    assert user.preferred_categories == ["Dairy", "Snacks", "Produce"]
 
 
 def test_chatbot_context_record_matches_prompt_example_shape():
@@ -87,7 +95,7 @@ def test_engagement_profile_defaults_to_empty_history():
 def test_engagement_profile_aggregates_all_five_v1_signals():
     profile = EngagementProfile(
         user_id=1,
-        profile=UserProfile(user_id=1, preferred_category="Dairy", age_group="35-44"),
+        profile=UserProfile(user_id=1, preferred_categories=["Dairy"], age_group="35-44"),
         clicks=[ClickRecord(user_id=1, product_id=12)],
         purchases=[PurchaseRecord(user_id=1, product_id=10, order_id=100, quantity=2, unit_price=4.0)],
         cart_items=[CartAffinityRecord(user_id=1, product_id=11, quantity=1)],

@@ -153,7 +153,12 @@ def main() -> None:
     # NO_HISTORY code path deterministically regardless of whether this
     # particular synthetic dataset instantiation happens to contain a
     # genuinely zero-signal user.
-    no_history_profile = EngagementProfile(user_id=-1, profile=UserProfile(user_id=-1, preferred_category=next(iter({p.category_name for p in products if p.category_name}))))
+    no_history_profile = EngagementProfile(
+        user_id=-1,
+        profile=UserProfile(
+            user_id=-1, preferred_categories=[next(iter({p.category_name for p in products if p.category_name}))]
+        ),
+    )
     no_history_features = build_user_features(no_history_profile, product_lookup, product_embeddings, config.features)
     no_history_result = generate_recommendations(
         no_history_features, product_features, product_embeddings, two_tower_artifacts.item_ids,
@@ -172,9 +177,11 @@ def main() -> None:
         demo_user_features, product_features, product_embeddings, two_tower_artifacts.item_ids,
         two_tower_artifacts.encoder, two_tower_artifacts.user_tower, ranker_artifacts.model, vector_index, config, top_n,
     )
-    catalog_excluded_ids = [pid for pid, pf in product_features.items() if not (pf.is_active and pf.stock_quantity > 0)]
+    # Production-safe eligibility is stock-only (docs/production-feature-parity-audit.md)
+    # - `is_active` is legacy/metadata only and no longer part of the rule.
+    catalog_excluded_ids = [pid for pid, pf in product_features.items() if not (pf.stock_quantity > 0)]
     if not catalog_excluded_ids:
-        print("  No inactive/out-of-stock product exists in this dataset instantiation.")
+        print("  No out-of-stock product exists in this dataset instantiation.")
     else:
         print(f"  {len(catalog_excluded_ids)} catalog product(s) excluded PRE-RETRIEVAL (never became candidates for ANY user):")
         for pid in catalog_excluded_ids:

@@ -94,7 +94,7 @@ def test_user_preferred_category_resolved_from_id_to_name():
 
     bundle = build_sqlite_adapters(DB_PATH)
     profile = bundle.users.get_user_profile(row["Id"])
-    assert profile.preferred_category == row["Name"]
+    assert profile.preferred_categories == [row["Name"]]
 
 
 def test_user_with_null_preferred_category_and_age_group():
@@ -107,7 +107,7 @@ def test_user_with_null_preferred_category_and_age_group():
 
     bundle = build_sqlite_adapters(DB_PATH)
     profile = bundle.users.get_user_profile(row["Id"])
-    assert profile.preferred_category is None
+    assert profile.preferred_categories == []
     assert profile.age_group is None
 
 

@@ -41,11 +41,11 @@ def test_user_count_matches_config():
 
 def test_incomplete_profile_fraction_is_approximately_honored():
     dataset = generate_synthetic_dataset(_small_config(num_users=200, incomplete_profile_fraction=0.05))
-    incomplete = sum(1 for u in dataset.users if u.preferred_category_id is None or u.age_group is None)
+    incomplete = sum(1 for u in dataset.users if not u.preferred_category_ids or u.age_group is None)
     assert incomplete == 10  # exact: round(200 * 0.05)
     for u in dataset.users:
-        # Never partially incomplete - both fields are set together or both are None.
-        assert (u.preferred_category_id is None) == (u.age_group is None)
+        # Never partially incomplete - both fields are set together or both are empty/None.
+        assert (not u.preferred_category_ids) == (u.age_group is None)
 
 
 def test_every_order_item_belongs_to_a_generated_order_and_product():

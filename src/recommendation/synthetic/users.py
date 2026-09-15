@@ -76,7 +76,7 @@ def generate_users(
                 first_name=f"User{user_id}",
                 last_name="Synthetic",
                 email=f"user{user_id}@synthetic.invalid",
-                preferred_category_id=None if is_incomplete else preferred_category_id,
+                preferred_category_ids=[] if is_incomplete else [preferred_category_id],
                 age_group=None if is_incomplete else age_group,
             )
         )

@@ -57,7 +57,7 @@ def main() -> None:
     )
     uf = result.user_features[with_history]
     print(f"User {with_history} (has history):")
-    print(f"  preferred_category={uf.preferred_category!r} age_group={uf.age_group!r}")
+    print(f"  preferred_categories={uf.preferred_categories!r} age_group={uf.age_group!r}")
     print(f"  purchase_count={uf.purchase_count} cart_item_count={uf.cart_item_count} "
           f"search_count={uf.search_count} has_chatbot_context={uf.has_chatbot_context}")
     print(f"  total_engagement_events={uf.total_engagement_events}")

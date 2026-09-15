@@ -234,7 +234,7 @@ def test_users_are_bare_when_endpoint_is_auth_gated(tmp_path):
     guid_by_id = {1: "g1", 2: "g2"}
     users = load_backend_users(client, guid_by_id, catalog)
     assert {u.id for u in users} == {1, 2}
-    assert all(u.preferred_category_id is None and u.age_group is None for u in users)
+    assert all(u.preferred_category_ids == [] and u.age_group is None for u in users)
     # short-circuits: does not call get_user once per user forever
     assert len(client.user_calls) <= 3
 
@@ -258,7 +258,31 @@ def test_user_enrichment_populates_preferred_category_when_available(tmp_path):
     })
     users = load_backend_users(client, {1: "g1"}, catalog)
     u = users[0]
-    assert u.preferred_category_id == catalog.category_id_by_slug["groceries"]
+    assert u.preferred_category_ids == [catalog.category_id_by_slug["groceries"]]
+
+
+def test_user_enrichment_populates_all_preferred_categories_not_just_first(tmp_path):
+    """Production-safe contract redesign (docs/production-feature-parity-audit.md):
+    every favorite category is resolved, not just the first - no arbitrary
+    "pick one" reduction.
+    """
+    r = _resolver(tmp_path)
+    catalog = load_backend_catalog(FakeBackendClient(products=_PRODS, categories=_CATS), r)
+    client = FakeBackendClient(users={
+        "g1": {
+            "guid": "g1",
+            "firstName": "A",
+            "preferredCategories": [
+                {"categoryId": 5, "category": {"slug": "groceries", "name": "Groceries"}, "addedAt": "2026-01-01T00:00:00"},
+                {"categoryId": 6, "category": {"slug": "electronics", "name": "Electronics"}, "addedAt": "2026-01-02T00:00:00"},
+            ],
+        },
+    })
+    users = load_backend_users(client, {1: "g1"}, catalog)
+    u = users[0]
+    assert u.preferred_category_ids == [
+        catalog.category_id_by_slug["groceries"], catalog.category_id_by_slug["electronics"]
+    ]
 
 
 def test_age_group_stays_none_on_the_real_schema_but_is_forward_compatible(tmp_path):

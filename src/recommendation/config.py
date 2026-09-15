@@ -240,13 +240,11 @@ class TwoTowerConfig(BaseModel):
     # In-batch softmax temperature (logits = cosine_sim / temperature).
     temperature: float = 0.05
     category_embedding_dim: int = 16
-    brand_embedding_dim: int = 16
-    age_group_embedding_dim: int = 8
     # STEP 6 (docs/data-mapping.md section 15): BUDGET/MID/PREMIUM + an
     # "unknown/no profile" bucket - only 4 possible values, so a small
-    # embedding is deliberate (matches age_group_embedding_dim's size,
-    # not category/brand's larger vocab). A learned embedding, not a
-    # 0/1/2 ordinal integer - see FeatureConfig-adjacent design note in
+    # embedding is deliberate (much smaller than category's larger vocab).
+    # A learned embedding, not a 0/1/2 ordinal integer - see
+    # FeatureConfig-adjacent design note in
     # `retrieval.two_tower.feature_encoding`.
     price_tier_embedding_dim: int = 8
     # A user needs at least this many DISTINCT purchased products to be
@@ -354,7 +352,16 @@ class ColdStartConfig(BaseModel):
 
 
 class EligibilityConfig(BaseModel):
-    require_active: bool = True
+    """`require_active` (an `isActive`-based rule) was REMOVED from this
+    config (production-safe contract redesign,
+    docs/production-feature-parity-audit.md): the real SQL Server
+    `Products` table has no `isActive` column at all, so that rule was
+    already a structural no-op against `backend_api` (the loader hard-codes
+    `is_active=True`). Real product availability is expressed entirely by
+    `stockQuantity`, which `require_in_stock` already covers - no invented
+    replacement field was added.
+    """
+
     require_in_stock: bool = True
 
 
@@ -362,16 +369,24 @@ class ReRankingConfig(BaseModel):
     """Continuous (never a hard cutoff) relevance-vs-diversity trade-off:
     `diversity_strength=0` reproduces the input ranking exactly (pure
     relevance order); higher values increasingly penalize repeated
-    categories/brands. Because it's a score penalty rather than a quota,
-    a candidate is never dropped purely for diversity reasons - it can
-    only be reordered - so over-diversifying can push relevance down
-    gradually and tunably, never catastrophically. See
+    categories. Because it's a score penalty rather than a quota, a
+    candidate is never dropped purely for diversity reasons - it can only
+    be reordered - so over-diversifying can push relevance down gradually
+    and tunably, never catastrophically. See
     `recommendation.reranking.diversity`.
+
+    `brand_repetition_penalty` was REMOVED (production-safe contract
+    redesign, docs/production-feature-parity-audit.md): the real SQL
+    Server `Products` table has no `Brand` column, so every `backend_api`
+    candidate's brand was the same constant `None` - the old brand penalty
+    didn't just do nothing there, it actively penalized every candidate
+    pair uniformly (they all "shared a brand"), silently distorting
+    diversity re-ranking. Category-only diversity is the production-safe
+    replacement; no invented attribute was added in its place.
     """
 
     diversity_strength: float = 0.5
     category_repetition_penalty: float = 0.15
-    brand_repetition_penalty: float = 0.08
 
 
 class RankingConfig(BaseModel):

@@ -9,10 +9,10 @@ from recommendation.config import TwoTowerConfig
 
 @pytest.fixture
 def encoder() -> TwoTowerFeatureEncoder:
+    # Production-safe contract (docs/production-feature-parity-audit.md):
+    # no brand_names/age_groups - the real backend has neither field.
     return TwoTowerFeatureEncoder.fit(
         category_names=["Dairy & Eggs", "Snacks"],
-        brand_names=["GreenValley"],
-        age_groups=["25-34"],
         prices=[2.0, 4.0],
         embedding_dim=8,
     )
@@ -20,7 +20,7 @@ def encoder() -> TwoTowerFeatureEncoder:
 
 @pytest.fixture
 def config() -> TwoTowerConfig:
-    return TwoTowerConfig(projection_dims=[16, 8], output_dim=8, category_embedding_dim=4, brand_embedding_dim=4, age_group_embedding_dim=2)
+    return TwoTowerConfig(projection_dims=[16, 8], output_dim=8, category_embedding_dim=4)
 
 
 def test_save_and_load_round_trips_item_tower_predictions(tmp_path, encoder, config):
@@ -30,7 +30,6 @@ def test_save_and_load_round_trips_item_tower_predictions(tmp_path, encoder, con
     item_batch = {
         "semantic_embedding": np.random.default_rng(0).normal(size=(4, 8)).astype(np.float32),
         "category_id": np.array([0, 1, 1, 0], dtype=np.int32),
-        "brand_id": np.array([0, 0, 1, 1], dtype=np.int32),
         "price_tier_id": np.array([0, 1, 2, 3], dtype=np.int32),
         "numeric": np.random.default_rng(1).normal(size=(4, encoder.item_numeric_dim)).astype(np.float32),
     }
@@ -58,7 +57,6 @@ def test_save_and_load_preserves_encoder_vocab(tmp_path, encoder, config):
     )
     artifacts = load_two_tower_artifacts(out_dir)
     assert artifacts.encoder.category_vocab.values == encoder.category_vocab.values
-    assert artifacts.encoder.brand_vocab.values == encoder.brand_vocab.values
 
 
 def test_save_and_load_preserves_item_embeddings_and_ids(tmp_path, encoder, config):

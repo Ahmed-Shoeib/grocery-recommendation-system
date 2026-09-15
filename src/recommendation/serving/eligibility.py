@@ -1,6 +1,13 @@
-"""Hard global catalog-eligibility policy - `isActive`/`stockQuantity`,
-the fields the ERD actually has. No `isDeleted` or similar field is
-invented.
+"""Hard global catalog-eligibility policy - `stockQuantity` only.
+
+PRODUCTION-SAFE CONTRACT (docs/production-feature-parity-audit.md): an
+`isActive`-based rule was REMOVED from this module. The real SQL Server
+`Products` table has no `isActive` column at all - the `backend_api`
+loader already hard-codes `is_active=True` for every product, so an
+`isActive` rule could never exclude anything against that source; the
+genuine, real production availability signal is `stockQuantity > 0`,
+which is what actually gates eligibility below. No replacement field was
+invented for `isActive` - stock alone is a sufficient, real signal.
 
 This one policy (`build_eligibility_rules` + `apply_eligibility`) is
 applied at TWO points in `serving.pipeline.generate_recommendations`,
@@ -55,8 +62,6 @@ class EligibilityResult:
 
 def build_eligibility_rules(config: EligibilityConfig) -> list[EligibilityRule]:
     rules: list[EligibilityRule] = []
-    if config.require_active:
-        rules.append(EligibilityRule("is_active", lambda pf: pf.is_active))
     if config.require_in_stock:
         rules.append(EligibilityRule("in_stock", lambda pf: pf.stock_quantity > 0))
     return rules

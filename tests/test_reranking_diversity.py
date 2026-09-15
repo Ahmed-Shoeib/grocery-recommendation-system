@@ -36,9 +36,31 @@ def test_diversity_promotes_different_category_when_strength_high():
     # 1 and 2 same category (Dairy), 3 different (Snacks); high penalty should push 3 above 2.
     candidates = [RankedCandidate(1, 0.90, "a"), RankedCandidate(2, 0.89, "a"), RankedCandidate(3, 0.85, "a")]
     features = {1: _pf(1, "Dairy"), 2: _pf(2, "Dairy"), 3: _pf(3, "Snacks")}
-    config = ReRankingConfig(diversity_strength=1.0, category_repetition_penalty=0.5, brand_repetition_penalty=0.0)
+    config = ReRankingConfig(diversity_strength=1.0, category_repetition_penalty=0.5)
     result = apply_diversity(candidates, features, config)
     assert [c.product_id for c in result] == [1, 3, 2]
+
+
+def test_brand_is_not_a_diversity_signal():
+    """Production-safe contract (docs/production-feature-parity-audit.md):
+    `ReRankingConfig.brand_repetition_penalty` was removed entirely - the
+    real SQL Server `Products` table has no `Brand` column, so every
+    `backend_api` candidate's brand was the same constant `None`, which
+    would have penalized every candidate pair uniformly rather than doing
+    nothing. Two candidates that differ ONLY in brand (same category, same
+    score) must be reordered identically to two candidates with no brand
+    data at all.
+    """
+    assert not hasattr(ReRankingConfig(), "brand_repetition_penalty")
+
+    candidates = [RankedCandidate(1, 0.9, "a"), RankedCandidate(2, 0.9, "a")]
+    same_category_different_brand = {1: _pf(1, "Dairy", brand="BrandA"), 2: _pf(2, "Dairy", brand="BrandB")}
+    same_category_no_brand = {1: _pf(1, "Dairy", brand=None), 2: _pf(2, "Dairy", brand=None)}
+    config = ReRankingConfig(diversity_strength=1.0, category_repetition_penalty=0.1)
+
+    result_with_brand = [c.product_id for c in apply_diversity(candidates, same_category_different_brand, config)]
+    result_without_brand = [c.product_id for c in apply_diversity(candidates, same_category_no_brand, config)]
+    assert result_with_brand == result_without_brand
 
 
 def test_diversity_never_drops_a_candidate():

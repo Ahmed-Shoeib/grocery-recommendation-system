@@ -2673,15 +2673,28 @@ re-verified this pass).
 
 ### 19.12 Permanently unavailable: `isActive`, `brand`, list-level tags
 
+**UPDATE (2026-09-15, superseding the "not being removed" framing below):**
+following `docs/production-feature-parity-audit.md`'s field-by-field audit,
+`brand`/`isActive`/discount fields/`age_group`/category-parent hierarchy
+have now been REMOVED from every model input this table lists (Two-Tower,
+ranker, product text, eligibility, diversity) - see
+`docs/production-feature-parity-audit.md` §19 ("Implemented production-safe
+contract") for the exact new contract. This was a code + data-contract
+change only, no retraining - the table below is kept as the historical
+record of what depended on these fields BEFORE that redesign, and remains
+accurate for understanding why the change touched each of these files.
+
 The backend team has confirmed the **production** backend will never
 provide `isActive`, `brand`, or tags in the product list projection.
 These are therefore **not backend-team requests any more** (they are
 withdrawn from 19.8) and must not be treated as temporary gaps that will
 one day be filled.
 
-They are also **not being removed from the recommender in this task**, and
-that is deliberate. The current trained artifacts are the SQLite baseline,
-and `brand` in particular is baked into shipped model contracts:
+~~They are also **not being removed from the recommender in this
+task**, and that is deliberate.~~ (Superseded - see the 2026-09-15 update
+above.) The table below shows what depended on `brand`/`isActive`/tags in
+the PRE-redesign code, and `brand` in particular was baked into the
+PRE-redesign shipped model contracts:
 
 | Where | What depends on it | Removing it now would… |
 |---|---|---|

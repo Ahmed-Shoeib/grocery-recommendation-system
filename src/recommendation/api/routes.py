@@ -166,7 +166,10 @@ async def get_users(service: RecommendationService = Depends(get_service)) -> Us
     """
     rows = list_users(service)
     return UserListResponse(
-        users=[UserListItem(user_id=r.user_id, preferred_category=r.preferred_category, age_group=r.age_group) for r in rows]
+        users=[
+            UserListItem(user_id=r.user_id, preferred_categories=r.preferred_categories, age_group=r.age_group)
+            for r in rows
+        ]
     )
 
 
@@ -186,7 +189,7 @@ async def get_user_profile(user_id: int, service: RecommendationService = Depend
     features = detail.features
     return UserProfileResponse(
         user_id=detail.user_id,
-        preferred_category=detail.preferred_category,
+        preferred_categories=detail.preferred_categories,
         age_group=detail.age_group,
         tier=detail.tier.value,
         total_engagement_events=features.total_engagement_events,

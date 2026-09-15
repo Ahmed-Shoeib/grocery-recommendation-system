@@ -39,7 +39,7 @@ from recommendation.serving.pipeline import RecommendationResult
 @dataclass
 class UserListRow:
     user_id: int
-    preferred_category: str | None
+    preferred_categories: list[str]
     age_group: str | None
 
 
@@ -50,7 +50,7 @@ def list_users(service: RecommendationService) -> list[UserListRow]:
         rows.append(
             UserListRow(
                 user_id=user_id,
-                preferred_category=profile.preferred_category if profile else None,
+                preferred_categories=list(profile.preferred_categories) if profile else [],
                 age_group=profile.age_group if profile else None,
             )
         )
@@ -60,7 +60,7 @@ def list_users(service: RecommendationService) -> list[UserListRow]:
 @dataclass
 class UserDetail:
     user_id: int
-    preferred_category: str | None
+    preferred_categories: list[str]
     age_group: str | None
     engagement: EngagementProfile
     features: UserFeatures
@@ -87,7 +87,7 @@ def load_user_detail(service: RecommendationService, user_id: int) -> UserDetail
     tier = determine_history_tier(features.total_engagement_events, service.config.cold_start)
     return UserDetail(
         user_id=user_id,
-        preferred_category=profile.preferred_category,
+        preferred_categories=list(profile.preferred_categories),
         age_group=profile.age_group,
         engagement=engagement,
         features=features,

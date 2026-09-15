@@ -89,7 +89,7 @@ class ReadinessResponse(BaseModel):
 
 class UserListItem(BaseModel):
     user_id: int
-    preferred_category: str | None = None
+    preferred_categories: list[str] = Field(default_factory=list)
     age_group: str | None = None
 
 
@@ -99,7 +99,7 @@ class UserListResponse(BaseModel):
 
 class UserProfileResponse(BaseModel):
     user_id: int
-    preferred_category: str | None = None
+    preferred_categories: list[str] = Field(default_factory=list)
     age_group: str | None = None
     tier: Literal["strong", "sparse", "no_history"]
     total_engagement_events: int

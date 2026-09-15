@@ -117,4 +117,4 @@ def test_bare_user_profiles_when_user_endpoint_unavailable(tmp_path):
     bundle, _ = _build(tmp_path, users_status=401)
     prof = bundle.users.get_user_profile(1)
     assert prof is not None
-    assert prof.preferred_category is None and prof.age_group is None
+    assert prof.preferred_categories == [] and prof.age_group is None

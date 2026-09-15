@@ -260,14 +260,15 @@ class ApiUser(BaseModel):
     preferred_categories: list[ApiFavoriteCategory] = Field(default_factory=list)
     age_group: str | None = None
 
-    def first_preferred_category_slug(self) -> str | None:
-        for entry in self.preferred_categories:
-            if entry.category and entry.category.slug:
-                return entry.category.slug
-        return None
-
-    def first_preferred_category_name(self) -> str | None:
-        for entry in self.preferred_categories:
-            if entry.category and entry.category.name:
-                return entry.category.name
-        return None
+    def preferred_category_refs(self) -> list[ApiCategoryRef]:
+        """Every favorite category's `{slug, name}` ref, in wire order -
+        the full list, not just the first entry (see `loader._to_raw_user`,
+        which no longer arbitrarily picks one: the real backend's
+        `preferredCategories` shape is a list, and
+        `schemas.user.UserProfile.preferred_categories` preserves that
+        shape end to end). One `ApiCategoryRef` per entry, so a caller can
+        try slug-then-name resolution PER ENTRY rather than two separately-
+        filtered flat lists that could desync if one entry only has a name
+        (or only a slug).
+        """
+        return [entry.category for entry in self.preferred_categories if entry.category is not None]

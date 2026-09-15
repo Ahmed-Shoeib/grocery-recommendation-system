@@ -90,13 +90,12 @@ def _sha256_file(path: Path) -> str:
 
 
 def _fit_encoder(products, users_adapter, embedding_dim: int) -> TwoTowerFeatureEncoder:
-    observed_age_groups = sorted(
-        {p.age_group for uid in users_adapter.list_user_ids() if (p := users_adapter.get_user_profile(uid)) and p.age_group}
-    )
+    # `users_adapter` is accepted for call-site/interface stability; no
+    # brand/age-group vocabularies are fit any more (production-safe
+    # contract redesign - docs/production-feature-parity-audit.md).
+    del users_adapter
     return TwoTowerFeatureEncoder.fit(
         category_names=[p.category_name for p in products if p.category_name],
-        brand_names=[p.brand for p in products if p.brand],
-        age_groups=observed_age_groups,
         prices=[p.price for p in products],
         embedding_dim=embedding_dim,
     )

@@ -20,11 +20,13 @@ every other consumer of these naive datetimes are untouched.
 
 from __future__ import annotations
 
+import hashlib
 import shutil
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 
 from recommendation.api.service import _load_data_snapshot
@@ -36,13 +38,27 @@ from recommendation.config import AppConfig, PathsConfig, get_config, resolve_pa
 DB_PATH = resolve_path(get_config().paths.data_sqlite)
 pytestmark = pytest.mark.skipif(not DB_PATH.exists(), reason="backend_shaped_synthetic.db not present")
 
+_FAKE_EMBEDDING_DIM = 384
+
 
 def _fake_encoder() -> SimpleNamespace:
-    # See tests/test_service_refresh.py for why a stub encoder is safe here
-    # (the committed embedding cache is content-hash-valid, and the
-    # User_events-sourced dataset never has free-text search/chatbot
-    # content, so `.encode(...)` is never actually called).
-    return SimpleNamespace(model_name="all-MiniLM-L6-v2")
+    # See tests/test_service_refresh.py for why this stub needs a real
+    # `.encode(...)`: the production-safe contract redesign changed
+    # `embeddings.text_builder.build_product_text`, invalidating the
+    # on-disk product-embedding cache's content hash - a cache miss (and
+    # therefore a real encode call) is now the expected path. Deterministic
+    # dummy vectors are enough: these tests only assert on
+    # timestamp/recency behavior, never on embedding content.
+    def _encode(texts: list[str], normalize: bool = False) -> np.ndarray:
+        if not texts:
+            return np.empty((0, _FAKE_EMBEDDING_DIM), dtype=np.float32)
+        vectors = []
+        for text in texts:
+            seed = int(hashlib.sha256(text.encode("utf-8")).hexdigest()[:8], 16)
+            vectors.append(np.random.default_rng(seed).normal(size=_FAKE_EMBEDDING_DIM).astype(np.float32))
+        return np.stack(vectors)
+
+    return SimpleNamespace(model_name="all-MiniLM-L6-v2", embedding_dim=_FAKE_EMBEDDING_DIM, encode=_encode)
 
 
 def _utc_now_naive() -> datetime:

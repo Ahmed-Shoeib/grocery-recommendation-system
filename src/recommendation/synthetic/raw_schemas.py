@@ -23,11 +23,15 @@ fields that genuinely exist in the ERD (Order.CreationDate,
 Order.DeliveryDate, Review.CreationDate) are kept here and threaded through
 to the canonical schemas, but are never consumed by V1 feature engineering.
 
-`preferred_category_id` / `age_group` on RawUser model the confirmed
-(pending) backend addition to `User` (docs/data-mapping.md section 2).
-`preferred_category_id` is modeled as an FK to Category, matching how the
-rest of the schema references categories; the UserAdapter resolves it to
-a category name for the canonical `UserProfile`.
+`preferred_category_ids` / `age_group` on RawUser model the confirmed
+backend `User` attributes (docs/data-mapping.md section 2,
+docs/production-feature-parity-audit.md). `preferred_category_ids` is a
+LIST of category FKs, matching the real backend's `FavoriteCategory[]`
+join shape (`backend.dtos.ApiUser.preferred_categories`) - not a single
+scalar - so a source with genuinely multiple favorites doesn't need an
+arbitrary "pick one" reduction. A source with only one preferred category
+(SQLite, synthetic) populates a length-<=1 list. `UserAdapter` resolves
+each id to a category name for the canonical `UserProfile.preferred_categories`.
 """
 
 from __future__ import annotations
@@ -76,7 +80,7 @@ class RawUser(BaseModel):
     first_name: str
     last_name: str
     email: str
-    preferred_category_id: int | None = None
+    preferred_category_ids: list[int] = Field(default_factory=list)
     age_group: str | None = None
 
 

@@ -72,28 +72,42 @@ def test_product_adapter_list_products_matches_catalog_size():
 
 # --- UserAdapter ------------------------------------------------------------
 
-def test_user_adapter_resolves_preferred_category_id_to_name():
+def test_user_adapter_resolves_preferred_category_ids_to_names():
     categories = [RawCategory(id=1, name="Dairy & Eggs", parent_id=None)]
-    users = [RawUser(id=1, first_name="A", last_name="B", email="a@b.invalid", preferred_category_id=1, age_group="25-34")]
+    users = [RawUser(id=1, first_name="A", last_name="B", email="a@b.invalid", preferred_category_ids=[1], age_group="25-34")]
     adapter = InMemoryUserAdapter(users, categories)
     profile = adapter.get_user_profile(1)
-    assert profile.preferred_category == "Dairy & Eggs"
+    assert profile.preferred_categories == ["Dairy & Eggs"]
     assert profile.age_group == "25-34"
 
 
+def test_user_adapter_resolves_multiple_preferred_category_ids():
+    """Real backend `FavoriteCategory[]` shape (docs/production-feature-parity-audit.md)
+    - every favorite is resolved, not just the first.
+    """
+    categories = [
+        RawCategory(id=1, name="Dairy & Eggs", parent_id=None),
+        RawCategory(id=2, name="Snacks", parent_id=None),
+    ]
+    users = [RawUser(id=1, first_name="A", last_name="B", email="a@b.invalid", preferred_category_ids=[1, 2])]
+    adapter = InMemoryUserAdapter(users, categories)
+    profile = adapter.get_user_profile(1)
+    assert profile.preferred_categories == ["Dairy & Eggs", "Snacks"]
+
+
 def test_user_adapter_handles_missing_preferred_category_defensively():
-    users = [RawUser(id=1, first_name="A", last_name="B", email="a@b.invalid", preferred_category_id=None, age_group=None)]
+    users = [RawUser(id=1, first_name="A", last_name="B", email="a@b.invalid", preferred_category_ids=[], age_group=None)]
     adapter = InMemoryUserAdapter(users, [])
     profile = adapter.get_user_profile(1)
-    assert profile.preferred_category is None
+    assert profile.preferred_categories == []
     assert profile.age_group is None
 
 
-def test_user_adapter_dangling_preferred_category_id_resolves_to_none():
-    users = [RawUser(id=1, first_name="A", last_name="B", email="a@b.invalid", preferred_category_id=999, age_group=None)]
+def test_user_adapter_dangling_preferred_category_id_is_dropped():
+    users = [RawUser(id=1, first_name="A", last_name="B", email="a@b.invalid", preferred_category_ids=[999], age_group=None)]
     adapter = InMemoryUserAdapter(users, [])
     profile = adapter.get_user_profile(1)
-    assert profile.preferred_category is None
+    assert profile.preferred_categories == []
 
 
 def test_user_adapter_unknown_user_returns_none():

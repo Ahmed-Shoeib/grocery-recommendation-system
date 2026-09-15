@@ -37,22 +37,60 @@ def _sample_products() -> list[Product]:
 
 # --- text builder -----------------------------------------------------------
 
-def test_build_product_text_includes_all_specified_fields():
+def test_build_product_text_includes_only_production_safe_fields():
+    """Production-safe contract (docs/production-feature-parity-audit.md):
+    ONLY name, description, and category are used - verified reproducible
+    from both the SQLite training source and the real backend REST API.
+    """
     product = Product(
         id=1, category_id=6, slug="coffee", name="Ground Coffee", price=7.99, brand="BrewHouse",
         category_name="Coffee & Tea", parent_category_name="Beverages", description="Smooth medium roast.",
         ingredients="100% Arabica.", tags=["premium", "on-the-go"],
     )
     text = build_product_text(product)
-    for expected in ["Ground Coffee", "BrewHouse", "Coffee & Tea", "Beverages", "premium", "on-the-go",
-                      "Smooth medium roast", "100% Arabica"]:
+    for expected in ["Ground Coffee", "Coffee & Tea", "Smooth medium roast"]:
         assert expected in text
+
+
+def test_build_product_text_excludes_production_unsafe_fields():
+    """`brand`, parent category, `tags`, and `ingredients` have no real
+    SQL Server equivalent (or, for tags, disputed production availability)
+    - see `embeddings.text_builder` module docstring.
+    """
+    product = Product(
+        id=1, category_id=6, slug="coffee", name="Ground Coffee", price=7.99, brand="BrewHouse",
+        category_name="Coffee & Tea", parent_category_name="Beverages", description="Smooth medium roast.",
+        ingredients="100% Arabica.", tags=["premium", "on-the-go"],
+    )
+    text = build_product_text(product)
+    for excluded in ["BrewHouse", "Beverages", "premium", "on-the-go", "100% Arabica"]:
+        assert excluded not in text
 
 
 def test_build_product_text_handles_missing_optional_fields():
     product = Product(id=1, category_id=1, slug="x", name="Mystery Item", price=1.0)
     text = build_product_text(product)
     assert text == "Mystery Item"
+
+
+def test_build_product_text_identical_for_equivalent_sqlite_and_backend_api_products():
+    """Training-serving parity: a SQLite-sourced product and a
+    backend_api-sourced product with the SAME name/description/category
+    (but different brand/tags/ingredients - the backend_api source always
+    leaves those at their defaults) MUST produce byte-identical text, so
+    the same product's embedding doesn't silently drift between training
+    and serving (docs/production-feature-parity-audit.md).
+    """
+    sqlite_shaped = Product(
+        id=1, category_id=1, slug="p", name="Whole Milk 1L", price=2.49, brand="DairyBest",
+        category_name="Dairy & Eggs", description="Fresh whole milk.", ingredients="Pasteurized whole milk.",
+        tags=["breakfast-staple"],
+    )
+    backend_api_shaped = Product(
+        id=1, category_id=1, slug="p", name="Whole Milk 1L", price=2.49, brand=None,
+        category_name="Dairy & Eggs", description="Fresh whole milk.", ingredients=None, tags=[],
+    )
+    assert build_product_text(sqlite_shaped) == build_product_text(backend_api_shaped)
 
 
 # --- encoder ------------------------------------------------------------------

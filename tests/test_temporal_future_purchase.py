@@ -307,17 +307,21 @@ def _pf(product_id: int, is_active: bool, stock: int) -> ProductFeatures:
 
 
 def test_eligible_and_ineligible_targets_partitioned_correctly():
+    """Production-safe contract (docs/production-feature-parity-audit.md):
+    `is_active` no longer gates eligibility (no real `isActive` column) -
+    only `stock_quantity` does, so product 3 (is_active=False, in stock)
+    is now eligible; only product 2 (out of stock) is not.
+    """
     product_features = {
         1: _pf(1, is_active=True, stock=10),
         2: _pf(2, is_active=True, stock=0),
         3: _pf(3, is_active=False, stock=10),
     }
-    rules = build_eligibility_rules(EligibilityConfig(require_active=True, require_in_stock=True))
+    rules = build_eligibility_rules(EligibilityConfig(require_in_stock=True))
     result = split_targets_by_eligibility(frozenset({1, 2, 3}), product_features, rules)
-    assert result.eligible_ids == frozenset({1})
-    assert result.ineligible_ids == frozenset({2, 3})
+    assert result.eligible_ids == frozenset({1, 3})
+    assert result.ineligible_ids == frozenset({2})
     assert "in_stock" in result.ineligible_reasons[2]
-    assert "is_active" in result.ineligible_reasons[3]
 
 
 # --- leakage audit -------------------------------------------------------

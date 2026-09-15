@@ -48,17 +48,19 @@ def _projection_mlp(x: tf.Tensor, config: TwoTowerConfig, name_prefix: str) -> t
 
 
 def build_item_tower(encoder: TwoTowerFeatureEncoder, config: TwoTowerConfig) -> tf.keras.Model:
+    """PRODUCTION-SAFE CONTRACT (docs/production-feature-parity-audit.md):
+    no `brand_id` input - the real SQL Server `Products` table has no
+    `Brand` column, so a learned brand embedding could never be populated
+    with real values in production. `category_id` and `price_tier_id`
+    stay: both are derived purely from real fields (`CategoryId`, `Price`).
+    """
     semantic_in = tf.keras.Input(shape=(encoder.embedding_dim,), name="semantic_embedding")
     category_in = tf.keras.Input(shape=(), dtype="int32", name="category_id")
-    brand_in = tf.keras.Input(shape=(), dtype="int32", name="brand_id")
     numeric_in = tf.keras.Input(shape=(encoder.item_numeric_dim,), name="numeric")
 
     category_emb = tf.keras.layers.Embedding(
         encoder.category_vocab.size, config.category_embedding_dim, name="item_category_embedding"
     )(category_in)
-    brand_emb = tf.keras.layers.Embedding(
-        encoder.brand_vocab.size, config.brand_embedding_dim, name="item_brand_embedding"
-    )(brand_in)
 
     # docs/data-mapping.md section 15: BUDGET/MID/PREMIUM + an
     # "unknown" bucket as a LEARNED embedding, not an ordinal 0/1/2 number
@@ -70,10 +72,10 @@ def build_item_tower(encoder: TwoTowerFeatureEncoder, config: TwoTowerConfig) ->
     )(price_tier_in)
 
     inputs = {
-        "semantic_embedding": semantic_in, "category_id": category_in, "brand_id": brand_in,
+        "semantic_embedding": semantic_in, "category_id": category_in,
         "price_tier_id": price_tier_in, "numeric": numeric_in,
     }
-    concat_parts = [semantic_in, category_emb, brand_emb, price_tier_emb, numeric_in]
+    concat_parts = [semantic_in, category_emb, price_tier_emb, numeric_in]
     concat = tf.keras.layers.Concatenate(name="item_concat")(concat_parts)
     output = _projection_mlp(concat, config, "item")
 
@@ -81,24 +83,25 @@ def build_item_tower(encoder: TwoTowerFeatureEncoder, config: TwoTowerConfig) ->
 
 
 def build_user_tower(encoder: TwoTowerFeatureEncoder, config: TwoTowerConfig) -> tf.keras.Model:
+    """PRODUCTION-SAFE CONTRACT (docs/production-feature-parity-audit.md):
+    no `age_group_id` input - the real backend `Users`/`UserResponse` has
+    no `AgeGroup` field at all, so this embedding could never see anything
+    but "unknown" in production. No `brand_affinity` input - no real
+    `Product.Brand` to build it from. No separate `preferred_category_id`
+    input either: the real backend's preferred/favorite categories are a
+    LIST (`UserProfile.preferred_categories`), and that signal is folded
+    directly into `category_affinity` upstream
+    (`features.user_features.build_user_features`) rather than encoded as
+    a second single-category embedding lookup - see
+    `retrieval.two_tower.feature_encoding` module docstring.
+    """
     semantic_in = tf.keras.Input(shape=(encoder.embedding_dim,), name="semantic_embedding")
-    preferred_category_in = tf.keras.Input(shape=(), dtype="int32", name="preferred_category_id")
-    age_group_in = tf.keras.Input(shape=(), dtype="int32", name="age_group_id")
     category_affinity_in = tf.keras.Input(shape=(encoder.category_affinity_dim,), name="category_affinity")
-    brand_affinity_in = tf.keras.Input(shape=(encoder.brand_affinity_dim,), name="brand_affinity")
     numeric_in = tf.keras.Input(shape=(encoder.user_numeric_dim,), name="numeric")
-
-    preferred_category_emb = tf.keras.layers.Embedding(
-        encoder.category_vocab.size, config.category_embedding_dim, name="user_preferred_category_embedding"
-    )(preferred_category_in)
-    age_group_emb = tf.keras.layers.Embedding(
-        encoder.age_group_vocab.size, config.age_group_embedding_dim, name="user_age_group_embedding"
-    )(age_group_in)
 
     # Same fixed BUDGET/MID/PREMIUM/unknown vocabulary as the item tower
     # (`encoder.price_tier_vocab` is shared) - the user's DERIVED price
-    # tier (`UserFeatures.price_profile.price_tier`), not the age_group-
-    # style opaque label - see `features.price.build_user_price_profile`.
+    # tier (`UserFeatures.price_profile.price_tier`), from real Price data.
     price_tier_in = tf.keras.Input(shape=(), dtype="int32", name="price_tier_id")
     price_tier_emb = tf.keras.layers.Embedding(
         encoder.price_tier_vocab.size, config.price_tier_embedding_dim, name="user_price_tier_embedding"
@@ -106,14 +109,11 @@ def build_user_tower(encoder: TwoTowerFeatureEncoder, config: TwoTowerConfig) ->
 
     inputs = {
         "semantic_embedding": semantic_in,
-        "preferred_category_id": preferred_category_in,
-        "age_group_id": age_group_in,
         "category_affinity": category_affinity_in,
-        "brand_affinity": brand_affinity_in,
         "price_tier_id": price_tier_in,
         "numeric": numeric_in,
     }
-    concat_parts = [semantic_in, preferred_category_emb, age_group_emb, price_tier_emb, category_affinity_in, brand_affinity_in, numeric_in]
+    concat_parts = [semantic_in, price_tier_emb, category_affinity_in, numeric_in]
     concat = tf.keras.layers.Concatenate(name="user_concat")(concat_parts)
     output = _projection_mlp(concat, config, "user")
 

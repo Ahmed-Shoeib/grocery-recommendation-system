@@ -2,16 +2,47 @@
 embeddings) into fixed-size numpy tensors the Keras towers consume.
 
 `TwoTowerFeatureEncoder` is fit ONCE from the full product catalog (category
-names, brands - static catalog metadata, not user behavior, so fitting on
-the full catalog is not target leakage) plus the known age-group vocabulary,
-then reused to encode every item/user example. It is serialized alongside
-the model weights (serving needs the exact same vocab/normalization at
-inference time) - see `serialization.py`.
+names - static catalog metadata, not user behavior, so fitting on the full
+catalog is not target leakage), then reused to encode every item/user
+example. It is serialized alongside the model weights (serving needs the
+exact same vocab/normalization at inference time) - see `serialization.py`.
 
 Index 0 in every `Vocabulary` is reserved for "unknown/missing" so a
-category, brand, or age group value not seen at fit time (or a genuinely
-missing preferredCategory/ageGroup) degrades to a learnable "unknown"
+category value not seen at fit time degrades to a learnable "unknown"
 embedding rather than raising.
+
+PRODUCTION-SAFE FEATURE CONTRACT (docs/production-feature-parity-audit.md,
+"production-safe feature contract redesign"): the real SQL Server
+`Products` table has no `Brand`, `SalePrice`/`DiscountPercentage`, or
+`isActive` column, and the real `Users` table has no `AgeGroup` column at
+all. As of this redesign, the encoder and both towers no longer have ANY
+input derived from those fields:
+
+  REMOVED entirely: `brand_vocab`/`brand_id` (item categorical),
+  `brand_affinity` (user vector), `age_group_vocab`/`age_group_id` (user
+  categorical), `discount_fraction`/`is_discounted` (item numeric),
+  `preferred_category_id` (user categorical - see below).
+
+  `preferred_category_id` specifically is not just removed but REDESIGNED:
+  the real backend models preferred/favorite categories as a LIST
+  (`UserProfile.preferred_categories`), and that signal is now folded
+  directly into the existing `category_affinity` vector
+  (`features.user_features.build_user_features`) rather than encoded as a
+  second, separate single-category embedding lookup - so multiple
+  favorites contribute naturally, with no "pick one" reduction, and no
+  extra Two-Tower input slot was needed to carry them.
+
+  RETAINED unchanged: `category_id`/`category_affinity` (category is a
+  real `CategoryId`-backed production field), `price_tier_id` (derived
+  purely from `Product.Price`, itself real), and every remaining numeric
+  feature below.
+
+`CURRENT_CONTRACT_VERSION` is stamped on every newly-fit encoder and
+persisted in `to_dict()`/checked on load, so a pre-redesign artifact
+(which still has `brand_vocab`/`age_group_vocab` keys and a 9-wide item
+numeric vector) is REJECTED at startup with a clear message
+(`serving.startup_validation`) instead of silently producing wrong
+predictions or a cryptic Keras input-shape error at first request.
 """
 
 from __future__ import annotations
@@ -25,6 +56,15 @@ import numpy as np
 from recommendation.features.price import PRICE_TIERS
 from recommendation.features.product_features import ProductFeatures
 from recommendation.features.user_features import UserFeatures
+
+# Bumped whenever the SET of Two-Tower inputs changes shape (not for every
+# code change) - see module docstring. A pre-redesign encoder (still
+# carrying `brand_vocab`/`age_group_vocab`) has no `contract_version` key
+# at all, so `from_dict` stamps it "legacy_pre_production_safe_contract"
+# rather than guessing - that string will never equal this constant, so
+# `serving.startup_validation` always rejects it explicitly.
+CURRENT_CONTRACT_VERSION = "production_safe_v1"
+_LEGACY_CONTRACT_VERSION = "legacy_pre_production_safe_contract"
 
 
 @dataclass
@@ -55,20 +95,25 @@ class Vocabulary:
         return cls(values=values, index={v: i + 1 for i, v in enumerate(values)})
 
 
+# `discount_fraction`/`is_discounted` were removed (no real SalePrice/
+# DiscountPercentage in production - see module docstring).
 ITEM_NUMERIC_FEATURE_NAMES_BASE = [
-    "normalized_price", "discount_fraction", "log_purchase_count",
+    "normalized_price", "log_purchase_count",
     "log_cart_add_count", "log_review_count", "average_rating", "has_rating",
 ]
 # docs/data-mapping.md section 15: `category_relative_price` is
 # already a [0,1] percentile (no extra normalization needed). `price_tier`
 # itself is NOT a numeric feature - it's a categorical (see `price_tier_id`/
 # `price_tier_vocab` below), not an ordinal number.
-ITEM_NUMERIC_FEATURE_NAMES_PRICE_EXTRA = ["category_relative_price", "is_discounted"]
+ITEM_NUMERIC_FEATURE_NAMES_PRICE_EXTRA = ["category_relative_price"]
 ITEM_NUMERIC_FEATURE_NAMES = ITEM_NUMERIC_FEATURE_NAMES_BASE + ITEM_NUMERIC_FEATURE_NAMES_PRICE_EXTRA
 
+# `has_age_group` was removed (no real AgeGroup column in production - see
+# module docstring); `has_preferred_category` stays (now means "has >=1
+# preferred category" - see `features.user_features.UserFeatures`).
 USER_NUMERIC_FEATURE_NAMES_BASE = [
     "log_purchase_count", "log_cart_item_count", "log_search_count", "log_total_engagement_events",
-    "has_chatbot_context", "has_preferred_category", "has_age_group", "has_semantic_embedding",
+    "has_chatbot_context", "has_preferred_category", "has_semantic_embedding",
 ]
 # The user's typical purchase price, normalized by the SAME catalog
 # `max_price` the item tower uses (consistent scale on both towers - docs/
@@ -87,22 +132,23 @@ USER_NUMERIC_FEATURE_NAMES = USER_NUMERIC_FEATURE_NAMES_BASE + USER_NUMERIC_FEAT
 class TwoTowerFeatureEncoder:
     embedding_dim: int
     category_vocab: Vocabulary
-    brand_vocab: Vocabulary
-    age_group_vocab: Vocabulary
     max_price: float  # catalog-level normalization stat, fit once (not leakage: item-side, static)
     # A FIXED (not data-fit) 3-value vocabulary - see PRICE_TIERS
     # in `features.price` - defaulted so existing callers/tests
     # constructing a TwoTowerFeatureEncoder directly don't need updating.
     price_tier_vocab: Vocabulary = field(default_factory=lambda: Vocabulary.fit(PRICE_TIERS))
     # Reported/serialized metadata only (docs/data-mapping.md section 15):
-    # the price-aware inputs (item category_relative_price/
-    # is_discounted, user normalized_typical_price, the shared
-    # price_tier_id categorical input on both towers) are always part of
-    # the encoded representation - this field no longer branches encoding
-    # shape, it exists so the currently-loaded encoder's price-aware
-    # status is readable for provenance (`evaluation.offline_report`,
-    # `GET /v1/metrics/offline`, the dashboard).
+    # the price-aware inputs (item category_relative_price, user
+    # normalized_typical_price, the shared price_tier_id categorical input
+    # on both towers) are always part of the encoded representation - this
+    # field no longer branches encoding shape, it exists so the
+    # currently-loaded encoder's price-aware status is readable for
+    # provenance (`evaluation.offline_report`, `GET /v1/metrics/offline`,
+    # the dashboard).
     include_price_features: bool = True
+    # See module docstring - distinguishes a post-redesign encoder (no
+    # brand/age-group inputs) from a legacy one at load time.
+    contract_version: str = CURRENT_CONTRACT_VERSION
 
     @property
     def item_numeric_dim(self) -> int:
@@ -116,18 +162,12 @@ class TwoTowerFeatureEncoder:
     def category_affinity_dim(self) -> int:
         return len(self.category_vocab.values)  # affinity vectors don't need an "unknown" slot
 
-    @property
-    def brand_affinity_dim(self) -> int:
-        return len(self.brand_vocab.values)
-
     # --- fitting -----------------------------------------------------------
 
     @classmethod
     def fit(
         cls,
         category_names: list[str],
-        brand_names: list[str],
-        age_groups: list[str],
         prices: list[float],
         embedding_dim: int,
         include_price_features: bool = True,
@@ -135,8 +175,6 @@ class TwoTowerFeatureEncoder:
         return cls(
             embedding_dim=embedding_dim,
             category_vocab=Vocabulary.fit(category_names),
-            brand_vocab=Vocabulary.fit(brand_names),
-            age_group_vocab=Vocabulary.fit(age_groups),
             max_price=max(prices) if prices else 1.0,
             include_price_features=include_price_features,
         )
@@ -146,20 +184,17 @@ class TwoTowerFeatureEncoder:
     def encode_item(self, features: ProductFeatures, semantic_embedding: np.ndarray) -> dict[str, np.ndarray]:
         numeric_values = [
             min(features.effective_price / self.max_price, 1.0) if self.max_price > 0 else 0.0,
-            (features.discount_percentage or 0.0) / 100.0,
             np.log1p(features.purchase_count),
             np.log1p(features.cart_add_count),
             np.log1p(features.review_count),
             features.average_rating if features.average_rating is not None else 0.0,
             1.0 if features.average_rating is not None else 0.0,
             features.category_relative_price,
-            1.0 if features.is_discounted else 0.0,
         ]
 
         return {
             "semantic_embedding": semantic_embedding.astype(np.float32),
             "category_id": np.int32(self.category_vocab.encode(features.category_name)),
-            "brand_id": np.int32(self.brand_vocab.encode(features.brand)),
             "numeric": np.array(numeric_values, dtype=np.float32),
             "price_tier_id": np.int32(self.price_tier_vocab.encode(features.price_tier)),
         }
@@ -178,17 +213,17 @@ class TwoTowerFeatureEncoder:
             if features.semantic_embedding is not None
             else np.zeros(self.embedding_dim, dtype=np.float32)
         )
+        # `features.preferred_categories` (a list) is folded in HERE, not
+        # encoded as a separate `preferred_category_id` input - see module
+        # docstring. That folding already happened upstream in
+        # `features.user_features.build_user_features` (it adds each
+        # preferred category's weight straight into `category_affinity`),
+        # so this loop needs no special-casing at all.
         category_affinity = np.zeros(self.category_affinity_dim, dtype=np.float32)
         for name, weight in features.category_affinity.items():
             idx = self.category_vocab.encode(name)
             if idx > 0:  # unknown categories (idx 0) have no affinity-vector slot
                 category_affinity[idx - 1] = weight
-
-        brand_affinity = np.zeros(self.brand_affinity_dim, dtype=np.float32)
-        for name, weight in features.brand_affinity.items():
-            idx = self.brand_vocab.encode(name)
-            if idx > 0:
-                brand_affinity[idx - 1] = weight
 
         normalized_typical_price = 0.0
         if features.price_profile is not None and self.max_price > 0:
@@ -202,16 +237,12 @@ class TwoTowerFeatureEncoder:
             np.log1p(features.total_engagement_events),
             1.0 if features.has_chatbot_context else 0.0,
             1.0 if features.has_preferred_category else 0.0,
-            1.0 if features.has_age_group else 0.0,
             1.0 if features.semantic_embedding is not None else 0.0,
             normalized_typical_price,
         ]
         return {
             "semantic_embedding": semantic,
-            "preferred_category_id": np.int32(self.category_vocab.encode(features.preferred_category)),
-            "age_group_id": np.int32(self.age_group_vocab.encode(features.age_group)),
             "category_affinity": category_affinity,
-            "brand_affinity": brand_affinity,
             "price_tier_id": np.int32(self.price_tier_vocab.encode(price_tier)),
             "numeric": np.array(numeric_values, dtype=np.float32),
         }
@@ -233,10 +264,9 @@ class TwoTowerFeatureEncoder:
             "embedding_dim": self.embedding_dim,
             "max_price": self.max_price,
             "category_vocab": self.category_vocab.to_dict(),
-            "brand_vocab": self.brand_vocab.to_dict(),
-            "age_group_vocab": self.age_group_vocab.to_dict(),
             "price_tier_vocab": self.price_tier_vocab.to_dict(),
             "include_price_features": self.include_price_features,
+            "contract_version": self.contract_version,
         }
 
     @classmethod
@@ -253,13 +283,18 @@ class TwoTowerFeatureEncoder:
         price_tier_vocab = (
             Vocabulary.from_dict(data["price_tier_vocab"]) if "price_tier_vocab" in data else Vocabulary.fit(PRICE_TIERS)
         )
+        # A pre-redesign encoder JSON has no `contract_version` key at all
+        # (and still has now-removed `brand_vocab`/`age_group_vocab` keys,
+        # simply ignored here) - stamped as the legacy marker so
+        # `serving.startup_validation` rejects it explicitly rather than
+        # this loader silently dropping brand/age-group data on the floor.
+        contract_version = data.get("contract_version", _LEGACY_CONTRACT_VERSION)
         return cls(
             embedding_dim=data["embedding_dim"],
             max_price=data["max_price"],
             category_vocab=Vocabulary.from_dict(data["category_vocab"]),
-            brand_vocab=Vocabulary.from_dict(data["brand_vocab"]),
-            age_group_vocab=Vocabulary.from_dict(data["age_group_vocab"]),
             price_tier_vocab=price_tier_vocab,
+            contract_version=contract_version,
             include_price_features=data.get("include_price_features", True),
         )
 

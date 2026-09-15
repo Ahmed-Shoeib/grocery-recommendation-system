@@ -162,8 +162,11 @@ two_tower:
   dropout_rate: 0.1
   temperature: 0.05
   category_embedding_dim: 16
-  brand_embedding_dim: 16
-  age_group_embedding_dim: 8
+  # brand_embedding_dim / age_group_embedding_dim REMOVED (production-safe
+  # contract redesign, docs/production-feature-parity-audit.md): the real
+  # SQL Server Products table has no Brand column and Users has no
+  # AgeGroup column, so neither tower has a brand_id/age_group_id input
+  # any more - see retrieval/two_tower/model.py and feature_encoding.py.
   # STEP 6: BUDGET/MID/PREMIUM + unknown - see docs/data-mapping.md section 15.
   price_tier_embedding_dim: 8
   min_distinct_products_for_holdout: 3
@@ -225,19 +228,25 @@ cold_start:
 
 # Phase 7/11: hard global catalog-eligibility policy, applied TWICE - as
 # a pre-retrieval gate (before any candidate generation) AND as a final
-# lightweight validation (see docs/data-mapping.md section 5). Only
-# fields that actually exist on Product in the ERD (isActive,
-# stockQuantity) are used in V1.
+# lightweight validation (see docs/data-mapping.md section 5).
+# require_active REMOVED (production-safe contract redesign,
+# docs/production-feature-parity-audit.md): the real SQL Server Products
+# table has no isActive column at all - stockQuantity is the only genuine
+# production availability signal.
 eligibility:
-  require_active: true
   require_in_stock: true
 
 # Phase 7: re-ranking (dedup + diversity). Continuous score-penalty
 # trade-off, not a hard quota - see RerankingConfig docstring.
+# brand_repetition_penalty REMOVED (production-safe contract redesign,
+# docs/production-feature-parity-audit.md): the real SQL Server Products
+# table has no Brand column - every backend_api candidate's brand was the
+# same constant None, so a brand penalty would have penalized every
+# candidate pair uniformly rather than doing nothing. Diversity is
+# category-only now.
 reranking:
   diversity_strength: 0.5
   category_repetition_penalty: 0.15
-  brand_repetition_penalty: 0.08
 
 # Phase 6: neural ranker. Consumes candidates retrieved by VectorIndex
 # (Phase 5) plus richer per-candidate features than the Two-Tower model

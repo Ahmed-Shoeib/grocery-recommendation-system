@@ -144,7 +144,7 @@ def main() -> int:
         print(
             f"  user {uid}: signals={total} tier={tier.value} "
             f"click={len(engagement.clicks)} cart={len(engagement.cart_items)} purchase={len(engagement.purchases)} "
-            f"pref_cat={engagement.profile.preferred_category!r} sample_clicks={sample}"
+            f"pref_cats={engagement.profile.preferred_categories!r} sample_clicks={sample}"
         )
 
     print("\nOK - backend REST data flowed through the canonical pipeline with no schema changes.")

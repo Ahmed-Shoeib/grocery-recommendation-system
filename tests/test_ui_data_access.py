@@ -140,11 +140,13 @@ def service() -> RecommendationService:
     rng = np.random.default_rng(0)
     product_embeddings = {pid: rng.normal(size=_EMBEDDING_DIM).astype(np.float32) for pid in all_ids}
 
+    # Production-safe contract (docs/production-feature-parity-audit.md):
+    # no brand_names/age_groups - the real backend has neither field.
     tt_encoder = TwoTowerFeatureEncoder.fit(
-        category_names=[p.category_name for p in products], brand_names=[p.brand for p in products], age_groups=[],
+        category_names=[p.category_name for p in products],
         prices=[p.price for p in products], embedding_dim=_EMBEDDING_DIM,
     )
-    tt_config = TwoTowerConfig(projection_dims=[16, _OUTPUT_DIM], output_dim=_OUTPUT_DIM, category_embedding_dim=4, brand_embedding_dim=4, age_group_embedding_dim=2)
+    tt_config = TwoTowerConfig(projection_dims=[16, _OUTPUT_DIM], output_dim=_OUTPUT_DIM, category_embedding_dim=4)
     user_tower = build_user_tower(tt_encoder, tt_config)
 
     item_embeddings = rng.normal(size=(len(all_ids), _OUTPUT_DIM)).astype(np.float32)
@@ -154,8 +156,8 @@ def service() -> RecommendationService:
     ranker_model = build_ranker_model(input_dim=len(RANKING_FEATURE_NAMES), config=RankingConfig(hidden_units=[8]))
 
     profiles = {
-        1: UserProfile(user_id=1, preferred_category="Cat1", age_group="25-34"),
-        2: UserProfile(user_id=2),  # no preferred_category/age_group on record
+        1: UserProfile(user_id=1, preferred_categories=["Cat1"], age_group="25-34"),
+        2: UserProfile(user_id=2),  # no preferred_categories/age_group on record
     }
     purchases = {1: [PurchaseRecord(user_id=1, product_id=100, order_id=0, quantity=2, unit_price=5.0, order_status="DELIVERED")]}
     cart = {1: [CartAffinityRecord(user_id=1, product_id=101, quantity=1)]}
@@ -212,14 +214,14 @@ def test_list_users_includes_all_known_users_sorted(service):
 def test_list_users_shows_profile_fields_when_present(service):
     rows = list_users(service)
     row1 = next(r for r in rows if r.user_id == 1)
-    assert row1.preferred_category == "Cat1"
+    assert row1.preferred_categories == ["Cat1"]
     assert row1.age_group == "25-34"
 
 
 def test_list_users_none_when_profile_fields_missing(service):
     rows = list_users(service)
     row2 = next(r for r in rows if r.user_id == 2)
-    assert row2.preferred_category is None
+    assert row2.preferred_categories == []
     assert row2.age_group is None
 
 

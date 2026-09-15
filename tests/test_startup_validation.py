@@ -22,7 +22,7 @@ from recommendation.config import AppConfig, RankingConfig, RetrievalConfig
 
 
 def _two_tower_artifacts(output_dim=8, encoder_embedding_dim=8, num_items=3) -> TwoTowerArtifacts:
-    encoder = TwoTowerFeatureEncoder.fit([], [], [], [1.0], encoder_embedding_dim)
+    encoder = TwoTowerFeatureEncoder.fit([], [1.0], encoder_embedding_dim)
     return TwoTowerArtifacts(
         user_tower=None, item_tower=None, encoder=encoder,
         item_ids=list(range(num_items)),
@@ -102,6 +102,28 @@ def test_two_tower_validation_rejects_corrupt_shape_mismatch():
     artifacts.item_embeddings = np.zeros((5, 8), dtype=np.float32)  # 3 ids, 5 embedding rows
     with pytest.raises(ArtifactValidationError, match="corrupt"):
         validate_two_tower_artifacts(artifacts, AppConfig())
+
+
+def test_two_tower_validation_rejects_legacy_pre_redesign_contract_version():
+    """Production-safe contract redesign (docs/production-feature-parity-audit.md):
+    an encoder loaded from a pre-redesign artifact (no `contract_version`
+    key at all - see `TwoTowerFeatureEncoder.from_dict`) must be rejected
+    explicitly and loudly, not silently served with mismatched inputs.
+    """
+    artifacts = _two_tower_artifacts(output_dim=8, encoder_embedding_dim=8)
+    artifacts.encoder = TwoTowerFeatureEncoder.from_dict(
+        {
+            "embedding_dim": 8,
+            "max_price": 1.0,
+            "category_vocab": {"values": []},
+            "price_tier_vocab": {"values": ["budget", "mid", "premium"]},
+        }
+    )
+    config = AppConfig()
+    config.two_tower.output_dim = 8
+    config.embedding.embedding_dim = 8
+    with pytest.raises(ArtifactValidationError, match="contract"):
+        validate_two_tower_artifacts(artifacts, config)
 
 
 # --- validate_ranker_artifacts ---------------------------------------------

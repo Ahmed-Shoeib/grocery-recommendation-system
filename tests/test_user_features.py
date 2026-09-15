@@ -64,15 +64,28 @@ def test_no_history_user_has_empty_features_and_no_embedding():
     assert features.has_age_group is False
 
 
-def test_preferred_category_and_age_group_are_carried_through():
-    profile = EngagementProfile(user_id=1, profile=UserProfile(user_id=1, preferred_category="Snacks", age_group="25-34"))
+def test_preferred_categories_and_age_group_are_carried_through():
+    profile = EngagementProfile(user_id=1, profile=UserProfile(user_id=1, preferred_categories=["Snacks"], age_group="25-34"))
     features = build_user_features(profile, _products(), _embeddings(), _config())
-    assert features.preferred_category == "Snacks"
+    assert features.preferred_categories == ["Snacks"]
     assert features.age_group == "25-34"
     assert features.has_preferred_category is True
     assert features.has_age_group is True
-    # preferred_category alone (no behavioral history) still produces an affinity signal.
+    # preferred_categories alone (no behavioral history) still produces an affinity signal.
     assert features.category_affinity == {"Snacks": 1.0}
+
+
+def test_multiple_preferred_categories_split_affinity_weight_evenly():
+    """Real backend shape (docs/production-feature-parity-audit.md): the
+    total `preferred_category_weight` budget is split evenly across every
+    favorite, not collapsed to a single arbitrarily-chosen one.
+    """
+    profile = EngagementProfile(
+        user_id=1, profile=UserProfile(user_id=1, preferred_categories=["Snacks", "Dairy & Eggs"])
+    )
+    features = build_user_features(profile, _products(), _embeddings(), _config())
+    assert features.category_affinity["Snacks"] == pytest.approx(0.5)
+    assert features.category_affinity["Dairy & Eggs"] == pytest.approx(0.5)
 
 
 def test_purchases_dominate_category_affinity_when_weighted_higher():

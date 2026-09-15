@@ -6,11 +6,13 @@ SPARSE_HISTORY (weighted blend) and NO_HISTORY (ordered waterfall) users
 not apply recency/decay, so it does not compute a genuine "trending"
 signal (docs/data-mapping.md section 6). `category_popularity_ranking`
 is reused for two distinct fallback sources: `"preferred_category"` (the
-confirmed `UserProfile
-.preferred_category` attribute) and `"category_popularity"` (the user's
-single highest-affinity category from `UserFeatures.category_affinity`,
-which factors in preferred_category plus whatever sparse purchase/cart/
-search/chatbot signal exists - see `features.user_features`). For a true
+confirmed `UserProfile.preferred_categories` LIST - every favorite
+category pools its popular products together, not just one, see
+docs/production-feature-parity-audit.md) and `"category_popularity"`
+(the user's single highest-affinity category from
+`UserFeatures.category_affinity`, which factors in preferred_categories
+plus whatever sparse purchase/cart/search/chatbot signal exists - see
+`features.user_features`). For a true
 zero-signal user these two coincide (affinity has nothing else to draw
 on); for a SPARSE_HISTORY user with some real signal they can genuinely
 differ, which is the point of listing them as separate fallback tiers.
@@ -40,10 +42,28 @@ def global_popularity_ranking(product_features: dict[int, ProductFeatures]) -> l
     return [pf.product_id for pf in ranked]
 
 
-def category_popularity_ranking(product_features: dict[int, ProductFeatures], category_name: str | None) -> list[int]:
-    if category_name is None:
+def category_popularity_ranking(
+    product_features: dict[int, ProductFeatures], category_names: list[str] | str | None
+) -> list[int]:
+    """Ranks products popular within one OR MORE categories - `category_names`
+    accepts a list (the real multi-favorite shape, docs/production-feature-parity-audit.md),
+    a single string (the `top_affinity_category`/`category_popularity`
+    fallback source, which is genuinely one category), or `None`/empty
+    (no signal). Every matching product across every named category is
+    pooled into ONE popularity-ranked list, not concatenated per-category,
+    so a product can't appear twice just because it's being matched against
+    more than one favorite.
+    """
+    if category_names is None:
+        names = []
+    elif isinstance(category_names, str):
+        names = [category_names]
+    else:
+        names = category_names
+    if not names:
         return []
-    in_category = [pf for pf in product_features.values() if pf.category_name == category_name]
+    name_set = set(names)
+    in_category = [pf for pf in product_features.values() if pf.category_name in name_set]
     ranked = sorted(in_category, key=lambda pf: (-pf.purchase_count, -pf.cart_add_count, pf.product_id))
     return [pf.product_id for pf in ranked]
 

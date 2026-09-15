@@ -1,11 +1,14 @@
 """UserAdapter backed by the ERD User entity.
 
-Resolves `RawUser.preferred_category_id` (an FK) to the category name the
-canonical `UserProfile.preferred_category` expects. Both
-`preferred_category` and `age_group` are surfaced as `None` whenever the
-raw value is missing or unresolvable - defensive by construction, so a
-user created before the backend migration lands (or a dangling FK) never
-raises, it just yields a profile with less signal.
+Resolves every `RawUser.preferred_category_ids` FK to a category name for
+the canonical `UserProfile.preferred_categories` LIST - never reduced to a
+single value here (see `schemas.user.UserProfile` docstring and
+docs/production-feature-parity-audit.md). A dangling/unresolvable FK is
+simply dropped from the list rather than raising, matching the existing
+defensive-by-construction style (a user created before the backend
+migration lands, or with a stale category reference, just yields a
+profile with less signal, never an error). `age_group` is surfaced as
+`None` when missing, same as before.
 """
 
 from __future__ import annotations
@@ -20,14 +23,12 @@ class InMemoryUserAdapter(UserAdapter):
         category_name_by_id = {c.id: c.name for c in categories}
         self._profiles: dict[int, UserProfile] = {}
         for user in users:
-            preferred_category = (
-                category_name_by_id.get(user.preferred_category_id)
-                if user.preferred_category_id is not None
-                else None
-            )
+            preferred_categories = [
+                category_name_by_id[cid] for cid in user.preferred_category_ids if cid in category_name_by_id
+            ]
             self._profiles[user.id] = UserProfile(
                 user_id=user.id,
-                preferred_category=preferred_category,
+                preferred_categories=preferred_categories,
                 age_group=user.age_group,
             )
 

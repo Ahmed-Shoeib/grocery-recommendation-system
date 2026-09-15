@@ -68,7 +68,14 @@ def _show_api_error(exc: ApiClientError, context: str) -> None:
 def _render_user_table(users: list, selected_id: int) -> None:
     st.subheader("1. Users")
     df = pd.DataFrame(
-        [{"user_id": u.user_id, "preferred_category": u.preferred_category or "—", "age_group": u.age_group or "—"} for u in users]
+        [
+            {
+                "user_id": u.user_id,
+                "preferred_categories": ", ".join(u.preferred_categories) if u.preferred_categories else "—",
+                "age_group": u.age_group or "—",
+            }
+            for u in users
+        ]
     )
     st.dataframe(df, height=220, use_container_width=True, hide_index=True)
     st.caption(f"{len(users)} users known to the recommendation API. Selected: **{selected_id}**")

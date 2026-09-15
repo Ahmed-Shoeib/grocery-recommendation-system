@@ -17,6 +17,7 @@ from typing import Callable, TypeVar
 
 from recommendation.ranking.features import RANKING_FEATURE_NAMES
 from recommendation.ranking.serialization import RankerArtifacts
+from recommendation.retrieval.two_tower.feature_encoding import CURRENT_CONTRACT_VERSION
 from recommendation.retrieval.two_tower.serialization import TwoTowerArtifacts
 from recommendation.config import AppConfig, RetrievalConfig
 
@@ -53,6 +54,16 @@ def load_or_raise(name: str, path: Path, loader: Callable[[Path], T]) -> T:
 
 
 def validate_two_tower_artifacts(artifacts: TwoTowerArtifacts, config: AppConfig) -> None:
+    if artifacts.encoder.contract_version != CURRENT_CONTRACT_VERSION:
+        raise ArtifactValidationError(
+            "Two-Tower artifacts were built with feature-encoder contract "
+            f"{artifacts.encoder.contract_version!r}, but the running code expects "
+            f"{CURRENT_CONTRACT_VERSION!r} (production-safe contract redesign - "
+            "docs/production-feature-parity-audit.md: no brand_id/brand_affinity/"
+            "age_group_id inputs any more). These artifacts predate that redesign and "
+            "are now legacy-only. Retrain (scripts/train_two_tower.py) against the "
+            "current code before serving."
+        )
     if not artifacts.item_ids:
         raise ArtifactValidationError("Two-Tower artifacts contain an empty catalog (0 items) - nothing to retrieve against.")
     if artifacts.item_embeddings.ndim != 2 or len(artifacts.item_ids) != artifacts.item_embeddings.shape[0]:

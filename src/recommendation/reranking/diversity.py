@@ -9,12 +9,21 @@ not, is safe to pass through here).
 
 `apply_diversity` is a greedy MMR-style pass: at each step, pick the
 remaining candidate maximizing `score - diversity_strength *
-(repetition penalty for categories/brands already selected)`. This is a
-continuous trade-off, not a hard per-category/brand quota - a candidate
+(repetition penalty for categories already selected)`. This is a
+continuous trade-off, not a hard per-category quota - a candidate
 is never excluded outright for lacking diversity, only reordered, so it
 can't "over-diversify" a list into irrelevance; at
 `diversity_strength=0` it exactly reproduces input order (ties broken by
 original position, since the scan keeps the first-seen maximum).
+
+PRODUCTION-SAFE CONTRACT (docs/production-feature-parity-audit.md):
+brand-based diversity was REMOVED. The real SQL Server `Products` table
+has no `Brand` column, so every `backend_api` candidate's brand is the
+same constant `None` - a brand penalty there doesn't just do nothing, it
+actively penalizes every candidate pair uniformly (they all "share a
+brand"), silently distorting the list. Category-only diversity is the
+production-safe replacement; no invented attribute was substituted for
+brand.
 """
 
 from __future__ import annotations
@@ -43,7 +52,6 @@ def apply_diversity(
     remaining = list(candidates)
     selected: list[RankedCandidate] = []
     category_counts: dict[str, int] = {}
-    brand_counts: dict[str, int] = {}
 
     while remaining:
         best_index = 0
@@ -51,11 +59,7 @@ def apply_diversity(
         for i, c in enumerate(remaining):
             pf = product_features.get(c.product_id)
             category = pf.category_name if pf else None
-            brand = pf.brand if pf else None
-            penalty = config.diversity_strength * (
-                category_counts.get(category, 0) * config.category_repetition_penalty
-                + brand_counts.get(brand, 0) * config.brand_repetition_penalty
-            )
+            penalty = config.diversity_strength * category_counts.get(category, 0) * config.category_repetition_penalty
             adjusted = c.score - penalty
             if adjusted > best_adjusted:
                 best_adjusted = adjusted
@@ -66,8 +70,6 @@ def apply_diversity(
         pf = product_features.get(chosen.product_id)
         if pf and pf.category_name:
             category_counts[pf.category_name] = category_counts.get(pf.category_name, 0) + 1
-        if pf and pf.brand:
-            brand_counts[pf.brand] = brand_counts.get(pf.brand, 0) + 1
 
     return selected
 

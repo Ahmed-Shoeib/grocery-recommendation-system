@@ -483,24 +483,30 @@ def _as_naive_utc(dt):
 
 def _to_raw_user(internal_id: int, api_user, catalog: BackendCatalog) -> RawUser:
     if api_user is None:
-        return RawUser(id=internal_id, first_name="", last_name="", email="", preferred_category_id=None, age_group=None)
+        return RawUser(id=internal_id, first_name="", last_name="", email="", preferred_category_ids=[], age_group=None)
     # `preferredCategories` is a list (verified live 2026-09-04, see
-    # dtos.ApiFavoriteCategory) - only the first entry's category is used;
-    # RawUser/UserProfile model a single preferred category, and the
-    # backend does not rank/order multiple favorites for us.
-    pref_slug = api_user.first_preferred_category_slug()
-    pref_name = api_user.first_preferred_category_name()
-    pref_id = catalog.category_id_by_slug.get(pref_slug) if pref_slug else None
-    if pref_id is None and pref_name:
-        pref_id = catalog.category_id_by_name.get(pref_name)
+    # dtos.ApiFavoriteCategory) - EVERY entry is resolved and kept, not
+    # just the first: RawUser/UserProfile model the real multi-favorite
+    # shape directly (docs/production-feature-parity-audit.md), so no
+    # favorite is silently dropped by an arbitrary "pick one" reduction.
+    # Each entry is resolved independently (slug first, name fallback),
+    # not as two separately-filtered flat lists, so one entry lacking a
+    # slug (or a name) can never desync which id gets attached to which.
+    pref_ids: list[int] = []
+    for ref in api_user.preferred_category_refs():
+        cid = catalog.category_id_by_slug.get(ref.slug or "") or catalog.category_id_by_name.get(ref.name or "")
+        if cid is not None:
+            pref_ids.append(cid)
     return RawUser(
         id=internal_id,
         first_name=api_user.first_name or "",
         last_name=api_user.last_name or "",
         email=api_user.email or "",
-        preferred_category_id=pref_id,
+        preferred_category_ids=pref_ids,
         # `ageGroup` has no equivalent in the live UserResponse schema at
         # all (verified 2026-09-04) - this is always None today; never
-        # derived from `birthDate`, only ever the API's own field.
+        # derived from `birthDate`, only ever the API's own field. Legacy/
+        # metadata only - no production model feature consumes it any more
+        # (see schemas.user.UserProfile docstring).
         age_group=api_user.age_group,
     )

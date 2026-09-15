@@ -141,6 +141,10 @@ UNKNOWN_USER_ID = 999
 
 
 def _build_service(**config_overrides) -> RecommendationService:
+    # Production-safe contract (docs/production-feature-parity-audit.md):
+    # `is_active` no longer gates eligibility (no real `isActive` column),
+    # so INACTIVE_PRODUCT_ID (is_active=False, in stock) is genuinely
+    # eligible now - only OUT_OF_STOCK_PRODUCT_ID is excluded.
     eligible_products = [_product(100 + i, f"Cat{i % 4}") for i in range(12)]
     ineligible_products = [
         _product(INACTIVE_PRODUCT_ID, "Cat0", is_active=False),
@@ -154,11 +158,12 @@ def _build_service(**config_overrides) -> RecommendationService:
     rng = np.random.default_rng(0)
     product_embeddings = {pid: rng.normal(size=_EMBEDDING_DIM).astype(np.float32) for pid in all_ids}
 
+    # Production-safe contract: no brand_names/age_groups.
     tt_encoder = TwoTowerFeatureEncoder.fit(
-        category_names=[p.category_name for p in products], brand_names=[], age_groups=[],
+        category_names=[p.category_name for p in products],
         prices=[p.price for p in products], embedding_dim=_EMBEDDING_DIM,
     )
-    tt_config = TwoTowerConfig(projection_dims=[16, _OUTPUT_DIM], output_dim=_OUTPUT_DIM, category_embedding_dim=4, brand_embedding_dim=4, age_group_embedding_dim=2)
+    tt_config = TwoTowerConfig(projection_dims=[16, _OUTPUT_DIM], output_dim=_OUTPUT_DIM, category_embedding_dim=4)
     user_tower = build_user_tower(tt_encoder, tt_config)
 
     item_embeddings = rng.normal(size=(len(all_ids), _OUTPUT_DIM)).astype(np.float32)
@@ -171,7 +176,7 @@ def _build_service(**config_overrides) -> RecommendationService:
     profiles = {
         1: UserProfile(user_id=1),  # strong (3 purchases below)
         2: UserProfile(user_id=2),  # sparse (1 purchase below)
-        3: UserProfile(user_id=3, preferred_category="Cat2"),  # no_history (0 purchases, profile exists)
+        3: UserProfile(user_id=3, preferred_categories=["Cat2"]),  # no_history (0 purchases, profile exists)
     }
     purchases = {
         1: [PurchaseRecord(user_id=1, product_id=pid, order_id=i, quantity=1, unit_price=1.0) for i, pid in enumerate([100, 101, 102])],
@@ -190,7 +195,7 @@ def _build_service(**config_overrides) -> RecommendationService:
 
     config = AppConfig(
         cold_start=ColdStartConfig(strong_history_min_signals=3, sparse_history_min_signals=1),
-        eligibility=EligibilityConfig(require_active=True, require_in_stock=True),
+        eligibility=EligibilityConfig(require_in_stock=True),
         retrieval=RetrievalConfig(backend="faiss", candidate_pool_multiplier=5, min_candidate_pool=len(all_ids)),
         api=ApiConfig(model_version="v1", default_recommendation_count=5, max_recommendation_count=20),
         **config_overrides,
@@ -375,10 +380,14 @@ def test_user_id_path_param_must_be_integer(client):
 # --- result quality guarantees ---------------------------------------------
 
 def test_unavailable_products_never_returned(client):
+    """Production-safe contract (docs/production-feature-parity-audit.md):
+    `is_active` no longer gates eligibility (no real `isActive` column in
+    production) - only stock_quantity does, so INACTIVE_PRODUCT_ID is now
+    legitimately returnable; OUT_OF_STOCK_PRODUCT_ID never is.
+    """
     response = client.get("/v1/users/1/recommendations", params={"limit": 20})
     assert response.status_code == 200
     product_ids = [item["product_id"] for item in response.json()["items"]]
-    assert INACTIVE_PRODUCT_ID not in product_ids
     assert OUT_OF_STOCK_PRODUCT_ID not in product_ids
 
 
@@ -389,12 +398,14 @@ def test_no_duplicate_product_ids(client):
 
 
 def test_fewer_results_than_requested_when_pool_lacks_enough_eligible_items(client):
-    # 12 eligible products total; requesting more than that must not error.
+    # 13 eligible products total (12 base + INACTIVE_PRODUCT_ID, which is
+    # production-safe-eligible despite is_active=False); requesting more
+    # than that must not error.
     response = client.get("/v1/users/1/recommendations", params={"limit": 20})
     assert response.status_code == 200
     body = response.json()
-    assert len(body["items"]) == 12
-    assert body["meta"]["returned_count"] == 12
+    assert len(body["items"]) == 13
+    assert body["meta"]["returned_count"] == 13
     assert body["meta"]["requested_top_n"] == 20
     assert body["meta"]["fill_rate"] < 1.0
 

@@ -69,13 +69,22 @@ def load_product_tags(con: sqlite3.Connection) -> list[RawProductTag]:
 
 
 def load_users(con: sqlite3.Connection) -> list[RawUser]:
+    """`data/sqlite/backend_shaped_synthetic.db`'s `User.PreferredCategoryId`
+    is a single FK (a modeling simplification of the real backend's
+    `FavoriteCategory[]` join - see `synthetic.raw_schemas.RawUser`
+    docstring) - wrapped into a length-<=1 list here so this source
+    produces the SAME canonical shape (`UserProfile.preferred_categories:
+    list[str]`) the real backend_api source does, with no downstream
+    special-casing.
+    """
     rows = con.execute(
         "SELECT Id, FirstName, LastName, Email, PreferredCategoryId, AgeGroup FROM User"
     ).fetchall()
     return [
         RawUser(
             id=r["Id"], first_name=r["FirstName"], last_name=r["LastName"], email=r["Email"],
-            preferred_category_id=r["PreferredCategoryId"], age_group=r["AgeGroup"],
+            preferred_category_ids=[r["PreferredCategoryId"]] if r["PreferredCategoryId"] is not None else [],
+            age_group=r["AgeGroup"],
         )
         for r in rows
     ]

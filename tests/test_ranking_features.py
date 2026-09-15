@@ -9,7 +9,7 @@ from recommendation.ranking.features import RANKING_FEATURE_NAMES, build_ranking
 def _user_features(**overrides) -> UserFeatures:
     defaults = dict(
         user_id=1,
-        preferred_category=None,
+        preferred_categories=[],
         age_group=None,
         has_preferred_category=False,
         has_age_group=False,
@@ -70,20 +70,35 @@ def test_category_affinity_match_zero_when_category_not_in_affinity():
     assert vec[idx] == 0.0
 
 
-def test_brand_affinity_match_uses_user_affinity_for_items_brand():
-    user = _user_features(brand_affinity={"GreenValley": 0.9})
-    vec = build_ranking_feature_vector(user, _product_features(brand="GreenValley"), None, 0.0, 0, 50, 100.0)
-    idx = RANKING_FEATURE_NAMES.index("brand_affinity_match")
-    assert vec[idx] == pytest.approx(0.9)
+def test_brand_affinity_match_is_not_a_ranking_feature():
+    """Production-safe contract (docs/production-feature-parity-audit.md):
+    the real SQL Server `Products` table has no `Brand` column, so
+    `brand_affinity_match` was removed entirely from `RANKING_FEATURE_NAMES`.
+    """
+    assert "brand_affinity_match" not in RANKING_FEATURE_NAMES
 
 
-def test_preferred_category_match_flag():
-    user = _user_features(preferred_category="Dairy", has_preferred_category=True)
+def test_preferred_category_match_flag_single_favorite():
+    user = _user_features(preferred_categories=["Dairy"], has_preferred_category=True)
     matching = build_ranking_feature_vector(user, _product_features(category_name="Dairy"), None, 0.0, 0, 50, 100.0)
     non_matching = build_ranking_feature_vector(user, _product_features(category_name="Snacks"), None, 0.0, 0, 50, 100.0)
     idx = RANKING_FEATURE_NAMES.index("preferred_category_match")
     assert matching[idx] == 1.0
     assert non_matching[idx] == 0.0
+
+
+def test_preferred_category_match_flag_multiple_favorites():
+    """The real backend models preferred/favorite categories as a LIST
+    (docs/production-feature-parity-audit.md) - a match against ANY
+    favorite should flag true, not just a single arbitrarily-chosen one.
+    """
+    user = _user_features(preferred_categories=["Snacks", "Dairy", "Produce"], has_preferred_category=True)
+    for category in ("Snacks", "Dairy", "Produce"):
+        vec = build_ranking_feature_vector(user, _product_features(category_name=category), None, 0.0, 0, 50, 100.0)
+        idx = RANKING_FEATURE_NAMES.index("preferred_category_match")
+        assert vec[idx] == 1.0
+    non_matching = build_ranking_feature_vector(user, _product_features(category_name="Frozen"), None, 0.0, 0, 50, 100.0)
+    assert non_matching[RANKING_FEATURE_NAMES.index("preferred_category_match")] == 0.0
 
 
 def test_semantic_similarity_identical_vectors_is_one():
@@ -113,12 +128,17 @@ def test_retrieval_score_and_rank_pass_through():
     assert vec[rank_idx] == pytest.approx(0.5)  # rank 5 of pool_size 11 -> 5/10
 
 
-def test_stock_and_active_available_but_not_filtering():
-    inactive_out_of_stock = _product_features(is_active=False, stock_quantity=0)
-    vec = build_ranking_feature_vector(_user_features(), inactive_out_of_stock, None, 0.0, 0, 50, 100.0)
-    active_idx = RANKING_FEATURE_NAMES.index("item_is_active")
-    assert vec[active_idx] == 0.0
-    # No exception, no filtering - the vector is still produced normally.
+def test_is_active_is_not_a_ranking_feature():
+    """Production-safe contract (docs/production-feature-parity-audit.md):
+    the real SQL Server `Products` table has no `isActive` column, so
+    `item_is_active` was removed entirely - `stock_quantity` (a real
+    field) is what actually gates eligibility (`serving.eligibility`).
+    """
+    assert "item_is_active" not in RANKING_FEATURE_NAMES
+    out_of_stock = _product_features(is_active=False, stock_quantity=0)
+    vec = build_ranking_feature_vector(_user_features(), out_of_stock, None, 0.0, 0, 50, 100.0)
+    # No exception, no filtering - the vector is still produced normally
+    # (ranking never filters; that's serving.eligibility's job).
     assert vec.shape == (len(RANKING_FEATURE_NAMES),)
 
 
@@ -131,15 +151,40 @@ def test_normalized_price_capped_at_one():
 
 # --- STEP 6: price-aware ranker features (docs/data-mapping.md section 15) --
 
-def test_ranking_feature_dimension_is_29_after_step6():
-    assert len(RANKING_FEATURE_NAMES) == 29  # 23 pre-STEP-6 + 6 price-aware
+def test_semantic_and_retrieval_features_are_retained_not_removed():
+    """Clarification A: `semantic_cosine_similarity`, `has_semantic_similarity`,
+    `retrieval_score`, and `retrieval_rank_normalized` are NOT inherently
+    unsafe production features - their current values are only unsafe
+    because today's embedding space was trained on brand/tag/ingredient/
+    parent-category text (removed - see `embeddings.text_builder`). They
+    stay in the ranker contract so they become valid again once the
+    Two-Tower is retrained on the new, safe inputs.
+    """
+    for retained in (
+        "semantic_cosine_similarity", "has_semantic_similarity",
+        "retrieval_score", "retrieval_rank_normalized",
+    ):
+        assert retained in RANKING_FEATURE_NAMES
 
 
-def test_item_price_tier_and_relative_price_pass_through():
-    product = _product_features(category_relative_price=0.8, is_discounted=True)
+def test_ranking_feature_dimension_is_24_after_production_safe_redesign():
+    """29 -> 24: `user_has_age_group`, `item_discount_fraction`,
+    `item_is_active`, `item_is_discounted`, `brand_affinity_match` were
+    removed (docs/production-feature-parity-audit.md - none of the real
+    fields they depended on exist in the real SQL Server schema).
+    """
+    assert len(RANKING_FEATURE_NAMES) == 24
+    for removed in (
+        "user_has_age_group", "item_discount_fraction", "item_is_active",
+        "item_is_discounted", "brand_affinity_match",
+    ):
+        assert removed not in RANKING_FEATURE_NAMES
+
+
+def test_item_relative_price_passes_through():
+    product = _product_features(category_relative_price=0.8)
     vec = build_ranking_feature_vector(_user_features(), product, None, 0.0, 0, 50, 100.0)
     assert vec[RANKING_FEATURE_NAMES.index("item_category_relative_price")] == pytest.approx(0.8)
-    assert vec[RANKING_FEATURE_NAMES.index("item_is_discounted")] == 1.0
 
 
 def test_no_price_profile_gives_neutral_price_features():

@@ -18,9 +18,42 @@ users, no timestamps) is still present and selectable
 (`paths.data_source: "synthetic"`), kept only for backward compatibility.
 
 See `docs/data-mapping.md` for the full ERD reconciliation, scope
-boundaries, and the rationale behind every design decision, and
+boundaries, and the rationale behind every design decision,
 `docs/production-readiness.md` for a critical, classified review of what
-is and isn't ready for real production traffic.
+is and isn't ready for real production traffic, and
+`docs/production-feature-parity-audit.md` for the full training-serving
+feature-parity audit and the production-safe contract redesign below.
+
+## ⚠️ Production-safe feature contract redesign (current)
+
+Following a full training-vs-production feature-parity audit
+(`docs/production-feature-parity-audit.md`) against the verified real SQL
+Server schema, the code in this repository now targets a
+**production-safe feature contract**: every Two-Tower/ranker input the
+code builds is reproducible from the real backend REST API, not just from
+the SQLite training source. Concretely, `Product.brand`, `Product.isActive`,
+`Product.salePrice`/`discountPercentage`, `Product.ingredients`,
+category-parent hierarchy, and `User.ageGroup` have been removed from
+every model input (embedding text, Two-Tower towers, the ranker feature
+vector, eligibility, and diversity re-ranking) - the real backend has none
+of these fields. `UserProfile.preferred_category` is now
+`preferred_categories: list[str]`, matching the real backend's
+`FavoriteCategory[]` join shape instead of an arbitrary single value.
+
+**This is a code + data-contract change only - nothing has been retrained.**
+The ranker's feature count is now **24** (down from 29); the Two-Tower
+item/user numeric dims are **7/8** (down from 9/9); neither tower has a
+`brand_id`/`age_group_id`/`brand_affinity` input any more. The currently
+committed `models/sqlite_baseline/` artifacts were trained against the
+OLD (29-feature, brand/age-group-aware) contract and are now **explicitly
+legacy-only** - `serving.startup_validation` rejects them loudly (a
+ranker `feature_names` mismatch, and a Two-Tower `contract_version`
+mismatch) rather than silently serving predictions built from a
+mismatched feature space. A retrain (`scripts/train_two_tower.py` /
+`scripts/train_ranker.py` against a production-safe-shaped SQLite
+dataset) is required before live serving works again. See
+`docs/production-feature-parity-audit.md` for the full field-by-field
+rationale and the exact pre-retrain checklist.
 
 ## Current status
 
@@ -53,17 +86,20 @@ is and isn't ready for real production traffic.
   cutoff, held-out future PURCHASE events as ground truth - a separate
   protocol from the original non-temporal leave-one-out one still used
   to train/evaluate the legacy synthetic-only artifacts.
-- **29-feature ranker** - 9 item-numeric + 9 user-numeric encoder dims
-  feeding the Two-Tower model, 29 explicit features feeding the ranker -
-  the recency+price configuration served by default, validated by a
-  controlled ablation experiment (`docs/data-mapping.md` §17) against a
-  23-feature/no-price baseline condition. The reduced-feature code path
-  has since been removed from the codebase entirely - the current
-  architecture always builds the full 29-feature/9-9-dim price-aware
-  shape; `include_price_features` remains only as a reported metadata
+- **24-feature ranker** (down from 29 - see the production-safe contract
+  redesign above) - 7 item-numeric + 8 user-numeric encoder dims feeding
+  the Two-Tower model (down from 9/9), 24 explicit features feeding the
+  ranker. The original 29-feature/9-9-dim shape included price-aware
+  features validated by a controlled ablation experiment
+  (`docs/data-mapping.md` §17) against a 23-feature/no-price baseline;
+  that price-aware set is still fully present here - only the 5
+  brand/isActive/age-group/discount-dependent features were removed, not
+  the price ones. `include_price_features` remains a reported metadata
   field (always `True`), not a branching flag.
-- **Pre-retrieval eligibility + final safety check**: `isActive`/
-  `stockQuantity` gate candidate generation itself - before Two-Tower/
+- **Pre-retrieval eligibility + final safety check**: `stockQuantity`
+  gates candidate generation itself (production-safe contract redesign:
+  `isActive` no longer gates eligibility at all - the real SQL Server
+  `Products` table has no such column) - before Two-Tower/
   VectorIndex retrieval and every fallback source ever runs - plus a
   final lightweight re-validation immediately before the response is
   built, as defense-in-depth, not the primary mechanism.
@@ -123,7 +159,7 @@ SQLite backend-shaped synthetic DB (data/sqlite/backend_shaped_synthetic.db)
                               +--------------+--------------+
                                      cosine compatibility
                                              |
-                     Hard PRE-RETRIEVAL eligibility (isActive, stock - catalog state,
+                     Hard PRE-RETRIEVAL eligibility (stock - catalog state,
                      evaluated BEFORE any candidate generation, personalized or fallback)
                                              |
               VectorIndex (ScaNN primary/Docker, FAISS Windows dev fallback)
@@ -137,7 +173,7 @@ SQLite backend-shaped synthetic DB (data/sqlite/backend_shaped_synthetic.db)
                 (STRONG: personalized only · SPARSE: blend w/ category+global
                  popularity · NO_HISTORY: waterfall fallback, no personalized part)
                                              |
-                                    Neural Ranker (29-feature MLP)
+                                    Neural Ranker (24-feature MLP)
                                              |
                                    Diversity re-ranking (dedup + category/brand,
                                     continuous score penalty, not a hard quota)
@@ -184,15 +220,17 @@ are a distinct classification from the temporal-evaluation tiers
 a user can be `HistoryTier.STRONG` while temporally
 `INSUFFICIENT_DEPTH`, and vice versa.
 
-**Hard pre-retrieval eligibility, applied first**: `isActive`/
-`stockQuantity` are global catalog-eligibility facts, not model
-knowledge, so they gate candidate generation itself - inactive/out-of-
-stock products never enter Two-Tower/VectorIndex retrieval, the neural
-ranker, or re-ranking. This never touches the Two-Tower, the ranker, or
-the VectorIndex's built structure/embeddings - retrieval restriction
-happens at query time (see `retrieval.index
-.eligibility_filter.EligibilityRestrictedIndex`), so changing stock or
-`isActive` never triggers a retrain or an index rebuild, only a
+**Hard pre-retrieval eligibility, applied first**: `stockQuantity` is a
+global catalog-eligibility fact, not model knowledge, so it gates
+candidate generation itself - out-of-stock products never enter
+Two-Tower/VectorIndex retrieval, the neural ranker, or re-ranking.
+(Production-safe contract redesign: `isActive` no longer gates
+eligibility at all - the real SQL Server `Products` table has no such
+column; see `docs/production-feature-parity-audit.md`.) This never
+touches the Two-Tower, the ranker, or the VectorIndex's built
+structure/embeddings - retrieval restriction happens at query time (see
+`retrieval.index.eligibility_filter.EligibilityRestrictedIndex`), so
+changing stock never triggers a retrain or an index rebuild, only a
 refresh of `product_features` (the plain per-product-state dict, cheap
 to recompute from current catalog state). A **final, lightweight
 validation** re-checks the same two rules again immediately before the
@@ -244,8 +282,8 @@ later is still a change inside one class, not an interface change. Full
 rationale: `docs/data-mapping.md` §10.
 
 **Pre-retrieval eligibility restriction is backend-agnostic**: neither
-backend's index structure is filtered/rebuilt when stock or `isActive`
-changes - `retrieval.index.eligibility_filter.EligibilityRestrictedIndex`
+backend's index structure is filtered/rebuilt when stock changes -
+`retrieval.index.eligibility_filter.EligibilityRestrictedIndex`
 wraps either backend and restricts `search()` results to a caller-
 supplied eligible-id set at query time via bounded oversampling +
 progressive widening (ask for a multiple of `k`, filter, widen and retry
@@ -308,7 +346,7 @@ docker-compose.yml           train (profile-gated) / api / dashboard orchestrati
 | Feature construction | `features/` (`user_features.py`, `product_features.py`, `price.py`, `recency.py`, `pipeline.py`) |
 | Two-Tower model | `retrieval/two_tower/model.py` |
 | ANN retrieval | `retrieval/index/` (`faiss_index.py`, `scann_index.py`, `factory.py`) |
-| Neural ranker (29-feature contract) | `ranking/features.py` + `ranking/model.py` |
+| Neural ranker (24-feature contract) | `ranking/features.py` + `ranking/model.py` |
 | Diversity re-ranking | `reranking/diversity.py` |
 | `RecommendationService` (loads artifacts, orchestrates a request) | `api/service.py` |
 | Request-time pipeline (cold-start, eligibility, fallback, Top-N) | `serving/` (`pipeline.py`, `cold_start.py`, `eligibility.py`, `fallback.py`) |
@@ -761,7 +799,9 @@ full section-to-phase map.
     integration verification - see `docs/production-readiness.md` for
     the critical review.
 11. **Eligibility architecture change:** hard PRE-retrieval eligibility
-    (isActive/stockQuantity gate candidate generation itself, via
+    (stockQuantity gates candidate generation itself - `isActive` no
+    longer gates it at all, see the production-safe contract redesign
+    above - via
     `retrieval.index.eligibility_filter.EligibilityRestrictedIndex` for
     the VectorIndex path) plus a final lightweight eligibility
     re-validation as a defense-in-depth safety net - no Two-Tower/ranker

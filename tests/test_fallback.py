@@ -43,6 +43,22 @@ def test_category_popularity_ranking_none_category_is_empty():
     assert category_popularity_ranking(features, None) == []
 
 
+def test_category_popularity_ranking_accepts_multiple_favorite_categories():
+    """Real backend shape (docs/production-feature-parity-audit.md):
+    `UserProfile.preferred_categories` is a list, and `"preferred_category"`
+    as a fallback source must pool products across every favorite, not
+    just one.
+    """
+    features = {
+        1: _pf(1, "Dairy", purchase_count=5),
+        2: _pf(2, "Snacks", purchase_count=10),
+        3: _pf(3, "Produce", purchase_count=1),  # not a favorite - must not appear
+    }
+    ranked = category_popularity_ranking(features, ["Dairy", "Snacks"])
+    assert ranked == [2, 1]  # pooled across both favorites, ranked by popularity
+    assert category_popularity_ranking(features, []) == []
+
+
 def test_top_affinity_category_picks_max_weight():
     assert top_affinity_category({"Dairy": 0.3, "Snacks": 0.7}) == "Snacks"
 

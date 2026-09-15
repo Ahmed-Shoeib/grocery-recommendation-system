@@ -50,7 +50,7 @@ def describe_user(bundle, config, user_id: int, product_lookup) -> None:
     tier = determine_history_tier(total, config.cold_start)
 
     print(f"\n--- User {user_id} ---")
-    print(f"  age_group={profile.age_group!r}  preferred_category={profile.preferred_category!r}")
+    print(f"  age_group={profile.age_group!r}  preferred_categories={profile.preferred_categories!r}")
     print(f"  tier(from total={total}) = {tier.value}")
     print(f"  click={len(engagement.clicks)} search={len(engagement.searches)} "
           f"chatbot={1 if engagement.chatbot_context else 0} cart={len(engagement.cart_items)} "

@@ -15,6 +15,18 @@ behavior, searched items, chatbot context) plus the confirmed
     user's history mean semantically" in the same space the Item Tower
     already operates in.
 
+PRODUCTION-SAFE FEATURE CONTRACT (docs/production-feature-parity-audit.md):
+`category_affinity`, `semantic_embedding`, `price_profile`, the five
+signal-count fields, `has_chatbot_context`, and `preferred_categories`/
+`has_preferred_category` are production-safe and consumed by the
+Two-Tower/ranker. `brand_affinity` and `age_group`/`has_age_group` are
+LEGACY / METADATA ONLY - still computed (so SQLite/synthetic sources and
+any debug/UI view keep working unchanged), but as of the production-safe
+contract redesign no Two-Tower input or ranker feature consumes them any
+more (the real backend has no `Product.Brand`/`User.AgeGroup` at all - see
+`retrieval.two_tower.feature_encoding` and `ranking.features` module
+docstrings).
+
 Recency weighting (docs/data-mapping.md section 14): every per-event
 contribution to `category_affinity`/`brand_affinity`/`semantic_embedding`
 is scaled by `features.recency.effective_weight(base_signal_weight,
@@ -88,15 +100,15 @@ from recommendation.config import FeatureConfig, RecencyConfig
 class UserFeatures:
     user_id: int
 
-    # Both confirmed backend User attributes (docs/data-mapping.md section
-    # 2), both Optional with a matching has_* presence flag for defensive
-    # handling. They're treated differently downstream on purpose:
-    # preferred_category is also folded into category_affinity below (it's
-    # a direct category signal); age_group is carried through untouched as
-    # an opaque categorical label - it has no category/brand mapping, so
-    # Phase 4's User Tower consumes it as its own learned embedding lookup
-    # rather than blending it into an affinity distribution.
-    preferred_category: str | None
+    # `preferred_categories` (list - see schemas.user.UserProfile
+    # docstring) is production-safe: every favorite category is folded
+    # into `category_affinity` below (docs/production-feature-parity-audit.md)
+    # - there is no separate `preferred_category_id` Two-Tower input any
+    # more, since that signal is fully absorbed into the affinity vector.
+    # `age_group` is LEGACY / METADATA ONLY (see module docstring) - kept
+    # for display/debug purposes, not consumed by any production model
+    # input.
+    preferred_categories: list[str]
     age_group: str | None
     has_preferred_category: bool
     has_age_group: bool
@@ -385,10 +397,19 @@ def build_user_features(
             if product.brand:
                 brand_counts[product.brand] += chatbot_w
 
-    if profile.profile.preferred_category:
+    if profile.profile.preferred_categories:
         # A standing profile attribute, not a timestamped interaction -
-        # never recency-weighted (docs/data-mapping.md section 14).
-        category_counts[profile.profile.preferred_category] += config.preferred_category_weight
+        # never recency-weighted (docs/data-mapping.md section 14). The
+        # total `preferred_category_weight` budget is split evenly across
+        # every favorite category so a user with many favorites doesn't
+        # get a proportionally larger affinity boost than a user with
+        # one - each favorite contributes naturally to the SAME
+        # `category_affinity` distribution every other signal already
+        # blends into, with no separate "pick one preferred category"
+        # reduction anywhere (docs/production-feature-parity-audit.md).
+        per_category_weight = config.preferred_category_weight / len(profile.profile.preferred_categories)
+        for preferred_category in profile.profile.preferred_categories:
+            category_counts[preferred_category] += per_category_weight
 
     category_affinity = _normalize_and_truncate(category_counts, config.max_top_categories)
     brand_affinity = _normalize_and_truncate(brand_counts, config.max_top_brands)
@@ -443,7 +464,7 @@ def build_user_features(
 
     price_profile = (
         build_user_price_profile(
-            purchases, product_lookup, profile.profile.preferred_category, price_context, reference_time, config.recency
+            purchases, product_lookup, profile.profile.preferred_categories, price_context, reference_time, config.recency
         )
         if price_context is not None
         else None
@@ -451,9 +472,9 @@ def build_user_features(
 
     return UserFeatures(
         user_id=profile.user_id,
-        preferred_category=profile.profile.preferred_category,
+        preferred_categories=list(profile.profile.preferred_categories),
         age_group=profile.profile.age_group,
-        has_preferred_category=profile.profile.preferred_category is not None,
+        has_preferred_category=bool(profile.profile.preferred_categories),
         has_age_group=profile.profile.age_group is not None,
         click_count=len(clicks),
         purchase_count=len(purchases),

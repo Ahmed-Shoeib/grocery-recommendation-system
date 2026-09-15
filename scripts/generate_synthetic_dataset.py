@@ -36,7 +36,7 @@ def print_stats(dataset) -> None:
     users_with_purchases = len({o.user_id for o in dataset.orders})
     cart_user_by_cart_id = {c.id: c.user_id for c in dataset.carts}
     users_with_cart_items = len({cart_user_by_cart_id[ci.cart_id] for ci in dataset.cart_items})
-    users_incomplete_profile = sum(1 for u in dataset.users if u.preferred_category_id is None)
+    users_incomplete_profile = sum(1 for u in dataset.users if not u.preferred_category_ids)
 
     persona_counts = Counter(dataset.debug_user_personas.values())
 

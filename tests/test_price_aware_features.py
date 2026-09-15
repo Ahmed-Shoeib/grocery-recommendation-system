@@ -1,6 +1,6 @@
 """Tests for the current, always-on price-aware feature set (docs/data-
 mapping.md section 15): the Two-Tower encoder's price-related numeric
-fields + shared `price_tier_id` categorical input, and the ranker's 8
+fields + shared `price_tier_id` categorical input, and the ranker's
 price-related entries in `RANKING_FEATURE_NAMES`.
 
 Formerly `test_step8_ablation_dimensions.py`, which also covered the
@@ -9,6 +9,11 @@ reduced-feature path built for the (since-removed) controlled ablation
 experiment. That reduced path no longer exists in the codebase - the
 current architecture always includes price features - so this file keeps
 only the tests describing that current, always-on behavior.
+
+Dimensions/feature counts below reflect the production-safe contract
+redesign (docs/production-feature-parity-audit.md): no brand/age-group
+inputs, no discount-related features (the real SQL Server schema has
+none of those fields).
 """
 
 from __future__ import annotations
@@ -24,9 +29,7 @@ from recommendation.config import TwoTowerConfig
 
 PRICE_RANKING_FEATURE_NAMES = [
     "item_normalized_price",
-    "item_discount_fraction",
     "item_category_relative_price",
-    "item_is_discounted",
     "user_normalized_typical_price",
     "user_has_price_profile",
     "price_relative_distance",
@@ -35,10 +38,9 @@ PRICE_RANKING_FEATURE_NAMES = [
 
 
 def _encoder(embedding_dim: int = 8) -> TwoTowerFeatureEncoder:
+    # Production-safe contract: no brand_names/age_groups.
     return TwoTowerFeatureEncoder.fit(
         category_names=["Dairy & Eggs", "Snacks"],
-        brand_names=["GreenValley"],
-        age_groups=["25-34"],
         prices=[2.0, 4.0],
         embedding_dim=embedding_dim,
     )
@@ -57,7 +59,7 @@ def _product_features(**overrides) -> ProductFeatures:
 
 def _user_features(**overrides) -> UserFeatures:
     defaults = dict(
-        user_id=1, preferred_category="Snacks", age_group="25-34", has_preferred_category=True, has_age_group=True,
+        user_id=1, preferred_categories=["Snacks"], age_group="25-34", has_preferred_category=True, has_age_group=True,
         click_count=0, purchase_count=3, distinct_products_purchased=3, cart_item_count=1, search_count=2, has_chatbot_context=False,
         total_engagement_events=6, category_affinity={}, brand_affinity={}, semantic_embedding=np.ones(8, dtype=np.float32),
         price_profile=None,
@@ -70,22 +72,22 @@ def _user_features(**overrides) -> UserFeatures:
 
 def test_encoder_has_current_price_aware_dimensions():
     encoder = _encoder()
-    assert encoder.item_numeric_dim == 9
-    assert encoder.user_numeric_dim == 9
+    assert encoder.item_numeric_dim == 7
+    assert encoder.user_numeric_dim == 8
 
 
 def test_encode_item_has_price_tier_id_key():
     encoder = _encoder()
     result = encoder.encode_item(_product_features(), np.ones(8, dtype=np.float32))
     assert "price_tier_id" in result
-    assert result["numeric"].shape == (9,)
+    assert result["numeric"].shape == (7,)
 
 
 def test_encode_user_has_price_tier_id_key():
     encoder = _encoder()
     result = encoder.encode_user(_user_features())
     assert "price_tier_id" in result
-    assert result["numeric"].shape == (9,)
+    assert result["numeric"].shape == (8,)
 
 
 def test_encoder_serialization_round_trips_include_price_features_field():
@@ -97,14 +99,13 @@ def test_encoder_serialization_round_trips_include_price_features_field():
     encoder = _encoder()
     restored = TwoTowerFeatureEncoder.from_dict(encoder.to_dict())
     assert restored.include_price_features is True
-    assert restored.item_numeric_dim == encoder.item_numeric_dim == 9
+    assert restored.item_numeric_dim == encoder.item_numeric_dim == 7
 
 
 def test_legacy_serialized_dict_without_flag_defaults_to_true():
-    """The active on-disk `models/sqlite_baseline/two_tower
-    /feature_encoder.json` predates this field being added to
-    serialization and has no `include_price_features` key at all - this
-    protects that exact real-artifact compatibility path.
+    """A serialized dict predating this field being added to
+    serialization has no `include_price_features` key at all - protects
+    that historical compatibility path.
     """
     encoder = _encoder()
     data = encoder.to_dict()
@@ -116,7 +117,7 @@ def test_legacy_serialized_dict_without_flag_defaults_to_true():
 # --- Two-Tower model architecture (always includes price_tier_id) -----------
 
 def _tt_config() -> TwoTowerConfig:
-    return TwoTowerConfig(projection_dims=[16, 8], output_dim=8, category_embedding_dim=4, brand_embedding_dim=4, age_group_embedding_dim=2)
+    return TwoTowerConfig(projection_dims=[16, 8], output_dim=8, category_embedding_dim=4)
 
 
 def test_item_tower_has_price_tier_input():
@@ -131,16 +132,24 @@ def test_user_tower_has_price_tier_input():
     assert "price_tier_id" in {t.name.split(":")[0] for t in tower.inputs}
 
 
-# --- ranker feature vector (always 29 features, always price-aware) ---------
+# --- ranker feature vector (always 24 features, always price-aware) ---------
 
-def test_ranking_feature_names_has_29_entries():
-    assert len(RANKING_FEATURE_NAMES) == 29
+def test_ranking_feature_names_has_24_entries():
+    assert len(RANKING_FEATURE_NAMES) == 24
 
 
 def test_ranking_feature_names_includes_all_price_related_features():
     assert set(PRICE_RANKING_FEATURE_NAMES) <= set(RANKING_FEATURE_NAMES)
 
 
-def test_build_ranking_feature_vector_has_29_dims():
+def test_ranking_feature_names_excludes_discount_features():
+    """No real SalePrice/DiscountPercentage in production - see
+    docs/production-feature-parity-audit.md.
+    """
+    assert "item_discount_fraction" not in RANKING_FEATURE_NAMES
+    assert "item_is_discounted" not in RANKING_FEATURE_NAMES
+
+
+def test_build_ranking_feature_vector_has_24_dims():
     vec = build_ranking_feature_vector(_user_features(), _product_features(), None, 0.5, 0, 50, 100.0)
-    assert vec.shape == (29,)
+    assert vec.shape == (24,)

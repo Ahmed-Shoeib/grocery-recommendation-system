@@ -49,12 +49,10 @@ def scenario():
 
     tt_encoder = TwoTowerFeatureEncoder.fit(
         category_names=[p.category_name for p in products],
-        brand_names=[],
-        age_groups=[],
         prices=[p.price for p in products],
         embedding_dim=_EMBEDDING_DIM,
     )
-    tt_config = TwoTowerConfig(projection_dims=[16, _OUTPUT_DIM], output_dim=_OUTPUT_DIM, category_embedding_dim=4, brand_embedding_dim=4, age_group_embedding_dim=2)
+    tt_config = TwoTowerConfig(projection_dims=[16, _OUTPUT_DIM], output_dim=_OUTPUT_DIM, category_embedding_dim=4)
     user_tower = build_user_tower(tt_encoder, tt_config)
 
     item_embeddings = rng.normal(size=(len(all_ids), _OUTPUT_DIM)).astype(np.float32)
@@ -158,8 +156,8 @@ def test_no_train_examples_for_users_without_train_products():
     product_lookup = {p.id: p for p in products}
     product_features = build_product_features(products, [], [], [])
     embeddings = {pid: np.zeros(_EMBEDDING_DIM, dtype=np.float32) for pid in (10, 11)}
-    tt_encoder = TwoTowerFeatureEncoder.fit([], [], [], [1.0, 2.0], _EMBEDDING_DIM)
-    tt_config = TwoTowerConfig(projection_dims=[8, _OUTPUT_DIM], output_dim=_OUTPUT_DIM, category_embedding_dim=2, brand_embedding_dim=2, age_group_embedding_dim=2)
+    tt_encoder = TwoTowerFeatureEncoder.fit([], [1.0, 2.0], _EMBEDDING_DIM)
+    tt_config = TwoTowerConfig(projection_dims=[8, _OUTPUT_DIM], output_dim=_OUTPUT_DIM, category_embedding_dim=2)
     user_tower = build_user_tower(tt_encoder, tt_config)
     index = FaissVectorIndex()
     index.build([10, 11], np.eye(2, _OUTPUT_DIM, dtype=np.float32))

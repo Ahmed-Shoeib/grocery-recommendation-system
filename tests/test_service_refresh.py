@@ -21,8 +21,10 @@ import sqlite3
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+import hashlib
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 
 from recommendation.api.service import RecommendationService, _DataSnapshot, _load_data_snapshot
@@ -34,15 +36,29 @@ from recommendation.config import AppConfig, PathsConfig, RefreshConfig, get_con
 DB_PATH = resolve_path(get_config().paths.data_sqlite)
 pytestmark = pytest.mark.skipif(not DB_PATH.exists(), reason="backend_shaped_synthetic.db not present")
 
+_FAKE_EMBEDDING_DIM = 384
+
 
 def _fake_encoder() -> SimpleNamespace:
-    # `_load_data_snapshot` only ever touches `.model_name` (cache-validity
-    # check) and `.encode(...)` (only called on a cache miss, or when a
-    # user has free-text search/chatbot content - never true for the
-    # User_events-sourced dataset, see data/adapters/user_events_adapter.py).
-    # The committed embedding cache is content-hash-valid for the unmodified
-    # catalog, so this stub never needs a real Sentence Transformer model.
-    return SimpleNamespace(model_name="all-MiniLM-L6-v2")
+    # `_load_data_snapshot` touches `.model_name` (cache-validity check)
+    # and `.encode(...)`. The production-safe contract redesign changed
+    # `embeddings.text_builder.build_product_text` (no more brand/tags/
+    # ingredients/parent-category), which invalidates the on-disk product-
+    # embedding cache's content hash for every product - so `.encode(...)`
+    # IS called here (a cache miss is now the normal, expected path, not
+    # an edge case this stub can skip). Deterministic (hash-of-text-based)
+    # dummy vectors are enough: these tests only assert on
+    # timestamp/recency/refresh behavior, never on embedding content.
+    def _encode(texts: list[str], normalize: bool = False) -> np.ndarray:
+        if not texts:
+            return np.empty((0, _FAKE_EMBEDDING_DIM), dtype=np.float32)
+        vectors = []
+        for text in texts:
+            seed = int(hashlib.sha256(text.encode("utf-8")).hexdigest()[:8], 16)
+            vectors.append(np.random.default_rng(seed).normal(size=_FAKE_EMBEDDING_DIM).astype(np.float32))
+        return np.stack(vectors)
+
+    return SimpleNamespace(model_name="all-MiniLM-L6-v2", embedding_dim=_FAKE_EMBEDDING_DIM, encode=_encode)
 
 
 def _fake_snapshot(bundle=None) -> _DataSnapshot:

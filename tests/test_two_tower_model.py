@@ -9,10 +9,10 @@ from recommendation.config import TwoTowerConfig
 
 @pytest.fixture
 def encoder() -> TwoTowerFeatureEncoder:
+    # Production-safe contract (docs/production-feature-parity-audit.md):
+    # no brand_names/age_groups - the real backend has neither field.
     return TwoTowerFeatureEncoder.fit(
         category_names=["Dairy & Eggs", "Snacks", "Produce"],
-        brand_names=["GreenValley", "SnackWorks"],
-        age_groups=["25-34", "35-44"],
         prices=[2.0, 4.0, 10.0],
         embedding_dim=8,
     )
@@ -20,14 +20,13 @@ def encoder() -> TwoTowerFeatureEncoder:
 
 @pytest.fixture
 def config() -> TwoTowerConfig:
-    return TwoTowerConfig(projection_dims=[16, 8], output_dim=8, category_embedding_dim=4, brand_embedding_dim=4, age_group_embedding_dim=2)
+    return TwoTowerConfig(projection_dims=[16, 8], output_dim=8, category_embedding_dim=4)
 
 
 def _item_batch(encoder: TwoTowerFeatureEncoder, n: int) -> dict[str, np.ndarray]:
     return {
         "semantic_embedding": np.random.default_rng(0).normal(size=(n, encoder.embedding_dim)).astype(np.float32),
         "category_id": np.zeros(n, dtype=np.int32),
-        "brand_id": np.zeros(n, dtype=np.int32),
         "price_tier_id": np.zeros(n, dtype=np.int32),
         "numeric": np.random.default_rng(1).normal(size=(n, encoder.item_numeric_dim)).astype(np.float32),
     }
@@ -36,11 +35,8 @@ def _item_batch(encoder: TwoTowerFeatureEncoder, n: int) -> dict[str, np.ndarray
 def _user_batch(encoder: TwoTowerFeatureEncoder, n: int) -> dict[str, np.ndarray]:
     return {
         "semantic_embedding": np.random.default_rng(2).normal(size=(n, encoder.embedding_dim)).astype(np.float32),
-        "preferred_category_id": np.zeros(n, dtype=np.int32),
-        "age_group_id": np.zeros(n, dtype=np.int32),
         "price_tier_id": np.zeros(n, dtype=np.int32),
         "category_affinity": np.random.default_rng(3).random((n, encoder.category_affinity_dim)).astype(np.float32),
-        "brand_affinity": np.random.default_rng(4).random((n, encoder.brand_affinity_dim)).astype(np.float32),
         "numeric": np.random.default_rng(5).normal(size=(n, encoder.user_numeric_dim)).astype(np.float32),
     }
 

@@ -215,7 +215,7 @@ def test_purchase_history_drives_typical_price_when_available():
         PurchaseRecord(user_id=1, product_id=1, quantity=1, order_created_at=t(5)),
         PurchaseRecord(user_id=1, product_id=2, quantity=1, order_created_at=t(3)),
     ]
-    profile = build_user_price_profile(purchases, _lookup(), None, _ctx(), T0, DISABLED)
+    profile = build_user_price_profile(purchases, _lookup(), [], _ctx(), T0, DISABLED)
     assert profile.fallback_source == "purchase_history"
     assert profile.supporting_purchase_count == 2
     assert profile.typical_price == pytest.approx(6.0)  # unweighted mean of 5.0, 7.0
@@ -223,40 +223,40 @@ def test_purchase_history_drives_typical_price_when_available():
 
 def test_single_purchase_has_zero_spread_not_nan():
     purchases = [PurchaseRecord(user_id=1, product_id=1, quantity=1, order_created_at=t(1))]
-    profile = build_user_price_profile(purchases, _lookup(), None, _ctx(), T0, DISABLED)
+    profile = build_user_price_profile(purchases, _lookup(), [], _ctx(), T0, DISABLED)
     assert profile.supporting_purchase_count == 1
     assert profile.price_spread == 0.0
     assert math.isfinite(profile.typical_price)
 
 
 def test_no_purchases_falls_back_to_preferred_category_prior():
-    profile = build_user_price_profile([], _lookup(), "Snacks", _ctx(), T0, DISABLED)
+    profile = build_user_price_profile([], _lookup(), ["Snacks"], _ctx(), T0, DISABLED)
     assert profile.fallback_source == "preferred_category_prior"
     assert profile.supporting_purchase_count == 0
     assert profile.typical_price == pytest.approx(6.0)  # median(5.0, 7.0)
 
 
 def test_no_purchases_no_preferred_category_falls_back_to_catalog_prior():
-    profile = build_user_price_profile([], _lookup(), None, _ctx(), T0, DISABLED)
+    profile = build_user_price_profile([], _lookup(), [], _ctx(), T0, DISABLED)
     assert profile.fallback_source == "catalog_prior"
     assert profile.typical_price == pytest.approx(_ctx().catalog_median_price)
 
 
 def test_preferred_category_not_in_catalog_falls_back_to_catalog_prior():
-    profile = build_user_price_profile([], _lookup(), "Nonexistent Category", _ctx(), T0, DISABLED)
+    profile = build_user_price_profile([], _lookup(), ["Nonexistent Category"], _ctx(), T0, DISABLED)
     assert profile.fallback_source == "catalog_prior"
 
 
 def test_no_history_user_never_produces_nan_or_inf():
-    profile = build_user_price_profile([], _lookup(), None, _ctx(), T0, DISABLED)
+    profile = build_user_price_profile([], _lookup(), [], _ctx(), T0, DISABLED)
     assert math.isfinite(profile.typical_price)
     assert math.isfinite(profile.price_spread)
     assert profile.price_tier in ("budget", "mid", "premium")
 
 
 def test_fallback_is_deterministic():
-    a = build_user_price_profile([], _lookup(), "Snacks", _ctx(), T0, DISABLED)
-    b = build_user_price_profile([], _lookup(), "Snacks", _ctx(), T0, DISABLED)
+    a = build_user_price_profile([], _lookup(), ["Snacks"], _ctx(), T0, DISABLED)
+    b = build_user_price_profile([], _lookup(), ["Snacks"], _ctx(), T0, DISABLED)
     assert a == b
 
 
@@ -270,7 +270,7 @@ def test_raw_purchase_count_reflects_only_resolvable_priced_purchases():
         PurchaseRecord(user_id=1, product_id=1, quantity=1, order_created_at=t(1)),
         PurchaseRecord(user_id=1, product_id=999, quantity=1, order_created_at=t(2)),  # unknown product
     ]
-    profile = build_user_price_profile(purchases, _lookup(), None, _ctx(), T0, DISABLED)
+    profile = build_user_price_profile(purchases, _lookup(), [], _ctx(), T0, DISABLED)
     assert profile.supporting_purchase_count == 1
 
 
@@ -293,8 +293,8 @@ def test_recent_purchases_outweigh_old_ones_when_recency_enabled():
     ]
     ctx = build_price_catalog_context(list(lookup.values()))
 
-    unweighted = build_user_price_profile(purchases, lookup, None, ctx, T0, DISABLED)
-    recency_weighted = build_user_price_profile(purchases, lookup, None, ctx, T0, ENABLED)
+    unweighted = build_user_price_profile(purchases, lookup, [], ctx, T0, DISABLED)
+    recency_weighted = build_user_price_profile(purchases, lookup, [], ctx, T0, ENABLED)
 
     assert unweighted.typical_price == pytest.approx(50.0)  # plain mean of 20..80
     assert recency_weighted.typical_price > 65.0  # pulled strongly toward the recent 70/75/80 cluster
@@ -313,8 +313,8 @@ def test_recency_disabled_or_no_reference_time_gives_plain_unweighted_mean():
     ]
     ctx = build_price_catalog_context(list(lookup.values()))
 
-    disabled = build_user_price_profile(purchases, lookup, None, ctx, T0, DISABLED)
-    no_reference = build_user_price_profile(purchases, lookup, None, ctx, None, ENABLED)
+    disabled = build_user_price_profile(purchases, lookup, [], ctx, T0, DISABLED)
+    no_reference = build_user_price_profile(purchases, lookup, [], ctx, None, ENABLED)
     assert disabled.typical_price == pytest.approx(15.0)
     assert no_reference.typical_price == pytest.approx(15.0)
 
@@ -325,7 +325,7 @@ def test_prefers_unit_price_when_present_erd_synthetic_path():
     lookup = {1: _product(id=1, price=999.0)}  # current catalog price, deliberately different
     purchases = [PurchaseRecord(user_id=1, product_id=1, quantity=1, unit_price=12.5, order_created_at=t(1))]
     ctx = build_price_catalog_context(list(lookup.values()))
-    profile = build_user_price_profile(purchases, lookup, None, ctx, T0, DISABLED)
+    profile = build_user_price_profile(purchases, lookup, [], ctx, T0, DISABLED)
     assert profile.typical_price == pytest.approx(12.5)
 
 
@@ -337,7 +337,7 @@ def test_falls_back_to_product_effective_price_when_unit_price_absent_user_event
     lookup = {1: _product(id=1, price=8.0, sale_price=6.0)}
     purchases = [PurchaseRecord(user_id=1, product_id=1, quantity=1, unit_price=None, order_created_at=t(1))]
     ctx = build_price_catalog_context(list(lookup.values()))
-    profile = build_user_price_profile(purchases, lookup, None, ctx, T0, DISABLED)
+    profile = build_user_price_profile(purchases, lookup, [], ctx, T0, DISABLED)
     assert profile.typical_price == pytest.approx(6.0)  # effective_price, not raw price
 
 
@@ -377,7 +377,7 @@ def test_future_purchase_price_does_not_affect_profile_before_its_cutoff():
 
     # Correct: only history strictly before the cutoff is visible.
     visible_before_cutoff = [p for p in [old_purchase, future_purchase] if p.order_created_at < cutoff]
-    profile_at_cutoff = build_user_price_profile(visible_before_cutoff, lookup, None, ctx, cutoff, ENABLED)
+    profile_at_cutoff = build_user_price_profile(visible_before_cutoff, lookup, [], ctx, cutoff, ENABLED)
 
     assert profile_at_cutoff.supporting_purchase_count == 1
     assert profile_at_cutoff.typical_price == pytest.approx(10.0)  # only the $10 old purchase, never the $200 future one
@@ -388,7 +388,7 @@ def test_future_purchase_price_does_not_affect_profile_before_its_cutoff():
     # influence the profile.
     later_cutoff = t(0)
     visible_at_later_cutoff = [p for p in [old_purchase, future_purchase] if p.order_created_at < later_cutoff]
-    profile_at_later_cutoff = build_user_price_profile(visible_at_later_cutoff, lookup, None, ctx, later_cutoff, ENABLED)
+    profile_at_later_cutoff = build_user_price_profile(visible_at_later_cutoff, lookup, [], ctx, later_cutoff, ENABLED)
     assert profile_at_later_cutoff.supporting_purchase_count == 2
     # With recency enabled and the $200 purchase now much more recent, the
     # typical price should be pulled well above the old-only estimate.
@@ -407,4 +407,4 @@ def test_leakage_guard_composes_with_recency_future_event_raises():
     ctx = build_price_catalog_context(list(lookup.values()))
     future_purchase = PurchaseRecord(user_id=1, product_id=1, quantity=1, order_created_at=T0 + timedelta(days=1))
     with pytest.raises(RecencyLeakageError):
-        build_user_price_profile([future_purchase], lookup, None, ctx, T0, ENABLED)
+        build_user_price_profile([future_purchase], lookup, [], ctx, T0, ENABLED)

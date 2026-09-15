@@ -232,7 +232,7 @@ def generate_recommendations(
         ranked = personalized[:pool_size]
     elif tier is HistoryTier.SPARSE:
         blend = config.cold_start.sparse_blend
-        preferred_ids = category_popularity_ranking(eligible_product_features, user_features.preferred_category)
+        preferred_ids = category_popularity_ranking(eligible_product_features, user_features.preferred_categories)
         global_ids = global_popularity_ranking(eligible_product_features)
         sources = [
             ("personalized", [c.product_id for c in personalized], blend.personalized),
@@ -241,7 +241,7 @@ def generate_recommendations(
         ]
         ranked = blend_candidate_lists(sources, pool_size)
     else:  # NO_HISTORY
-        preferred_ids = category_popularity_ranking(eligible_product_features, user_features.preferred_category)
+        preferred_ids = category_popularity_ranking(eligible_product_features, user_features.preferred_categories)
         category_pop_ids = category_popularity_ranking(eligible_product_features, top_affinity_category(user_features.category_affinity))
         global_ids = global_popularity_ranking(eligible_product_features)
         source_lookup = {

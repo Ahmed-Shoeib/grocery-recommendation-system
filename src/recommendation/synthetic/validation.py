@@ -40,8 +40,9 @@ def validate_dataset(dataset: SyntheticDataset) -> list[str]:
             issues.append(f"ProductTag {pt.id} has dangling tag_id {pt.tag_id}")
 
     for user in dataset.users:
-        if user.preferred_category_id is not None and user.preferred_category_id not in category_ids:
-            issues.append(f"User {user.id} has dangling preferred_category_id {user.preferred_category_id}")
+        for cid in user.preferred_category_ids:
+            if cid not in category_ids:
+                issues.append(f"User {user.id} has dangling preferred_category_id {cid}")
 
     for order in dataset.orders:
         if order.user_id not in user_ids:
