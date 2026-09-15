@@ -311,20 +311,25 @@ def load_backend_reviews(
     (`RawReview.rating` is `ge=1, le=5`, so an out-of-range row would
     otherwise abort the whole load).
 
-    **Identity gap - why this currently yields no reviews.** The rows are
-    real and the endpoint works, but `/api/reviews` addresses users and
-    products by the backend's **int32 primary keys** (`userId`,
-    `productId`), while every other endpoint this integration consumes
-    addresses users by GUID and products by slug. No endpoint exposes both
-    for the same row, so there is no join key and `_resolve_*` below cannot
-    match. That is the same gap the backend team's in-progress "immutable
-    product UUID/ID in product responses and /api/user-activities" work
-    closes - see docs/data-mapping.md section 19.6. Nothing is guessed in
-    the meantime: reviews are an *optional* auxiliary signal
+    **Identity status (2026-09-15).** User side: **closed** -
+    `ApiReview.user_guid` (verified live, present on every row) is the
+    bridge to the GUID this load already resolved from the activity
+    stream; `_resolve_review_user` is a direct dict lookup, no guessing,
+    no hashing, no N+1 calls. Product side: **code-complete, unverified
+    live** - `_resolve_review_product` reads
+    `BackendCatalog.product_id_by_backend_id`, populated by
+    `load_backend_catalog` from any consumed product source that carries
+    `product_id`; as of 2026-09-15 both `/api/products` and
+    `/api/ai/products` return HTTP 500 (a genuine backend-side regression,
+    confirmed by repeated retries - not this integration's issue), so no
+    product source can currently supply that map and the product join is
+    unverifiable against real data until one of those routes recovers -
+    see docs/data-mapping.md section 19.5/19.6/19.8. Reviews remain an
+    *optional* auxiliary signal either way
     (`EngagementProfile.reviews` defaults to `[]`, and
     `features.product_features.build_product_features` falls back to
-    neutral rating defaults for a review-free catalog), so an empty result
-    is semantics-preserving, not fabricated.
+    neutral rating defaults for a review-free catalog), so a reduced or
+    empty result is semantics-preserving, never fabricated.
 
     Skipped entirely (one log line, no request) when service credentials
     are unset - the endpoint is Bearer-gated and would otherwise 401 once
@@ -360,13 +365,18 @@ def load_backend_reviews(
         if rating is None:
             dropped_rating += 1
             continue
+        # Both sides are resolved independently (never short-circuited) so
+        # `dropped_unknown_product`/`dropped_unknown_user` each honestly
+        # count every row unresolvable on that side, even when a row fails
+        # both - needed for accurate live join diagnostics (see the smoke
+        # test and docs/data-mapping.md 19.6), not just "reason A wins".
         product_id = _resolve_review_product(row, catalog)
+        user_id = _resolve_review_user(row, internal_by_guid)
         if product_id is None:
             dropped_unknown_product += 1
-            continue
-        user_id = _resolve_review_user(row, internal_by_guid)
         if user_id is None:
             dropped_unknown_user += 1
+        if product_id is None or user_id is None:
             continue
         reviews.append(
             RawReview(
@@ -387,12 +397,18 @@ def load_backend_reviews(
         logger.info("backend load: %d review row(s) dropped (rating missing or outside 1-5)", dropped_rating)
     if dropped_unknown_user:
         logger.info("backend load: %d review row(s) dropped (user not in this load's activity stream)", dropped_unknown_user)
+    if api_reviews:
+        resolvable = len(api_reviews) - dropped_no_id - dropped_rating
+        logger.info(
+            "backend load: reviews join diagnostics - %d/%d product-side resolved, %d/%d user-side resolved "
+            "(of %d row(s) that passed id/rating checks)",
+            resolvable - dropped_unknown_product, resolvable, resolvable - dropped_unknown_user, resolvable, resolvable,
+        )
     if dropped_unknown_product:
         logger.warning(
-            "backend load: %d of %d review row(s) dropped - /api/reviews identifies products by the "
-            "backend's int32 productId, which /api/products does not expose, so there is no join key. "
-            "Reviews stay unavailable until the backend adds its product id to the product projection "
-            "(docs/data-mapping.md section 19.6).",
+            "backend load: %d of %d review row(s) dropped - productId not found in "
+            "BackendCatalog.product_id_by_backend_id (no consumed product source currently "
+            "supplies product_id - see docs/data-mapping.md section 19.5/19.6/19.8).",
             dropped_unknown_product, len(api_reviews),
         )
     logger.info("backend load: %d canonical reviews from %d /api/reviews row(s)", len(reviews), len(api_reviews))
@@ -410,30 +426,36 @@ def _valid_rating(rating: float | None) -> float | None:
 
 
 def _resolve_review_product(review: ApiReview, catalog: BackendCatalog) -> int | None:
-    """Backend int32 `productId` -> internal product id.
-
-    Returns `None` for every row today: the catalog is keyed by slug
-    because `/api/products` exposes no numeric id, so there is nothing to
-    match `productId` against. **This is the single place to change** when
-    the backend adds its product id to the product projection - populate a
-    `{backend_product_id: internal_id}` map in `load_backend_catalog` and
-    look it up here. Deliberately not pre-built against a guessed field
-    name (see docs/data-mapping.md section 19.5).
+    """Backend int32 `productId` -> internal product id, via
+    `BackendCatalog.product_id_by_backend_id` (populated by
+    `load_backend_catalog` from any consumed product source that carries
+    `product_id` - see 19.5). Returns `None` when that map has no entry
+    for this row's `productId` - either because no consumed product
+    source currently exposes ids (the live status as of 2026-09-15:
+    `/api/products` and `/api/ai/products` both return HTTP 500, so the
+    map is empty end to end today - see 19.5/19.8), or because the id
+    genuinely names a product outside the current catalog.
     """
     return catalog.product_id_by_backend_id.get(review.product_id) if review.product_id is not None else None
 
 
 def _resolve_review_user(review: ApiReview, internal_by_guid: dict[str, int]) -> int | None:
-    """Backend int32 `userId` -> internal user id.
+    """Backend `userGuid` -> internal user id.
 
-    Same gap on the user side: `/api/user-activities` and
-    `/api/users/{guid}` both address users by GUID, so an int `userId` has
-    no counterpart. Resolution is intentionally restricted to users this
-    load already saw (never `resolver.resolve_user`, which would *mint* a
+    `AiProductReviewResponse.userGuid` (verified live 2026-09-15, present
+    and non-null on every row observed) is the same GUID
+    `/api/user-activities`/`/api/users/{guid}` use, so this is a direct
+    lookup against `guid_by_internal` reversed to `{guid: internal_id}` -
+    no hashing, no positional matching, no int-id guessing. Resolution
+    stays intentionally restricted to users this load already saw in the
+    activity stream (never `resolver.resolve_user`, which would *mint* a
     new internal id for an unknown key and create a phantom user with a
-    review but no activity).
+    review but no activity) - a review by a user with zero recorded
+    activity is still dropped, counted, and logged, exactly as before.
+    `user_id` (the int32 primary key) is no longer used for this join;
+    it is kept on the DTO only as non-authoritative metadata.
     """
-    return None if review.user_id is None else internal_by_guid.get(str(review.user_id))
+    return None if review.user_guid is None else internal_by_guid.get(review.user_guid)
 
 
 # --- helpers ----------------------------------------------------------

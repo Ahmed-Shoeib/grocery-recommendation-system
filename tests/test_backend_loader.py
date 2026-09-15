@@ -233,8 +233,12 @@ def test_age_group_stays_none_on_the_real_schema_but_is_forward_compatible(tmp_p
 # --- /api/reviews ------------------------------------------------------
 #
 # Rows below use the real verified `AiProductReviewResponse` shape:
-# {reviewId, userId, productId, rating, comment, createdAt, updatedAt},
-# where userId/productId are the backend's int32 primary keys.
+# {reviewId, userId, userGuid, productId, rating, comment, createdAt,
+# updatedAt} - userGuid was added live 2026-09-15 and is the user-identity
+# bridge (`loader._resolve_review_user`); userId/productId remain the
+# backend's int32 primary keys, with productId still the join key on the
+# product side (`_resolve_review_product`, via
+# `BackendCatalog.product_id_by_backend_id`).
 
 
 def _catalog_with_backend_ids(tmp_path, mapping):
@@ -261,10 +265,10 @@ def test_reviews_join_end_to_end_once_the_catalog_itself_exposes_product_id(tmp_
 
     reviews = load_backend_reviews(
         FakeBackendClient(reviews=[
-            {"reviewId": 1, "userId": 7, "productId": 501, "rating": 5, "createdAt": "2026-09-01T10:00:00"},
+            {"reviewId": 1, "userId": 7, "userGuid": "g7", "productId": 501, "rating": 5, "createdAt": "2026-09-01T10:00:00"},
         ]),
         catalog,
-        {5: "7"},
+        {5: "g7"},
     )
     assert len(reviews) == 1
     assert reviews[0].product_id == internal_product_id
@@ -310,11 +314,11 @@ def test_resolvable_reviews_become_canonical_raw_reviews(tmp_path):
     catalog = _catalog_with_backend_ids(tmp_path, {3: 11})
     reviews = load_backend_reviews(
         FakeBackendClient(reviews=[
-            {"reviewId": 42, "userId": 7, "productId": 3, "rating": 4, "comment": "good",
+            {"reviewId": 42, "userId": 7, "userGuid": "guid-7", "productId": 3, "rating": 4, "comment": "good",
              "createdAt": "2026-09-01T10:00:00", "updatedAt": None},
         ]),
         catalog,
-        {5: "7"},  # internal user 5 <-> the backend user key "7"
+        {5: "guid-7"},  # internal user 5 <-> the backend user GUID "guid-7"
     )
     assert len(reviews) == 1
     review = reviews[0]
@@ -323,17 +327,67 @@ def test_resolvable_reviews_become_canonical_raw_reviews(tmp_path):
     assert review.creation_date == datetime(2026, 9, 1, 10, 0, 0)
 
 
-def test_unknown_user_is_dropped_never_minted(tmp_path):
-    """A review by a user with no recorded activity must not create a
-    phantom user id (the activity stream defines the served population).
+def test_user_guid_is_the_join_key_not_the_legacy_int_user_id(tmp_path):
+    """Live 2026-09-15: `userGuid` is the real bridge; the int32 `userId`
+    is no longer authoritative. A row whose `userGuid` happens to equal
+    the *string form* of an internal id's old int `userId` must NOT
+    resolve by coincidence - only an actual matching GUID does.
     """
     catalog = _catalog_with_backend_ids(tmp_path, {3: 11})
     reviews = load_backend_reviews(
         FakeBackendClient(reviews=[
-            {"reviewId": 1, "userId": 999, "productId": 3, "rating": 5, "createdAt": "2026-09-01T10:00:00"},
+            # userId=7 matches nothing useful; no userGuid at all -> dropped.
+            {"reviewId": 1, "userId": 7, "productId": 3, "rating": 5, "createdAt": "2026-09-01T10:00:00"},
         ]),
         catalog,
-        {5: "7"},
+        {5: "guid-7"},
+    )
+    assert reviews == []
+
+
+def test_product_and_user_resolution_are_counted_independently(tmp_path, caplog):
+    """The two join sides must never short-circuit each other for
+    diagnostics: a row failing product resolution must still have its
+    user side checked (and counted) too, so live counts (e.g. the smoke
+    test / docs 19.6) report the true per-side resolution rate rather
+    than whichever check happened to run first.
+    """
+    import logging
+
+    catalog = _catalog_with_backend_ids(tmp_path, {3: 11})  # only productId 3 is joinable
+    with caplog.at_level(logging.INFO, logger="recommendation.backend.loader"):
+        reviews = load_backend_reviews(
+            FakeBackendClient(reviews=[
+                # product resolves (3->11), user does not (unknown guid).
+                {"reviewId": 1, "userId": 7, "userGuid": "unknown", "productId": 3, "rating": 5, "createdAt": "2026-09-01T10:00:00"},
+                # user resolves (guid-7), product does not (999 unmapped).
+                {"reviewId": 2, "userId": 7, "userGuid": "guid-7", "productId": 999, "rating": 5, "createdAt": "2026-09-01T10:00:00"},
+                # neither resolves.
+                {"reviewId": 3, "userId": 7, "userGuid": "unknown", "productId": 999, "rating": 5, "createdAt": "2026-09-01T10:00:00"},
+            ]),
+            catalog,
+            {5: "guid-7"},
+        )
+    assert reviews == []  # every row fails at least one side
+    diag = next(r.message for r in caplog.records if "reviews join diagnostics" in r.message)
+    # 3 rows resolvable-in-principle; product resolves for row 1 only (1/3);
+    # user resolves for row 2 only (1/3).
+    assert "1/3 product-side resolved" in diag
+    assert "1/3 user-side resolved" in diag
+
+
+def test_unknown_user_is_dropped_never_minted(tmp_path):
+    """A review by a user with no recorded activity must not create a
+    phantom user id (the activity stream defines the served population) -
+    even though the row carries a real-looking, well-formed `userGuid`.
+    """
+    catalog = _catalog_with_backend_ids(tmp_path, {3: 11})
+    reviews = load_backend_reviews(
+        FakeBackendClient(reviews=[
+            {"reviewId": 1, "userId": 999, "userGuid": "guid-never-seen", "productId": 3, "rating": 5, "createdAt": "2026-09-01T10:00:00"},
+        ]),
+        catalog,
+        {5: "guid-7"},
     )
     assert reviews == []
 
@@ -345,15 +399,15 @@ def test_malformed_ratings_and_ids_are_dropped_without_raising(tmp_path):
     catalog = _catalog_with_backend_ids(tmp_path, {3: 11})
     reviews = load_backend_reviews(
         FakeBackendClient(reviews=[
-            {"reviewId": 1, "userId": 7, "productId": 3, "rating": 0, "createdAt": "2026-09-01T10:00:00"},
-            {"reviewId": 2, "userId": 7, "productId": 3, "rating": 9, "createdAt": "2026-09-01T10:00:00"},
-            {"reviewId": 3, "userId": 7, "productId": 3, "rating": None, "createdAt": "2026-09-01T10:00:00"},
-            {"reviewId": None, "userId": 7, "productId": 3, "rating": 5, "createdAt": "2026-09-01T10:00:00"},
-            {"reviewId": 5, "userId": 7, "productId": None, "rating": 5, "createdAt": "2026-09-01T10:00:00"},
-            {"reviewId": 6, "userId": 7, "productId": 3, "rating": 5, "createdAt": "2026-09-01T10:00:00"},
+            {"reviewId": 1, "userId": 7, "userGuid": "guid-7", "productId": 3, "rating": 0, "createdAt": "2026-09-01T10:00:00"},
+            {"reviewId": 2, "userId": 7, "userGuid": "guid-7", "productId": 3, "rating": 9, "createdAt": "2026-09-01T10:00:00"},
+            {"reviewId": 3, "userId": 7, "userGuid": "guid-7", "productId": 3, "rating": None, "createdAt": "2026-09-01T10:00:00"},
+            {"reviewId": None, "userId": 7, "userGuid": "guid-7", "productId": 3, "rating": 5, "createdAt": "2026-09-01T10:00:00"},
+            {"reviewId": 5, "userId": 7, "userGuid": "guid-7", "productId": None, "rating": 5, "createdAt": "2026-09-01T10:00:00"},
+            {"reviewId": 6, "userId": 7, "userGuid": "guid-7", "productId": 3, "rating": 5, "createdAt": "2026-09-01T10:00:00"},
         ]),
         catalog,
-        {5: "7"},
+        {5: "guid-7"},
     )
     assert [r.id for r in reviews] == [6]
 
@@ -362,11 +416,11 @@ def test_missing_and_aware_timestamps_are_normalized_to_naive_utc(tmp_path):
     catalog = _catalog_with_backend_ids(tmp_path, {3: 11})
     reviews = load_backend_reviews(
         FakeBackendClient(reviews=[
-            {"reviewId": 1, "userId": 7, "productId": 3, "rating": 5, "createdAt": None},
-            {"reviewId": 2, "userId": 7, "productId": 3, "rating": 5, "createdAt": "2026-09-01T12:00:00+02:00"},
+            {"reviewId": 1, "userId": 7, "userGuid": "guid-7", "productId": 3, "rating": 5, "createdAt": None},
+            {"reviewId": 2, "userId": 7, "userGuid": "guid-7", "productId": 3, "rating": 5, "createdAt": "2026-09-01T12:00:00+02:00"},
         ]),
         catalog,
-        {5: "7"},
+        {5: "guid-7"},
     )
     assert reviews[0].creation_date is None
     # +02:00 -> naive UTC, matching the activity-stream convention.
@@ -399,13 +453,13 @@ def test_canonical_reviews_reach_the_shared_review_adapter(tmp_path):
     catalog = _catalog_with_backend_ids(tmp_path, {3: 11, 4: 12})
     raw_reviews = load_backend_reviews(
         FakeBackendClient(reviews=[
-            {"reviewId": 1, "userId": 7, "productId": 3, "rating": 5, "comment": "a",
+            {"reviewId": 1, "userId": 7, "userGuid": "guid-7", "productId": 3, "rating": 5, "comment": "a",
              "createdAt": "2026-09-01T10:00:00"},
-            {"reviewId": 2, "userId": 7, "productId": 4, "rating": 3, "comment": "b",
+            {"reviewId": 2, "userId": 7, "userGuid": "guid-7", "productId": 4, "rating": 3, "comment": "b",
              "createdAt": "2026-09-02T10:00:00"},
         ]),
         catalog,
-        {5: "7"},
+        {5: "guid-7"},
     )
     assert {r.product_id for r in raw_reviews} == {11, 12}
 

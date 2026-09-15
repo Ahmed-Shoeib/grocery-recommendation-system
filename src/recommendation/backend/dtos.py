@@ -152,30 +152,35 @@ class ApiReview(BaseModel):
     recommender, distinct from the browser-facing
     `/api/products/{slug}/reviews`).
 
-    Access status (re-verified live 2026-09-14 with a freshly-minted
-    service token): still **403**. The decoded token's `scope` claim is
-    `"users:read"` only - `reviews:read` has not (yet) been granted to
-    this integration's actual service-client credentials, despite the
-    backend team's report that granting both scopes to a service client
-    returns `200` in their own testing. `client.list_reviews()` raises
-    `BackendAuthError` and `loader.load_backend_reviews` degrades to `[]`,
-    exactly as it does for any other authorization gap - see
-    docs/data-mapping.md section 19.6 for the exact evidence and the
-    action needed (grant `reviews:read` to *this* client, then re-run the
-    smoke test).
+    Access status (re-verified live 2026-09-15 with a freshly-minted
+    service token): **200 OK**. The decoded token's `scope` claim is now
+    `["users:read", "reviews:read", "products:read", "activities:read"]`
+    - the previously-missing `reviews:read` grant landed. Live response:
+    11 review rows (2026-09-15).
 
-    Identity note: `user_id` and `product_id` are the backend's **int32
-    primary keys**, while `/api/user-activities`/`/api/users/{guid}`
-    address users by GUID and `/api/products` addresses products by slug.
-    `loader.load_backend_reviews` -> `_resolve_review_product` now joins
+    Identity note - **user side closed 2026-09-15**: the response now
+    also carries `userGuid` (verified live, present and non-null on all
+    11 rows), the GUID `/api/user-activities`/`/api/users/{guid}` use -
+    this is the bridge that was previously missing. `_resolve_review_user`
+    now looks it up directly against the activity-stream's GUID->internal-id
+    map (still a **lookup, never a mint**: a review by a user with no
+    recorded activity is still dropped, matching the eligibility contract
+    - see docs/data-mapping.md 19.6). `user_id` (the int32 primary key) is
+    kept only as non-authoritative metadata now that `user_guid` is the
+    real join key.
+
+    Product side: `product_id` is the backend's int32 `Product.Id`,
+    matching `ApiProduct.product_id`/`ApiActivity.product_id`.
+    `loader.load_backend_reviews` -> `_resolve_review_product` joins
     automatically the moment any consumed product source populates
-    `ApiProduct.product_id` (`BackendCatalog.product_id_by_backend_id`);
-    the user side still has no equivalent - no endpoint this integration
-    can reach exposes a GUID<->int user-id mapping, so
-    `_resolve_review_user` remains a lookup restricted to users already
-    seen in the activity stream (never a mint). Both gaps are unverified
-    against real row *values* until the scope above is granted - the
-    contract below is from the live OpenAPI document only.
+    `ApiProduct.product_id` (`BackendCatalog.product_id_by_backend_id`).
+    **Unverified live as of 2026-09-15**: `/api/products` and
+    `/api/ai/products` (the only two possible sources of that map) are
+    both returning HTTP 500 server errors (confirmed by repeated retries,
+    a genuine backend-side regression, not an auth/scope issue) - see
+    docs/data-mapping.md 19.5/19.8. The live review rows' `productId`
+    values (91, 147) cannot currently be cross-checked against any
+    catalog for this reason.
 
     `rating` is `int32` with no declared bounds on this response, though
     the write side (`CreateProductReviewRequest`) constrains it to 1-5;
@@ -188,6 +193,7 @@ class ApiReview(BaseModel):
 
     review_id: int | None = None
     user_id: int | None = None
+    user_guid: str | None = None
     product_id: int | None = None
     rating: float | None = None
     comment: str | None = None
