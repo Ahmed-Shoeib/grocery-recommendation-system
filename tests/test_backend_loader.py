@@ -46,6 +46,92 @@ def test_catalog_maps_fields_and_flags_backend_gaps(tmp_path):
     assert weird.category_id == 0  # placeholder category slug not in /api/categories
 
 
+def test_product_id_becomes_the_resolver_key_when_the_source_provides_it(tmp_path):
+    """Forward-compatible seam: `dtos.ApiProduct.product_id` is always
+    `None` on today's live `/api/products` (docs/data-mapping.md 19.5), but
+    the moment a product source populates it, `load_backend_catalog` must
+    key identity on it instead of slug, and populate
+    `product_id_by_backend_id` so `/api/reviews` starts joining.
+    """
+    r = _resolver(tmp_path)
+    prods = [
+        {"slug": "orange-juice", "productId": 501, "name": "Orange Juice", "price": 4.0, "stockQuantity": 50, "categorySlug": "groceries"},
+        {"slug": "headphones", "productId": 502, "name": "Headphones", "price": 99.0, "stockQuantity": 0, "categorySlug": "electronics"},
+    ]
+    catalog = load_backend_catalog(FakeBackendClient(products=prods, categories=_CATS), r)
+
+    by_slug = {p.slug: p for p in catalog.products}
+    assert catalog.product_id_by_backend_id == {501: by_slug["orange-juice"].id, 502: by_slug["headphones"].id}
+    assert catalog.product_ids == {501, 502}
+    # The registry key is the backend id, not the slug - `peek_product`
+    # only finds it via the id-shaped key.
+    assert r.peek_product(str(501)) == by_slug["orange-juice"].id
+    assert r.peek_product("orange-juice") is None
+
+
+def test_changed_slug_does_not_change_product_identity_once_keyed_by_product_id(tmp_path):
+    """Slug is metadata once `product_id` is the resolver key: renaming a
+    product's slug between reloads must not orphan/change its internal id
+    - only a `product_id` change would (matching the pre-existing,
+    documented slug-mutability behaviour for the old slug-keyed regime).
+    """
+    r1 = _resolver(tmp_path)
+    c1 = load_backend_catalog(
+        FakeBackendClient(products=[{"slug": "orange-juice", "productId": 501, "name": "OJ", "price": 4.0, "categorySlug": "groceries"}], categories=_CATS),
+        r1,
+    )
+    first_id = c1.products[0].id
+    r1.save()
+
+    r2 = _resolver(tmp_path)
+    c2 = load_backend_catalog(
+        FakeBackendClient(products=[{"slug": "orange-juice-renamed", "productId": 501, "name": "OJ", "price": 4.0, "categorySlug": "groceries"}], categories=_CATS),
+        r2,
+    )
+    assert c2.products[0].id == first_id
+    assert c2.products[0].slug == "orange-juice-renamed"  # metadata updates freely
+
+
+def test_activity_product_id_resolves_against_the_same_catalog_key_as_products(tmp_path):
+    """'ProductId from products == ProductId from activities': an activity
+    row carrying `product_id` (see `dtos.ApiActivity.product_id`) must
+    resolve to the exact same internal id the catalog assigned that
+    product - not a slug-keyed lookup, and not a fresh id.
+    """
+    r = _resolver(tmp_path)
+    prods = [{"slug": "orange-juice", "productId": 501, "name": "OJ", "price": 4.0, "categorySlug": "groceries"}]
+    catalog = load_backend_catalog(FakeBackendClient(products=prods, categories=_CATS), r)
+    internal_id = catalog.products[0].id
+
+    activities = [ApiActivity.model_validate({
+        "userId": "g1", "actionType": "AddToCart", "productId": 501, "timestamp": "2026-08-01T10:00:00",
+    })]
+    interactions, _ = load_backend_events(activities, r, catalog)
+    assert len(interactions) == 1
+    assert interactions[0].product_id == internal_id
+
+
+def test_activity_with_unknown_product_id_is_dropped_even_with_a_slug_fallback_absent(tmp_path):
+    r = _resolver(tmp_path)
+    catalog = load_backend_catalog(FakeBackendClient(products=_PRODS, categories=_CATS), r)
+    activities = [ApiActivity.model_validate({
+        "userId": "g1", "actionType": "AddToCart", "productId": 999999, "timestamp": "2026-08-01T10:00:00",
+    })]
+    interactions, _ = load_backend_events(activities, r, catalog)
+    assert interactions == []
+
+
+def test_search_product_activity_maps_to_canonical_search(tmp_path):
+    r = _resolver(tmp_path)
+    catalog = load_backend_catalog(FakeBackendClient(products=_PRODS, categories=_CATS), r)
+    activities = [ApiActivity.model_validate({
+        "userId": "g1", "actionType": "SearchProduct", "slug": "orange-juice", "timestamp": "2026-08-01T10:00:00",
+    })]
+    interactions, _ = load_backend_events(activities, r, catalog)
+    assert len(interactions) == 1
+    assert interactions[0].action_type.value == "SEARCH"
+
+
 def test_ids_are_stable_across_a_reload(tmp_path):
     r1 = _resolver(tmp_path)
     c1 = load_backend_catalog(FakeBackendClient(products=_PRODS, categories=_CATS), r1)
@@ -159,6 +245,29 @@ def _catalog_with_backend_ids(tmp_path, mapping):
     catalog = load_backend_catalog(FakeBackendClient(products=_PRODS, categories=_CATS), _resolver(tmp_path))
     catalog.product_id_by_backend_id.update(mapping)
     return catalog
+
+
+def test_reviews_join_end_to_end_once_the_catalog_itself_exposes_product_id(tmp_path):
+    """The full seam, not the manually-populated shortcut: once
+    `load_backend_catalog` sees `product_id` on a real product row, its
+    `product_id_by_backend_id` map is populated automatically and
+    `load_backend_reviews` resolves against it with no other code change -
+    'ProductId from reviews resolves to the same canonical product'.
+    """
+    r = _resolver(tmp_path)
+    prods = [{"slug": "orange-juice", "productId": 501, "name": "OJ", "price": 4.0, "categorySlug": "groceries"}]
+    catalog = load_backend_catalog(FakeBackendClient(products=prods, categories=_CATS), r)
+    internal_product_id = catalog.products[0].id
+
+    reviews = load_backend_reviews(
+        FakeBackendClient(reviews=[
+            {"reviewId": 1, "userId": 7, "productId": 501, "rating": 5, "createdAt": "2026-09-01T10:00:00"},
+        ]),
+        catalog,
+        {5: "7"},
+    )
+    assert len(reviews) == 1
+    assert reviews[0].product_id == internal_product_id
 
 
 def test_reviews_are_skipped_without_credentials_and_not_fetched(tmp_path):

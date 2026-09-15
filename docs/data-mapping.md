@@ -1790,10 +1790,11 @@ reached through direct SQL / a DB connection is superseded here: the ERD
 describe the backend's *data model*, but the recommender's *access path*
 to it is HTTP, not SQL.
 
-### 19.1 What the API actually exposes (probed live 2026-09-01)
+### 19.1 What the API actually exposes (probed live 2026-09-01, re-probed 2026-09-14)
 
 The published OpenAPI document declares request bodies only - **no
-response schemas** - so every response shape below was verified by
+response schemas** for most routes (the two `Ai*` routes below are the
+exception, see 19.5) - so every response shape below was verified by
 calling the live endpoints.
 
 **Envelope**: every response is
@@ -1805,27 +1806,55 @@ List endpoints nest `data.data` (the array) + `data.pagination`.
 `pagination.hasNext`, request param `Cursor`/`cursor` +
 `Limit`/`pageSize`. `/api/products` and `/api/categories` reject
 `Limit > 100` with HTTP 400 (the client floors catalog page size at
-100). Page-number style (`/api/tags`) is not used by this integration.
+100); `/api/user-activities` silently caps the *actual* page size at 20
+once `pageSize` is requested above ~100 (observed live 2026-09-14: asking
+for 500 or 1000 both come back with `pagination.pageSize: 20`) - harmless
+for this client (it always requests 100, the confirmed honoured value)
+but worth knowing if `page_size` config is ever raised. Page-number style
+(`/api/tags`) is not used by this integration.
 
 **Auth**: `/api/products`, `/api/categories`, `/api/user-activities` are
-public (re-confirmed live 2026-09-04). `/api/users/{userId}` and
-`/api/reviews` are `Bearer`-gated and stay that way by design: rather than
-opening them up, the backend team provided a service-to-service
-client-credentials flow (`POST /api/auth/service/token`, body
-`{clientId, clientSecret}` -> `{data: {accessToken, expiresAtUtc}}`, tag
-`ServiceAuth` in Swagger). **That exchange is implemented as of
-2026-09-09** - see 19.11. The `Authorization` header is attached
-per-protected-request; public calls still send none.
+public (re-confirmed live 2026-09-04 and 2026-09-14, no `Authorization`
+header sent or required). `/api/users/{userId}` and `/api/reviews` are
+`Bearer`-gated and stay that way by design: rather than opening them up,
+the backend team provided a service-to-service client-credentials flow
+(`POST /api/auth/service/token`, body `{clientId, clientSecret}` ->
+`{data: {accessToken, expiresAtUtc}}`, tag `ServiceAuth` in Swagger).
+**That exchange is implemented as of 2026-09-09** - see 19.11. The
+`Authorization` header is attached per-protected-request; public calls
+still send none.
+
+**2026-09-14 re-probe headline findings** (detail in 19.5/19.6/19.10): the
+live OpenAPI document now also declares two new Bearer-gated routes,
+`GET /api/ai/products` and `GET /api/ai/user-activities` (tags
+`AiProduct`/`AiUserActivity`), whose response schemas (`AiProductResponse`
+/ `AiUserActivityResponse`) are the **only** place a numeric
+`productId: int32` appears anywhere in the live contract -
+`ProductResponse`, `ProductSummaryResponse`, and `UserActivitiesResponse`
+(i.e. `/api/products` and `/api/user-activities` themselves) still expose
+**no** product id, confirmed against both the schema and a live call.
+This integration's configured service-client token currently returns
+`403` on both new routes (its `scope` claim decodes to `users:read` only)
+and still `403` on `/api/reviews` (`reviews:read` not present in that
+claim) - see 19.5/19.6 for the exact evidence. Separately,
+`/api/user-activities`'s new `SearchProduct` action type is confirmed
+live and is now the overwhelming majority of all activity rows - see
+19.10.
 
 ### 19.2 Endpoints used
 
 | Endpoint | Used for | Identity in payload |
 |---|---|---|
-| `GET /api/products` (list) + cursor pages | full catalog | product **slug**; no id |
+| `GET /api/products` (list) + cursor pages | full catalog | product **slug**; `productId` field exists on the DTO but is always `None` from this route (see 19.5) |
 | `GET /api/categories` (list) + cursor pages | category names | category **slug**; no id, no parent |
-| `GET /api/user-activities` + cursor pages | **the sole engagement source** (CLICK / ADD_TO_CART / PURCHASE) | user **GUID**, product **slug** |
+| `GET /api/user-activities` + cursor pages | **the sole engagement source** (CLICK / ADD_TO_CART / PURCHASE / SEARCH) | user **GUID**, product **slug**; `productId` field exists on the DTO but is always `None` from this route (see 19.5) |
 | `GET /api/users/{guid}` (Bearer) | best-effort profile enrichment (`preferredCategories[].category.slug` **only if present**; `ageGroup` does not exist in the live schema) | user **GUID**, wire key `guid` |
-| `GET /api/reviews` (Bearer) | optional auxiliary review signal; **unpaginated flat array** | user **int32 id**, product **int32 id** - unjoinable today, see 19.6 |
+| `GET /api/reviews` (Bearer) | optional auxiliary review signal; **unpaginated flat array** | user **int32 id**, product **int32 id** - product side joins automatically once `product_id_by_backend_id` is populated (see 19.5); user side still unjoinable, see 19.6. Currently unreachable end to end: this integration's service client gets `403` (no `reviews:read` scope) |
+
+**Not (yet) used**, discovered live 2026-09-14: `GET /api/ai/products` and
+`GET /api/ai/user-activities` - the only routes whose schema carries a
+numeric `productId`, but Bearer-gated and returning `403` for this
+integration's current service-client scope (`users:read` only). See 19.5.
 
 Deliberately **not** used: `/api/orders*`, `/api/cart`,
 `/api/favorites/*`, and the browser-facing
@@ -1834,7 +1863,11 @@ catalog would be N+1). `/api/user-activities` is the single
 engagement-truth source (mirrors the SQLite factory's `User_events`-only
 contract), so the same real-world action cannot be double-counted through
 two code paths - reviews are a *separate* signal
-(`EngagementProfile.reviews`), not a second purchase/click source.
+(`EngagementProfile.reviews`), not a second purchase/click source. The
+backend team confirmed (2026-09-14) that `PlaceOrder` emits **one
+activity row per order line/product**, never one row per order, so
+`PlaceOrder -> PURCHASE` staying product-level (no `/api/orders` fallback)
+is correct as-is - no code change was needed for this ask.
 
 ### 19.3 DTO → canonical mapping and the field-availability gap
 
@@ -1965,17 +1998,28 @@ the wire. No canonical schema, identity path, or other endpoint mapping
 changed; `ExternalIdentityResolver` still resolves user identity from
 `/api/user-activities`' GUIDs only, not from this endpoint.
 
-### 19.5 Identity: slug / GUID → stable internal `int`
+### 19.5 Identity: backend `Product.Id` / slug / GUID → stable internal `int`
 
-The backend exposes products/categories by **slug** and users by
-**GUID**, and no numeric ids anywhere (an int leaks inside opaque
-pagination cursors but is not a usable contract). The recommender core
-and every trained artifact operate on integer ids.
-`backend.identity.ExternalIdentityResolver` is the single boundary
-that bridges the two - **nothing downstream of the adapter layer ever
-sees a slug or a GUID.** This is CASE B (see this task's brief): the API
-truly exposes only slugs/GUIDs, so a proper identity-resolution boundary
-is introduced rather than refactoring the recommender to string ids.
+**Status as of 2026-09-14: the resolver-side change is implemented and
+tested; it is not yet live because no product source this integration can
+currently reach populates a product id (see below).**
+
+The backend exposes categories by **slug** and users by **GUID**, with no
+numeric id for either anywhere in the live contract. Products are
+different: the backend's database `Product.Id` (an existing, stable
+`int32`) is now exposed on two **new**, Bearer-gated routes -
+`GET /api/ai/products` (`AiProductResponse.productId`) and
+`GET /api/ai/user-activities` (`AiUserActivityResponse.productId`,
+nullable) - verified against the live OpenAPI document 2026-09-14. It is
+**not** exposed on the routes this integration actually reads today:
+`ProductResponse`/`ProductSummaryResponse` (`/api/products`,
+`/api/products/{slug}`) and `UserActivitiesResponse`
+(`/api/user-activities`) carry no product id field at all, confirmed
+against both the schema and a live call. `backend.identity
+.ExternalIdentityResolver` is the single boundary that bridges whichever
+external key a source actually provides (backend product id, slug, or
+GUID) to a stable internal `int` - **nothing downstream of the adapter
+layer ever sees an external key of any kind.**
 
 - **Deterministic & persistent**: a JSON registry file
   (`paths.backend_identity_registry`, default
@@ -2003,30 +2047,99 @@ is introduced rather than refactoring the recommender to string ids.
   inside the activity stream are *looked up* only (`peek_*`, returns
   `None`), so an activity can never mint a phantom product.
 
-**Slug mutability**: if the backend changes a product's slug, this
-resolver treats the new slug as a new product (new id); the old id is
-orphaned but harmless. The robust backend contract is **immutable id +
-mutable slug**; until that exists the compromise is isolated entirely in
-this one class. See 19.8.
+**Key mutability**: if a product's *resolver key* changes between loads
+(a slug rename, or - the case this section is about - the key switching
+from slug to backend product id), this resolver treats the new key as a
+new product (new internal id); the old id is orphaned but harmless. This
+was always the documented behaviour for slug renames; it now also governs
+the slug -> product-id transition, deliberately, rather than adding a
+second migration mechanism. See "Migration strategy" below.
 
-**Product-identity readiness (reviewed 2026-09-04, no code change - the
-design was already ready):** `resolve_product`/`peek_product` take an
-opaque string key - the resolver has no idea whether it's a slug or a
-UUID, so it needs no change at all when the backend adds an immutable
-product id. The only lines that would change, confined entirely to
-`backend.loader` (never `identity.py`, never anything downstream of
-the adapter layer), are the ~4 call sites that currently pass `p.slug` /
-`row.slug` - they'd instead pass `p.product_id or p.slug` /
-`row.product_id or row.slug` once `ApiProduct`/`ApiActivity` gain that
-(not-yet-existing, so not modeled - see 19.1's `extra="ignore"` note)
-field. **One caveat that's a migration event, not a code defect**:
-switching the resolver's product key from slug to product id is an
-identity-*namespace* change, not a value update - the on-disk registry is
-keyed by slug today, so the first load after switching would find no
-existing keys, mint a fresh internal id for every product, and require a
-retrain (Two-Tower/ANN/ranker product embeddings are indexed by that
-internal id). Plan for that retrain when the backend actually ships
-product ids; nothing to do before then.
+**Product-identity implementation (landed 2026-09-14):**
+`resolve_product`/`peek_product` still take an opaque string key -
+`identity.py` needed **zero changes**, exactly as anticipated on
+2026-09-04: it has no idea whether a key is a slug or a numeric id.
+`dtos.ApiProduct`/`dtos.ApiActivity` gained an optional `product_id: int
+| None` field each (aliased `productId`, tolerant of absence). The
+resolution key `backend.loader` passes is now, per product/activity row:
+`str(product_id)` if the row carries one, else `slug` - decided once per
+row, per load:
+
+```
+load_backend_catalog:  key = str(p.product_id) if p.product_id is not None else p.slug
+                        resolver.resolve_product(key)
+                        if p.product_id is not None: product_id_by_backend_id[p.product_id] = internal_id
+
+load_backend_events:   prefers row.product_id (peek by str(product_id)) when present and
+                       known to the current catalog, else falls back to row.slug
+```
+
+`BackendCatalog.product_id_by_backend_id` (already the seam
+`_resolve_review_product` reads - see 19.6) is now populated
+automatically by `load_backend_catalog` itself instead of needing to be
+hand-populated: `/api/reviews` starts joining on the product side the
+moment *any* product source this integration reads carries `product_id`,
+with no further code change. **Today** `/api/products` and
+`/api/user-activities` both still send `product_id: null` on every row
+(19.1), so this logic is exercised only by tests
+(`tests/test_backend_loader.py`:
+`test_product_id_becomes_the_resolver_key_when_the_source_provides_it`,
+`test_changed_slug_does_not_change_product_identity_once_keyed_by_product_id`,
+`test_activity_product_id_resolves_against_the_same_catalog_key_as_products`,
+`test_reviews_join_end_to_end_once_the_catalog_itself_exposes_product_id`)
+and live behaviour is unchanged: every product still resolves by slug.
+
+**Migration strategy - what happens the day a consumed source actually
+sends `product_id`:**
+
+- **Old strategy**: product identity = slug (the only key ever available
+  from a consumed source).
+- **New strategy**: product identity = the backend's `Product.Id`
+  (stringified) when the consumed source provides it, else slug.
+- **Registry impact**: this is a per-key resolution-key change, not a
+  schema or file-format change - `backend_identity_registry.json`'s
+  shape is untouched (still `{"version": 1, "namespaces": {...}}}`). Nothing
+  is deleted or migrated automatically: the *existing* slug-keyed entries
+  simply stop being resolved to (nothing in the loader will ever look
+  them up by slug again once every product carries `product_id`), so they
+  become orphaned exactly like a renamed slug always has, and every
+  product receives a **new** internal id on its first product-id-keyed
+  resolution. Because the backend team's own description of this rollout
+  is uniform - `Product.Id` lands on products and activities together,
+  for the whole catalog at once, not gradually - this orphaning event
+  happens for the whole `product` namespace at essentially the same load,
+  i.e. in practice it behaves like a full remap.
+- **Why a forced reset/version bump is deliberately NOT built in**: the
+  resolver already handles key changes correctly and safely per-key
+  (collision-checked, namespace-isolated, no silent duplicate ever
+  possible - see the guarantees above); adding a second, code-driven
+  "wipe the whole namespace on scheme change" mechanism would duplicate
+  that safety net for no behavioural benefit, and risks wiping a
+  namespace on a false positive (e.g. a partial rollout where only some
+  products carry `product_id` this load). The orphaned old ids cost
+  nothing - `data/processed/` is gitignored, local-only, and every
+  trained artifact will be retrained against the real catalog before
+  `backend_api` is used for live serving regardless (section 13/16).
+- **Recommended operational step for that day** (not automatic, not
+  required for correctness): delete/archive the local
+  `backend_identity_registry.json` before the first load under the new
+  key, purely for id-numbering hygiene (fresh ids starting at 1 instead
+  of continuing past the orphaned slug-keyed range). `identity.py`
+  already supports this with zero code changes - "file does not exist"
+  is the existing, tested empty-start path.
+- **Unaffected**: the `category` and `user` namespaces (no key-scheme
+  change proposed or made here) and `data/sqlite/*` / `models/
+  sqlite_baseline/` (a completely separate loader with its own integer
+  ids, never touches `ExternalIdentityResolver`).
+- **Tests proving the contract** (`tests/test_backend_loader.py`): same
+  `product_id` resolves to the same internal id across a simulated
+  restart; the id the catalog assigns a product equals the id an activity
+  row referencing the same `product_id` resolves to; a review row with a
+  matching `productId` resolves to that same internal id via
+  `product_id_by_backend_id`; a product's slug changing while its
+  `product_id` stays fixed does **not** change its internal id (slug is
+  demoted to metadata the moment `product_id` is the resolver key for
+  that product).
 
 ### 19.6 Reviews - `/api/reviews` integrated in code; blocked live on a scope grant, then on identity
 
@@ -2052,6 +2165,35 @@ degrades to `[]` with a single warning - the rest of the load is
 unaffected (verified live). The row-shape contract below is therefore
 from the live OpenAPI document only; the row *values* remain unverified
 until the scope is granted.
+
+**Re-verified live 2026-09-14 - still `403`, with concrete evidence of
+why.** Per updated instructions for this pass, a **freshly-minted**
+service token was obtained immediately before the call (`POST
+/api/auth/service/token`, not a cached/older token), specifically to rule
+out "stale token predates the scope grant" as the cause. `GET /api/reviews`
+with that fresh token still returned **`403`**. The token's JWT payload
+was decoded locally (never logged, never persisted - signature not
+verified, only the claims were inspected) and its `scope` claim is:
+
+```
+"scope": "users:read"
+```
+
+**`reviews:read` is not present.** This means the scope grant described
+for this pass (`users:read` + `reviews:read` on the service client) has
+not actually been applied to *this integration's configured
+credentials* - either it was granted to a different client than the one
+`RECS_BACKEND_SERVICE_CLIENT_ID`/`_SECRET` identify, or the grant has not
+yet been applied server-side. This is a backend-side provisioning gap,
+not a code issue: `client.list_reviews()` /
+`loader.load_backend_reviews()` behave exactly as designed for a `403`
+(degrade to `[]`, one warning, rest of the load unaffected - verified
+live again). **Action needed**: confirm `reviews:read` is granted to the
+specific client behind these credentials (`UpdateServiceClientScopesRequest`
+on the correct `clientId`), then re-run
+`scripts/backend_api_smoke_test.py` - no code change is required once
+that lands. The row-shape contract below remains from the live OpenAPI
+document only; row *values* are still unverified.
 
 #### Verified contract (2026-09-09)
 
@@ -2079,15 +2221,36 @@ seven fields below are all there is):
 | `createdAt` | `date-time` | naive UTC, same convention as `/api/user-activities.timestamp` |
 | `updatedAt` | `date-time?` | nullable; not consumed - `RawReview` has one timestamp |
 
-#### The identity gap - the second blocker, after the scope grant
+#### The identity gap - product side closed in code, user side still open
 
-Even once the `403` is resolved, `/api/reviews` is the only endpoint that
-addresses users and products by **numeric primary key**. Everything else
-this integration consumes uses GUID (users) and slug (products), and **no
-endpoint exposes both keys for the same row**, so there is no join key.
-Fetched rows are then dropped by the same policy that governs activities -
-an unresolvable external reference must never be attached to *a* product
-(section 5, 19.5).
+**Product side (closed in code 2026-09-14, pending live data):**
+`loader.load_backend_catalog` now populates
+`BackendCatalog.product_id_by_backend_id` from any product source that
+carries `product_id` (19.5), and `_resolve_review_product` already reads
+that map - so `/api/reviews`' numeric `productId` joins automatically
+the moment `/api/products` (or whichever product source is consumed)
+starts sending it. No further code change is needed for the product side
+of this join; it is exercised by
+`test_reviews_join_end_to_end_once_the_catalog_itself_exposes_product_id`
+and remains unexercised live only because `/api/products` still sends no
+`product_id` (19.1/19.5).
+
+**User side (still open, genuinely unresolved - not guessed):**
+`/api/reviews`' `userId` is the backend's int32 user primary key.
+Every other endpoint this integration can reach addresses users by GUID
+(`/api/user-activities`, `/api/users/{guid}`), and the live
+`GET /api/users/{guid}` response (`UserResponse`, re-checked 2026-09-14)
+carries no int32 id field alongside `guid` - only `guid`, `firstName`,
+`lastName`, `email`, `phoneNumber`, `birthDate`, `preferredCategories`,
+`role`, `isActive`, `createdAt`. No endpoint this integration can reach
+exposes both a user's GUID and their int32 primary key for the same
+identity, so `_resolve_review_user` still cannot mint or look up a
+correct join and remains restricted to users already seen in this load's
+own activity stream (by design: a lookup, never a mint - a review by a
+user with no recorded activity must not create a phantom user). **This
+gap is reported explicitly, not guessed around**, per this pass's
+instructions. Unlike the product side, no landed backend change closes
+it yet.
 
 The only join available today would be
 `GET /api/products/{productSlug}/reviews` (tag `ProductReview`, returns
@@ -2096,12 +2259,16 @@ against `/api/reviews` would yield `productId → slug` and
 `userId → userGuid`. That is **one request per product** - the N+1 pattern
 this integration refuses (same reasoning as product tags, 19.3).
 
-**This is not a new backend-team item.** It closes automatically with the
-already-requested immutable product id (19.5): the moment `/api/products`
-returns the backend's product identifier, `productId` joins directly.
-The user side needs the equivalent on `/api/users` / `/api/user-activities`.
+**Product side is not a new backend-team item and is now closed in code**
+(19.5): the moment `/api/products` returns the backend's `Product.Id`,
+`productId` joins directly via `product_id_by_backend_id` - no further
+change needed. **The user side is a genuinely open ask**: an equivalent
+GUID<->int32 mapping needs to appear on `/api/users`/`/api/users/{guid}`
+or `/api/user-activities` before `_resolve_review_user` can join anything
+beyond "users already seen in the activity stream".
 
-Until then `EngagementProfile.reviews` stays `[]`, which
+Until both the scope grant (still missing as of 2026-09-14) and at least
+the product-side data land, `EngagementProfile.reviews` stays `[]`, which
 `features.product_features.build_product_features` already handles
 (rating features fall back to neutral defaults). **Empty because
 unjoinable, never fabricated.**
@@ -2126,14 +2293,15 @@ Drop policy, each counted and logged separately:
 |---|---|
 | no `reviewId` | no canonical primary key |
 | `rating` missing or outside 1-5 | `RawReview.rating` is `ge=1, le=5`; an out-of-range row would abort the whole load |
-| `productId` unresolvable | the identity gap above - currently every row |
-| `userId` not in this load's activity stream | resolution is a **lookup, never a mint**: a review by a user with no activity must not create a phantom user |
+| `productId` unresolvable | closed in code (19.5) - resolves automatically once a consumed product source sends `product_id`; currently every row because none do yet |
+| `userId` not in this load's activity stream | resolution is a **lookup, never a mint**: a review by a user with no activity must not create a phantom user - still the only join available; genuinely open, see above |
 
-**Single point of change** when the backend id lands: populate
-`BackendCatalog.product_id_by_backend_id` in `load_backend_catalog` and
-`loader._resolve_review_product` starts resolving. Nothing else moves;
+`_resolve_review_product` now resolves automatically the moment
+`load_backend_catalog` populates `BackendCatalog.product_id_by_backend_id`
+(landed 2026-09-14 - see 19.5). Nothing else moves;
 `tests/test_backend_loader.py::test_resolvable_reviews_become_canonical_raw_reviews`
-already exercises that path with the map populated.
+and `test_reviews_join_end_to_end_once_the_catalog_itself_exposes_product_id`
+both exercise that path.
 
 ### 19.11 Service-to-service authentication - IMPLEMENTED & verified live
 
@@ -2148,6 +2316,18 @@ the exchange succeeds, the token is cached and reused, and
 the endpoint had never been called with a token). `GET /api/reviews` with
 the *same* token returns `403` - the client is authenticated but lacks
 that route's scope (see 19.6; backend grant needed).
+
+**Re-verified live 2026-09-14 with a deliberately fresh token** (fetched
+immediately before the call, not reused from an earlier run, to rule out
+a stale-scope-claim cache): `POST /api/auth/service/token` still succeeds
+and its JWT `scope` claim decodes to `"users:read"` only. `GET /api/users
+/{guid}` continues to work; `GET /api/ai/products` and
+`GET /api/ai/user-activities` (the new productId-bearing routes, 19.5)
+both return `403`; `GET /api/reviews` still returns `403` (19.6). The
+service-auth *mechanism* is confirmed working correctly end to end
+(fresh-token exchange, correct header attachment, correct 403 handling);
+what remains outstanding is a backend-side scope grant on this specific
+client's credentials.
 
 | Endpoint | Auth | Live result with the recommender's service client |
 |---|---|---|
@@ -2266,40 +2446,60 @@ behaviour. `GET /api/users/{guid}` remains best-effort enrichment either
 way: a 401, or absent credentials, still degrades to a bare profile and
 never blocks the data load.
 
-**Backend-team asks** - the complete open list as of 2026-09-09:
+**Backend-team asks** - the complete open list as of 2026-09-14:
 
-1. **Immutable id (or UUID) + slug** on products, categories, and users -
-   not slug-only, and on **both** the product responses
-   (`ProductResponse`/`ProductSummaryResponse`) **and** the corresponding
-   `/api/user-activities` rows (`UserActivitiesResponse.productId`), not
-   just one side. *In progress on the backend side.* Removes the
-   identity-registry compromise (19.5) **and** unblocks `/api/reviews`,
-   whose `productId`/`userId` are numeric keys nothing else exposes
-   (19.6) - one change closes both.
-2. **SEARCH and CHATBOT activity rows** on `/api/user-activities` - see
-   19.10. *In progress on the backend side.* Only 3 of the 5 canonical
-   engagement signals are live today.
-3. Confirm whether `PlaceOrder` emits **one activity row per order line**
-   or one per order - the mapping assumes each row is one product
-   interaction. *Question asked, awaiting answer.* No code change pending
-   the reply; `PlaceOrder -> PURCHASE` is unchanged.
-4. **Grant the recommender's service client the `/api/reviews` scope.**
-   The client-credentials flow is implemented and verified (19.11), and
-   the token already works for `/api/users/{guid}`, but
-   `GET /api/reviews` returns `403` for this client - it needs that
-   route's scope added (`UpdateServiceClientScopesRequest`). This is the
-   *first* blocker for the review signal; the identity join (ask 1) is
-   the second.
-5. **Per-environment service credentials** for the recommender, so it can
+1. **Grant `reviews:read` to the actual service client this integration
+   authenticates as.** The client-credentials flow is implemented and
+   verified (19.11); a token minted immediately before testing
+   (2026-09-14) still decodes to `scope: "users:read"` only, and
+   `GET /api/reviews` still returns `403`. Per this pass's own brief, the
+   backend team reports granting `users:read` + `reviews:read` to a
+   service client returns `200` in their testing - so either the grant
+   was applied to a different `clientId` than the one behind
+   `RECS_BACKEND_SERVICE_CLIENT_ID`/`_SECRET`, or it has not yet reached
+   this environment. **This is the single most actionable open item.**
+2. **Either expose `Product.Id` on `/api/products`/`/api/user-activities`
+   directly (as originally requested), or grant this service client
+   whatever scope `GET /api/ai/products` and `GET /api/ai/user-activities`
+   require.** Those two new routes (discovered live 2026-09-14) already
+   carry `productId: int32` in their documented schema
+   (`AiProductResponse`/`AiUserActivityResponse`) - the backend work
+   this integration originally asked for has landed, just on different,
+   Bearer-gated routes this client currently gets `403` on too. The
+   client-side code is ready either way (19.5): it prefers `product_id`
+   the instant any consumed product source populates it.
+3. **User-side numeric id, to unblock `/api/reviews`' `userId` join.**
+   `/api/reviews`.`userId` is an int32 backend user primary key with no
+   counterpart anywhere this integration can reach - `GET
+   /api/users/{guid}` exposes `guid` only, no numeric id. This is
+   distinct from ask 2 (which is about products) and remains fully open;
+   see 19.6.
+4. **Per-environment service credentials** for the recommender, so it can
    authenticate in production rather than relying on temporarily issued
    ones - a provisioning item only.
 
-**Closed / withdrawn:**
+**Closed / confirmed by the backend team this pass (2026-09-14) - no
+code change needed:**
+
+- ~~Confirm whether `PlaceOrder` emits one row per order line or one per
+  order~~ - **confirmed: one row per order line/product.** The existing
+  `PlaceOrder -> PURCHASE` mapping (product-level, no `/api/orders`
+  fallback) was already correct and is unchanged; see 19.2.
+- ~~SEARCH activity rows on `/api/user-activities`~~ - **confirmed live**:
+  action type `SearchProduct`, product-resolved (carries a slug), now
+  mapped to canonical `SEARCH`; see 19.10 for live counts.
+- ~~User-activity timestamps: local or UTC?~~ - **confirmed UTC** by the
+  backend team. The integration already treated the naive wire timestamp
+  as UTC wall-clock (`loader._as_naive_utc`); this is now a confirmed
+  contract rather than an assumption, and required no behaviour change.
+
+**Closed / withdrawn (earlier passes):**
 
 - ~~`GET /api/reviews` (implement the endpoint)~~ - **the endpoint now
-  exists and the client-side integration is complete** (19.6). Two
-  blockers remain, both now tracked as asks 4 and 1: the `/api/reviews`
-  scope grant, then the numeric-vs-slug/GUID identity join.
+  exists and the client-side integration is complete** (19.6). What
+  remains is entirely backend-side: the scope grant (ask 1) and the
+  user-id join (ask 3); the product-id join (ask 2) is code-complete and
+  activates the moment either ask 2 path lands.
 - ~~`GET /api/users/{userId}` without authentication~~ - superseded by the
   service-auth flow, now implemented (19.11). Keeping the endpoint
   Bearer-gated is the right shape: a profile is PII and the recommender is
@@ -2309,35 +2509,45 @@ never blocks the data load.
   confirmed the production backend will never provide these. They are no
   longer requested; see 19.12 for what that means for the recommender.
 
-### 19.10 Engagement-signal coverage (verified 2026-09-04)
+### 19.10 Engagement-signal coverage (verified 2026-09-04, re-verified live 2026-09-14)
 
-Re-probed the live `/api/user-activities` vocabulary (public endpoint, no
-auth) and the published OpenAPI spec's `actionType` typing:
+**Full-table live scan, 2026-09-14** (paginated `/api/user-activities` to
+exhaustion - `pagination.hasNext: false` - 3,185 pages, public endpoint,
+no auth):
 
-| Canonical signal | Backend `actionType` | Status |
-|---|---|---|
-| `CLICK` | `ViewProduct` | **live** (seen in the 2026-09-01 probe; not present in every sample page, but a known, mapped value) |
-| `ADD_TO_CART` | `AddToCart` | **live** (present in the current sample) |
-| `PURCHASE` | `PlaceOrder` | **live** (present in the current sample) |
-| `SEARCH` | *(none)* | **missing** - no search-related `actionType` value exists on the backend at all |
-| `CHATBOT` | *(none)* | **missing** - no chatbot-related `actionType` value exists on the backend at all |
+| Canonical signal | Backend `actionType` | Live count (of 318,405 total rows) | Status |
+|---|---|---|---|
+| `SEARCH` | `SearchProduct` | **276,710** (86.9% of all rows) | **live, confirmed 2026-09-14** - newly added by the backend; every sampled row carries a resolved product `slug` (see below), so it is correctly product-resolved per the canonical `SearchRecord` contract |
+| `ADD_TO_CART` | `AddToCart` | 29,778 | **live** |
+| `PURCHASE` | `PlaceOrder` | 11,705 | **live** |
+| *(ignored)* | `RemoveFromCart` | 42 | known, deliberately ignored (negative action) |
+| *(ignored)* | `AddedToFavorites` | 151 | known, deliberately ignored (no canonical favorite signal) |
+| *(ignored)* | `RemovedFromFavorites` | 19 | known, deliberately ignored (negative action) |
+| `CLICK` | `ViewProduct` | **0** | mapping is live-ready (`ViewProduct -> CLICK` unchanged) but **zero rows of this action type exist anywhere in the current dataset** - not a code gap, a live-data fact worth flagging to the backend/QA team if `ViewProduct` was expected to be seeded |
+| `CHATBOT` | *(none)* | 0 | **still missing** - no chatbot-related `actionType` value exists on the backend at all |
 
 `actionType` is typed as a bare nullable `string` in the OpenAPI spec (no
-enum), so there is no scaffolding hinting at planned SEARCH/CHATBOT values
-either. `backend.mapping._ACTION_TYPE_MAP` correctly reflects exactly
-this: it maps only the six backend values that exist
-(`ViewProduct`/`AddToCart`/`PlaceOrder`/`AddedToFavorites`/
-`RemoveFromCart`/`RemovedFromFavorites`), never invents a SEARCH or
-CHATBOT mapping, does not fold favorites into CLICK/ADD_TO_CART, and
-treats both removal actions as ignored (no retraction semantics) - this
-was reviewed and left unchanged, it already matches every stated
-requirement. Per the canonical `User_events` contract (section 4,
-`schemas.events`), SEARCH/CHATBOT rows are expected to arrive through
-this **same** endpoint as new `actionType` values (only once a search/
-chatbot turn has been resolved to a specific product) - not a separate
-endpoint - so supporting them later is a single-line addition to
-`_ACTION_TYPE_MAP` (e.g. `"search": ActionType.SEARCH`), nothing else in
-the pipeline changes.
+enum), so there is no scaffolding hinting at planned values - `SearchProduct`
+was discovered by scanning live data, not by reading the spec.
+`backend.mapping._ACTION_TYPE_MAP` now maps all seven observed backend
+values (`ViewProduct`/`AddToCart`/`PlaceOrder`/`SearchProduct`/
+`AddedToFavorites`/`RemoveFromCart`/`RemovedFromFavorites`) and treats an
+eighth, unrecognised value as unknown-and-logged rather than silently
+dropped, per docs/data-mapping.md section 4's `User_events` contract:
+SEARCH rows arrive through this **same** endpoint as a new `actionType`
+value (only once a search has been resolved to a specific product) - not
+a separate endpoint, confirmed by the `SearchProduct` row shape itself
+(every sampled row carries `slug`). CHATBOT is unchanged: still no
+backend activity, canonical support stays in the recommender, and no
+other action is repurposed for it - a single-line `_ACTION_TYPE_MAP`
+addition is all that will be needed once the backend adds it, exactly as
+`SearchProduct` just was.
+
+Also observed live 2026-09-14: `/api/user-activities` silently caps the
+page size it actually honours at 20 once `pageSize` is requested above
+roughly 100 (`pagination.pageSize` in the response reflects this), even
+though requesting exactly 100 is honoured in full - see 19.1. This
+integration's `page_size` config (100) is unaffected.
 
 ### 19.12 Permanently unavailable: `isActive`, `brand`, list-level tags
 
@@ -2425,17 +2635,23 @@ no-leak assertions on logs, exception messages, `Session.headers`, and
 `BackendApiConfig`'s field list),
 `tests/test_backend_identity.py` (determinism, restart persistence,
 namespace isolation, no-`hash()`, collision/repair, catalog
-add/remove), `tests/test_backend_mapping.py`,
+add/remove), `tests/test_backend_mapping.py` (positive-signal mapping
+including `SearchProduct -> SEARCH`, case/whitespace insensitivity,
+known-ignored actions, unknown actions, no action maps to CHATBOT),
 `tests/test_backend_loader.py` (field mapping, backend gaps, null/unknown
-slug drops, bare vs enriched profiles, and the review path: skipped
-without credentials, empty response, unjoinable int ids dropped,
-malformed/out-of-range ratings dropped, unknown user never minted,
-timestamp normalisation, auth failure degrading - plus the
-map-populated case proving resolution works the moment the backend
-exposes its product id), `tests/test_backend_factory.py`
-(same `AdapterBundle` shape as the other sources, downstream
-`build_engagement_profile` unchanged, no orders/cart double-count,
-registry persistence).
+slug drops, bare vs enriched profiles; product-id-preferring identity
+resolution - same `product_id` resolves consistently, a changed slug does
+not change identity once keyed by `product_id`, an activity row's
+`product_id` resolves to the exact same internal id the catalog assigned;
+`SearchProduct` end-to-end mapping; and the review path: skipped without
+credentials, empty response, unjoinable int ids dropped, malformed/
+out-of-range ratings dropped, unknown user never minted, timestamp
+normalisation, auth failure degrading, the map-populated case, and the
+full `load_backend_catalog` → `load_backend_reviews` seam proving the
+product join activates automatically once a product row carries
+`product_id`), `tests/test_backend_factory.py` (same `AdapterBundle`
+shape as the other sources, downstream `build_engagement_profile`
+unchanged, no orders/cart double-count, registry persistence).
 
 Live (network, **not** part of `pytest`):
 `scripts/backend_api_smoke_test.py` -
@@ -2445,9 +2661,26 @@ optionally with `RECS_BACKEND_SERVICE_CLIENT_ID` /
 `RECS_BACKEND_SERVICE_CLIENT_SECRET` to exercise the service-auth path.
 Proves the REST data flows through the canonical pipeline with no schema
 change, and that the identity registry is byte-identical on a second run.
-It prints token *metadata* only, never the token. Last run (2026-09-09):
-83 products / 5 categories / 38,294 activities → 38,087 interactions /
-316 users; with credentials, 316/316 profiles enriched and
-`GET /api/reviews` → `403` (scope), degrading to 0 reviews without
-affecting the load.
+It prints token *metadata* only, never the token.
+
+**Last run (2026-09-14, fresh token, full catalog + full activity
+scan):** 85 products / 6 categories / 318,413 activity rows →
+318,193 canonical interactions (212 dropped by action-type policy -
+`RemoveFromCart` 42, `AddedToFavorites` 151, `RemovedFromFavorites` 19;
+8 dropped for no product reference; **zero** dropped as "unknown
+product" - every product-bearing row matched the catalog) / 512 users;
+with credentials, 512/512 profiles enriched via `GET /api/users/{guid}`
+and `GET /api/reviews` → still `403` (scope not granted to this client -
+19.6), degrading to 0 reviews without affecting the rest of the load.
+Eligibility gate: 83/85 products pass (`stockQuantity > 0`). Sampled
+users' engagement totals are far larger than their `click`+`cart`+
+`purchase` counts alone (e.g. user 1: 413 total signals vs. 61 cart + 31
+purchase + 0 click) - the difference is `SEARCH` interactions flowing
+through `UserEventsAdapter` into `EngagementProfile.searches` exactly as
+designed, confirmed end to end through cold-start tiering (all sampled
+users land in the `strong` tier). The identity registry grew from
+83/5/316 (product/category/user, start of this run) to 164/6/512 by the
+end - expected: registry keys are append-only (19.5) and the live
+product catalog has visibly churned since 2026-09-09 (new/renamed test
+products alongside the original set), not a regression.
 

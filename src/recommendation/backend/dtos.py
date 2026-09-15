@@ -70,10 +70,25 @@ class ApiPagination(BaseModel):
 class ApiProduct(BaseModel):
     """`/api/products` (list) and `/api/products/{slug}` (detail). The list
     projection omits `description` and `tags`; the detail projection
-    includes them. The backend exposes NO numeric/UUID id, NO brand, NO
-    sale price / discount, NO `isActive` flag, NO ingredients - see
-    `loader` for how the canonical `RawProduct` is populated from what
-    exists.
+    includes them. As verified live 2026-09-14, `ProductResponse` /
+    `ProductSummaryResponse` (the schemas backing these two routes) still
+    expose NO numeric id, NO brand, NO sale price / discount, NO
+    `isActive` flag, NO ingredients - see `loader` for how the canonical
+    `RawProduct` is populated from what exists.
+
+    `product_id` models the backend's stable `Product.Id` - present on the
+    new `AiProductResponse` schema (`GET /api/ai/products`, `productId:
+    int32`, verified via the live OpenAPI document 2026-09-14) but NOT on
+    `ProductResponse`/`ProductSummaryResponse` itself. It is kept on this
+    DTO (rather than a separate one) so `loader.load_backend_catalog` can
+    key identity resolution on it the moment a product source populates it
+    - `extra="ignore"`/default-`None` means today, with `/api/products`
+    the only product source this integration reads, the field is always
+    `None` and slug remains the resolution key (see `identity.py`'s
+    per-namespace key-scheme guard for what happens the day this flips).
+    `/api/ai/products` itself is NOT consumed here: it is Bearer-gated and
+    the recommender's service credentials return `403` on it as of
+    2026-09-14 (no granted scope) - see docs/data-mapping.md section 19.5.
     """
 
     model_config = _WIRE
@@ -88,6 +103,7 @@ class ApiProduct(BaseModel):
     product_image_url: str | None = None
     creation_date: datetime | None = None
     tags: list[str] = Field(default_factory=list)
+    product_id: int | None = None
 
 
 class ApiCategory(BaseModel):
@@ -108,7 +124,17 @@ class ApiActivity(BaseModel):
     """One `/api/user-activities` row: a user GUID, a PascalCase action
     type, an optional product slug (null for actions the backend records
     without resolving a product, e.g. some `RemoveFromCart` rows), and a
-    naive local timestamp.
+    naive timestamp - confirmed by the backend team (2026-09-14) to be
+    UTC wall-clock, not local time (`loader._as_naive_utc` already treated
+    it that way; this is now a confirmed contract, not an assumption).
+
+    `product_id` mirrors `ApiProduct.product_id`: modeled from the new
+    `AiUserActivityResponse` schema (`GET /api/ai/user-activities`,
+    `productId: int32?`, verified via the live OpenAPI document
+    2026-09-14), always `None` on `/api/user-activities` itself (schema
+    `UserActivitiesResponse` has no such field, verified live) - kept here
+    so `loader.load_backend_events` can prefer it the day this endpoint
+    (or its Ai-tagged counterpart) actually populates it.
     """
 
     model_config = _WIRE
@@ -117,6 +143,7 @@ class ApiActivity(BaseModel):
     action_type: str
     slug: str | None = None
     timestamp: datetime | None = None
+    product_id: int | None = None
 
 
 class ApiReview(BaseModel):
@@ -125,16 +152,30 @@ class ApiReview(BaseModel):
     recommender, distinct from the browser-facing
     `/api/products/{slug}/reviews`).
 
-    Identity note - the reason `loader.load_backend_reviews` currently
-    drops rows: `user_id` and `product_id` are the backend's **int32
-    primary keys**, while every other endpoint this integration consumes
-    addresses users by GUID (`/api/user-activities`, `/api/users/{guid}`)
-    and products by slug (`/api/products`, `/api/user-activities`). No
-    endpoint exposes both an int id and a slug/GUID for the same row, so
-    there is no join key today. This is the same gap the backend team's
-    in-progress "immutable product UUID/ID in product responses and
-    /api/user-activities" work closes; nothing is guessed here in the
-    meantime (docs/data-mapping.md section 19.6).
+    Access status (re-verified live 2026-09-14 with a freshly-minted
+    service token): still **403**. The decoded token's `scope` claim is
+    `"users:read"` only - `reviews:read` has not (yet) been granted to
+    this integration's actual service-client credentials, despite the
+    backend team's report that granting both scopes to a service client
+    returns `200` in their own testing. `client.list_reviews()` raises
+    `BackendAuthError` and `loader.load_backend_reviews` degrades to `[]`,
+    exactly as it does for any other authorization gap - see
+    docs/data-mapping.md section 19.6 for the exact evidence and the
+    action needed (grant `reviews:read` to *this* client, then re-run the
+    smoke test).
+
+    Identity note: `user_id` and `product_id` are the backend's **int32
+    primary keys**, while `/api/user-activities`/`/api/users/{guid}`
+    address users by GUID and `/api/products` addresses products by slug.
+    `loader.load_backend_reviews` -> `_resolve_review_product` now joins
+    automatically the moment any consumed product source populates
+    `ApiProduct.product_id` (`BackendCatalog.product_id_by_backend_id`);
+    the user side still has no equivalent - no endpoint this integration
+    can reach exposes a GUID<->int user-id mapping, so
+    `_resolve_review_user` remains a lookup restricted to users already
+    seen in the activity stream (never a mint). Both gaps are unverified
+    against real row *values* until the scope above is granted - the
+    contract below is from the live OpenAPI document only.
 
     `rating` is `int32` with no declared bounds on this response, though
     the write side (`CreateProductReviewRequest`) constrains it to 1-5;

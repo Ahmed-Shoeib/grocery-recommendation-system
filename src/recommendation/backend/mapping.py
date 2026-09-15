@@ -6,14 +6,27 @@ handled deliberately here - mapped to exactly one canonical signal, or
 explicitly ignored - so an unrecognised or intentionally-dropped backend
 action can never silently become a wrong recommender signal.
 
-Observed backend vocabulary (probed live 2026-09-01):
+Observed backend vocabulary (probed live 2026-09-01, re-probed 2026-09-14):
 `ViewProduct`, `AddToCart`, `RemoveFromCart`, `AddedToFavorites`,
-`RemovedFromFavorites`, `PlaceOrder`.
+`RemovedFromFavorites`, `PlaceOrder`, `SearchProduct`.
 
 Decisions:
 - `ViewProduct`  -> CLICK        (product view = weakest-intent positive signal)
 - `AddToCart`    -> ADD_TO_CART
-- `PlaceOrder`   -> PURCHASE      (rows carry the resolved product slug)
+- `PlaceOrder`   -> PURCHASE      (rows carry the resolved product slug/id;
+                                     confirmed by the backend team to be one
+                                     row per order line/product, never one
+                                     row per order - see docs/data-mapping.md
+                                     section 19.10)
+- `SearchProduct` -> SEARCH       (added 2026-09-14 - the backend's search
+                                     feature resolves each search to a
+                                     specific product before recording the
+                                     row, i.e. it already carries a product
+                                     slug like every other signal here; a row
+                                     with no slug is dropped by
+                                     `loader.load_backend_events` exactly
+                                     like any other actionType, never
+                                     invented)
 - `AddedToFavorites`     -> IGNORE  (no canonical "favorite" signal; folding it
                                      into cart/click would misrepresent it -
                                      revisit if a dedicated signal is added)
@@ -22,9 +35,10 @@ Decisions:
 - `RemovedFromFavorites` -> IGNORE  (negative action)
 - anything else          -> IGNORE + one WARNING log per distinct unknown value
 
-The backend has no SEARCH- or CHATBOT-equivalent activity, so those
-canonical signals are simply never produced by this source (exactly as
-`ChatbotContextRecord` / `SearchRecord` already tolerate).
+The backend still has no CHATBOT-equivalent activity, so that canonical
+signal is simply never produced by this source (exactly as
+`ChatbotContextRecord` already tolerates) - see
+docs/data-mapping.md section 19.10.
 """
 
 from __future__ import annotations
@@ -38,6 +52,7 @@ _ACTION_TYPE_MAP: dict[str, ActionType | str] = {
     "viewproduct": ActionType.CLICK,
     "addtocart": ActionType.ADD_TO_CART,
     "placeorder": ActionType.PURCHASE,
+    "searchproduct": ActionType.SEARCH,
     "addedtofavorites": IGNORE,
     "removefromcart": IGNORE,
     "removedfromfavorites": IGNORE,

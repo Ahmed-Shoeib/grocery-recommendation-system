@@ -7,20 +7,32 @@ straight to the existing `InMemoryProductCatalogAdapter` /
 `InMemoryUserAdapter` / `InMemoryReviewAdapter` / `UserEventsAdapter`
 without a single new adapter class.
 
-All slug/GUID -> int translation goes through `ExternalIdentityResolver`.
-Catalog objects (products, categories) are *assigned* ids; cross
-references inside the activity stream are *looked up* only - an activity
-that names a product slug absent from the catalog is dropped (counted +
-logged), never allowed to mint a phantom product id or attach to the
-wrong one (docs/data-mapping.md section 19, and the eligibility/data
-validation contract in section 5).
+All product-id/slug/GUID -> int translation goes through
+`ExternalIdentityResolver`. Catalog objects (products, categories) are
+*assigned* ids; cross references inside the activity/review streams are
+*looked up* only - a row that names a product absent from the catalog is
+dropped (counted + logged), never allowed to mint a phantom product id or
+attach to the wrong one (docs/data-mapping.md section 19, and the
+eligibility/data validation contract in section 5).
 
-Field-availability vs the ERD-backed paths (verified against the live API
-2026-09-01): the backend product projection has NO brand, sale price,
-discount, `isActive` flag, ingredients, parent-category link, or tag list,
-and NO numeric ids anywhere. The canonical `Raw*` models keep those fields
-optional / defaulted, so the mapping below is lossy-but-valid rather than
-a schema change. See each `# backend gap:` note.
+Product identity key (docs/data-mapping.md 19.5): the resolver key for a
+product is its stable backend `Product.Id` (`dtos.ApiProduct.product_id`)
+when the source row carries one, else its slug - decided per product, per
+load. As of the 2026-09-14 live probe `/api/products` and
+`/api/user-activities` still never populate `product_id` (it exists only
+on the new Bearer-gated `AiProductResponse`/`AiUserActivityResponse`
+schemas this integration cannot reach with its current service-client
+scope), so every product/activity/review still resolves by slug today;
+the moment either endpoint's response starts carrying it, resolution
+switches to it with no further code change - see the per-field notes
+below and in `dtos.py`.
+
+Field-availability vs the ERD-backed paths (verified against the live API,
+most recently 2026-09-14): the backend product projection has NO brand,
+sale price, discount, `isActive` flag, ingredients, or parent-category
+link. The canonical `Raw*` models keep those fields optional / defaulted,
+so the mapping below is lossy-but-valid rather than a schema change. See
+each `# backend gap:` note.
 """
 
 from __future__ import annotations
@@ -74,12 +86,16 @@ class BackendCatalog:
         self.category_id_by_slug = category_id_by_slug
         self.category_id_by_name = category_id_by_name
         self.product_slugs = {p.slug for p in products}
-        # Backend int32 product id -> internal product id. Empty for now:
-        # `/api/products` exposes no numeric id, so nothing can populate it.
-        # `_resolve_review_product` reads it, which is what makes
-        # `/api/reviews` (keyed by that int id) resolvable the moment the
-        # backend's in-progress product-id work lands - see 19.5/19.6.
+        # Backend int32 Product.Id -> internal product id, populated by
+        # `load_backend_catalog` for every product whose source row carried
+        # `product_id` (today: none - `/api/products` doesn't expose it, see
+        # `dtos.ApiProduct`). `_resolve_review_product` reads this, so
+        # `/api/reviews` (keyed by that same int id) starts resolving the
+        # moment any consumed product source populates it - see 19.5/19.6.
         self.product_id_by_backend_id = dict(product_id_by_backend_id or {})
+        # Validation set mirroring `product_slugs`, for activity/review rows
+        # that reference a product by backend id rather than by slug.
+        self.product_ids = set(self.product_id_by_backend_id)
 
 
 def load_backend_catalog(client: BackendApiClient, resolver: ExternalIdentityResolver) -> BackendCatalog:
@@ -96,6 +112,7 @@ def load_backend_catalog(client: BackendApiClient, resolver: ExternalIdentityRes
 
     api_products = client.list_products()
     raw_products: list[RawProduct] = []
+    product_id_by_backend_id: dict[int, int] = {}
     clamped_price = clamped_stock = 0
     for p in api_products:
         price = p.price
@@ -105,9 +122,19 @@ def load_backend_catalog(client: BackendApiClient, resolver: ExternalIdentityRes
         stock = p.stock_quantity if p.stock_quantity and p.stock_quantity > 0 else 0
         if p.stock_quantity is not None and p.stock_quantity < 0:
             clamped_stock += 1
+        # Identity key: prefer the stable backend ProductId the moment a
+        # product source provides one, falling back to slug - see
+        # `dtos.ApiProduct.product_id` and docs/data-mapping.md 19.5. A
+        # product's key is decided once per load and is stable across
+        # reloads as long as the source keeps supplying (or keeps omitting)
+        # `product_id`; slug remains the resolver key for every product
+        # today because `/api/products` never populates it.
+        internal_id = resolver.resolve_product(str(p.product_id) if p.product_id is not None else p.slug)
+        if p.product_id is not None:
+            product_id_by_backend_id[p.product_id] = internal_id
         raw_products.append(
             RawProduct(
-                id=resolver.resolve_product(p.slug),
+                id=internal_id,
                 # backend gap: category_slug may be a placeholder ("string")
                 # not present in /api/categories -> category_id 0, which
                 # InMemoryProductCatalogAdapter treats as "no category".
@@ -146,7 +173,7 @@ def load_backend_catalog(client: BackendApiClient, resolver: ExternalIdentityRes
     # unconsumed pending the real-backend retraining decision - see
     # docs/data-mapping.md section 19.12, which also records the
     # dev-vs-production discrepancy for the backend team to reconcile.
-    return BackendCatalog(raw_categories, raw_products, [], [], cat_id_by_slug, cat_id_by_name)
+    return BackendCatalog(raw_categories, raw_products, [], [], cat_id_by_slug, cat_id_by_name, product_id_by_backend_id)
 
 
 def load_backend_events(
@@ -157,16 +184,24 @@ def load_backend_events(
     Dropped (counted + logged, never silently mis-signalled):
     - rows whose `actionType` maps to no canonical signal (favorites,
       cart/favorite removals -> known-ignored; anything else -> unknown);
-    - rows with a null/blank product slug (the backend records some
-      actions without resolving a product);
-    - rows whose product slug is not in the current catalog (deleted /
-      unknown product - matches the eligibility contract: an unknown
-      external id must never resolve to *a* product).
+    - rows with neither a product id nor a product slug (the backend
+      records some actions without resolving a product);
+    - rows whose product reference (id or slug) is not in the current
+      catalog (deleted / unknown product - matches the eligibility
+      contract: an unknown external id must never resolve to *a* product).
+
+    Product resolution prefers `row.product_id` (the stable backend
+    `Product.Id`, see `dtos.ApiActivity.product_id`) when the row carries
+    one, falling back to `row.slug` otherwise - mirroring exactly how
+    `load_backend_catalog` chose each product's resolver key, so a row
+    always resolves through whichever key its own source actually
+    populated. Today `/api/user-activities` never sets `product_id`, so
+    every row still resolves by slug.
     """
     interactions: list[UserInteraction] = []
     guid_by_internal: dict[int, str] = {}
     dropped_action = Counter()
-    dropped_no_slug = 0
+    dropped_no_product_ref = 0
     dropped_unknown_product = 0
     unknown_action_values: set[str] = set()
 
@@ -177,12 +212,20 @@ def load_backend_events(
             if not is_known(row.action_type):
                 unknown_action_values.add(row.action_type)
             continue
-        if not row.slug:
-            dropped_no_slug += 1
-            continue
-        product_id = resolver.peek_product(row.slug)
-        if product_id is None or row.slug not in catalog.product_slugs:
-            dropped_unknown_product += 1
+
+        product_id = None
+        if row.product_id is not None:
+            if row.product_id in catalog.product_ids:
+                product_id = resolver.peek_product(str(row.product_id))
+        elif row.slug:
+            if row.slug in catalog.product_slugs:
+                product_id = resolver.peek_product(row.slug)
+
+        if product_id is None:
+            if row.product_id is None and not row.slug:
+                dropped_no_product_ref += 1
+            else:
+                dropped_unknown_product += 1
             continue
         user_id = resolver.resolve_user(row.user_id)
         guid_by_internal.setdefault(user_id, row.user_id)
@@ -202,10 +245,10 @@ def load_backend_events(
         logger.warning("backend load: unknown activity actionType value(s) ignored: %s", sorted(unknown_action_values))
     if dropped_action:
         logger.info("backend load: %d activity row(s) ignored by action-type policy: %s", sum(dropped_action.values()), dict(dropped_action))
-    if dropped_no_slug:
-        logger.info("backend load: %d activity row(s) dropped (no product slug)", dropped_no_slug)
+    if dropped_no_product_ref:
+        logger.info("backend load: %d activity row(s) dropped (no product id or slug)", dropped_no_product_ref)
     if dropped_unknown_product:
-        logger.info("backend load: %d activity row(s) dropped (product slug not in catalog)", dropped_unknown_product)
+        logger.info("backend load: %d activity row(s) dropped (product id/slug not in catalog)", dropped_unknown_product)
     logger.info("backend load: %d canonical interactions from %d activity rows", len(interactions), len(activities))
     return interactions, guid_by_internal
 
