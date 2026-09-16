@@ -46,9 +46,9 @@ def run_feature_pipeline(
     """`reference_time` is forwarded to every `build_user_features` call as
     the recency reference point (see that function's docstring) - `None`
     (default) leaves recency inactive (neutral weights), matching every
-    existing caller of this function (`scripts/build_features.py`,
-    `train_two_tower.py`/`train_ranker.py`/`run_pipeline.py` via their own
-    feature-building, the dashboard's batch load). Pass an explicit
+    existing caller of this function (`scripts/train_two_tower.py`/
+    `train_ranker.py` via their own feature-building, the dashboard's
+    batch load). Pass an explicit
     `datetime` (e.g. `datetime.now()`) only from a call site that actually
     wants recency-aware features. Offline temporal evaluation does NOT go
     through this function (it calls `build_user_features` directly per

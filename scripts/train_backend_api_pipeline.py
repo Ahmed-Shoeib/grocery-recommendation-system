@@ -21,10 +21,11 @@ labeled `training_data_source="sqlite"` / `serving_data_source="backend_api"`
 `backend_api` inference, never described as "trained on real backend user
 behavior."
 
-Mirrors `scripts/train_sqlite_pipeline.py` section-for-section (same
-temporal future-purchase protocol, same recency+price feature set, same
-hyperparameters/optimizer/architecture - the goal is to isolate the effect
-of the production-safe contract change alone, not to also change training
+Same temporal future-purchase protocol, recency+price feature set, and
+hyperparameters/optimizer/architecture as the project's original SQLite
+training pipeline (now superseded by this script, which is the current,
+sole training entrypoint) - the goal was to isolate the effect of each
+production-safe contract change alone, not to also change training
 practice). Deltas from that script, all justified in
 docs/production-feature-parity-audit.md:
 

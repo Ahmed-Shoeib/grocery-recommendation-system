@@ -292,7 +292,8 @@ def split_targets_by_eligibility(
     surface, regardless of model quality. Reporting these separately
     (rather than silently letting them count as ordinary misses) is what
     section 18 of the driving spec calls a fair policy - see this
-    function's caller in `scripts/sqlite_temporal_dry_run.py`.
+    function's callers in `scripts/train_backend_api_pipeline.py`
+    (Section 12/13, primary offline evaluation).
     """
     result = apply_eligibility(list(target_ids), product_features, rules)
     return TargetEligibilityResult(

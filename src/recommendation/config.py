@@ -362,9 +362,9 @@ class RetrievalConfig(BaseModel):
     # partitioning missed the query's own point's leaf often enough to
     # fail self-match and drop Recall@10 to ~0.88; 0.3 recovers self-match
     # 200/200 and Recall@10=0.956 / Recall@20=0.919 over 200 sampled
-    # queries (measured with scann_min_points_per_leaf=20 below) - see
-    # scripts/evaluate_ann_recall.py to re-measure after any change to
-    # this, scann_leaves_multiplier, or scann_min_points_per_leaf.
+    # queries (measured with scann_min_points_per_leaf=20 below) -
+    # re-measure with a brute-force-vs-ANN recall comparison after any
+    # change to this, scann_leaves_multiplier, or scann_min_points_per_leaf.
     scann_leaves_to_search_fraction: float = 0.3
     scann_ah_dims_per_block: int = 2  # asymmetric-hashing quantization block size (an embedding-dim property, not catalog-size-dependent)
     scann_aq_threshold: float = 0.2  # anisotropic quantization threshold, ScaNN's recommended default for inner-product search
