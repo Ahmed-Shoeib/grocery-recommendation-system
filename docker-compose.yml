@@ -77,7 +77,7 @@ services:
       # falling back to models/sqlite_baseline/ or any other path.
       RECS_DATA_SOURCE: backend_api
     ports:
-      - "8000:8000"
+      - "8001:8000"
     volumes:
       - ./models:/app/models:ro
       # Read-write (not :ro): the product-embedding cache
