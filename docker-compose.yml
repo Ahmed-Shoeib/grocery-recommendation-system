@@ -1,54 +1,89 @@
 # `models/` and `data/` are bind-mounted, never baked into an image -
 # train once (profile-gated, one-off), then bring up api/dashboard
-# against the resulting artifacts.
+# against the resulting artifacts. Neither directory is committed to git
+# (see .gitignore) - `models/backend_api/` in particular is generated
+# locally and, for a real deployment, transferred to the target host out
+# of band (e.g. `rsync`/`scp`), the same way it reaches this host's
+# `./models/backend_api/` in the first place.
 #
 # Usage:
-#   docker compose --profile train run --rm train-two-tower
-#   docker compose --profile train run --rm train-ranker
+#   docker compose --profile train run --rm train
 #   docker compose up api dashboard
+#
+# TWO DELIBERATELY DIFFERENT DATA SOURCES - do not merge them:
+#   - `train`: SQLite only (`data/sqlite/production_aligned_training.db`,
+#     explicit `--db`, never inherited from config) - the production-safe
+#     training pipeline never depends on live backend user-activity data.
+#   - `api`: the real backend REST API (`RECS_DATA_SOURCE=backend_api`),
+#     serving from `models/backend_api/` - resolved automatically by
+#     `api.service.resolve_models_root` from that same data_source, so no
+#     separate "artifact root" variable is needed.
+# `configs/docker.yaml`'s own file-level default stays `data_source:
+# "sqlite"` - it is shared by every stage built from the `base` image
+# (including `docker build --target test`), so a global `backend_api`
+# default here would make an ordinary test run or `train` invocation
+# silently depend on live backend credentials/network. Each service below
+# overrides only its own environment instead.
 #
 # Architecture: the dashboard IS a pure HTTP client of the api
 # service (see src/recommendation/ui/api_client.py / service_loader.py) -
 # it never loads a model artifact or touches the mounted models/ volume
-# itself. There is still no `depends_on` declared between the two
-# services below, so their listing order here is only a suggested
-# startup order, not an enforced one - start api before dashboard if you
-# want the dashboard usable immediately rather than showing connection
-# errors until api is ready.
+# itself, and has no data_source concept of its own. There is still no
+# `depends_on` declared between the two services below, so their listing
+# order here is only a suggested startup order, not an enforced one -
+# start api before dashboard if you want the dashboard usable immediately
+# rather than showing connection errors until api is ready.
 
 services:
-  train-two-tower:
+  train:
     build:
       context: .
       target: base
+    env_file:
+      - .env
+    environment:
+      # Documentation, not a functional requirement:
+      # scripts/train_backend_api_pipeline.py never consults
+      # paths.data_source for its own data loading (it always reads
+      # SQLite directly, via --db below or paths.data_sqlite) - set
+      # explicitly anyway so the training container's intent is obvious
+      # without having to know that.
+      RECS_DATA_SOURCE: sqlite
     volumes:
       - ./models:/app/models
       - ./data:/app/data
-    command: ["python", "scripts/train_two_tower.py"]
-    profiles: ["train"]
-
-  train-ranker:
-    build:
-      context: .
-      target: base
-    volumes:
-      - ./models:/app/models
-      - ./data:/app/data
-    command: ["python", "scripts/train_ranker.py"]
+    # --db is explicit and always wins over configs/docker.yaml's own
+    # paths.data_sqlite default (data/sqlite/backend_shaped_synthetic.db,
+    # a test fixture only) - production_safe_v2 training must never
+    # silently train against the wrong catalog/category domain.
+    command: ["python", "scripts/train_backend_api_pipeline.py", "--db", "data/sqlite/production_aligned_training.db"]
     profiles: ["train"]
 
   api:
     build:
       context: .
       target: api
+    env_file:
+      - .env
+    environment:
+      # The one setting that switches this container from
+      # configs/docker.yaml's shared default (sqlite) to live backend
+      # serving. `api.service.resolve_models_root` derives the artifact
+      # directory (models/backend_api/, already covered by the existing
+      # ./models bind mount below - no separate mount needed) from this
+      # SAME value, so there is nothing else to configure here. If
+      # models/backend_api/ is missing or contract-incompatible, startup
+      # fails loudly (serving.startup_validation) rather than silently
+      # falling back to models/sqlite_baseline/ or any other path.
+      RECS_DATA_SOURCE: backend_api
     ports:
       - "8000:8000"
     volumes:
       - ./models:/app/models:ro
       # Read-write (not :ro): the product-embedding cache
-      # (data/processed/product_embeddings.npz, content-hash validated)
-      # is written here on first startup and reused on restart, avoiding
-      # a full Sentence Transformer re-encode of the catalog every time.
+      # (data/processed/product_embeddings_backend_api.npz, content-hash
+      # validated) and the activity/identity caches are written here on
+      # first startup and reused on restart.
       - ./data:/app/data
     restart: unless-stopped
 

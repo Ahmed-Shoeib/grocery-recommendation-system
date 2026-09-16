@@ -244,7 +244,7 @@ scripts/
   run_api.py / run_dashboard.py        Launch the FastAPI service / Streamlit dashboard
   generate_backend_shaped_sqlite.py    Generate the backend-shaped SQLite integration-test fixture
   generate_offline_report.py           Persist an offline evaluation report for GET /v1/metrics/offline
-  train_two_tower.py / train_ranker.py Original standalone training entrypoints (docker-compose train profile)
+  train_two_tower.py / train_ranker.py Original standalone training entrypoints - superseded, kept only for local reference
 
 tests/            pytest suite (production_safe_v2 contract, backend_api, activity sync/cache, identity,
                   cold start, ANN, ranking, reranking, eligibility, artifact validation, API/service)
@@ -264,6 +264,9 @@ python scripts/build_live_backend_ann.py
 
 # Regenerate the production-aligned SQLite training database (only if the domain needs to change)
 python scripts/generate_production_aligned_sqlite.py
+
+# Equivalent, in Docker (writes to the host's ./models/backend_api/ via bind mount)
+docker compose --profile train run --rm train
 ```
 
 ## Running API
@@ -272,6 +275,9 @@ python scripts/generate_production_aligned_sqlite.py
 python scripts/run_api.py
 # or, with the real backend as the serving source:
 RECS_DATA_SOURCE=backend_api RECS_BACKEND_API_BASE_URL=https://<host>:<port> python scripts/run_api.py
+
+# Equivalent, in Docker (already configured for backend_api serving - see Deployment)
+docker compose up api
 ```
 
 `GET /v1/ready` reports readiness (catalog/Two-Tower/ranker/VectorIndex
@@ -301,11 +307,49 @@ part of the current production system.
 
 ## Deployment
 
+**Training and serving use two deliberately different data sources - the
+Docker setup keeps them separate rather than one shared default:**
+
+- **Training** (`docker compose --profile train run --rm train`) always
+  uses SQLite (`data/sqlite/production_aligned_training.db`, passed
+  explicitly via `--db`) - it never depends on live backend user-activity
+  data, and never inherits a `backend_api` setting from anywhere else.
+- **Production serving** (`docker compose up api`) sets
+  `RECS_DATA_SOURCE=backend_api` on the `api` service only, which is also
+  what `api.service.resolve_models_root` uses to select
+  `models/backend_api/` as the artifact directory - automatically, with
+  no separate "artifact root" setting to keep in sync. If those artifacts
+  are missing or contract-incompatible, startup fails loudly rather than
+  silently falling back to `models/sqlite_baseline/` or any other path.
+
+`configs/docker.yaml`'s own file-level default stays `data_source:
+"sqlite"` deliberately - it is loaded by every stage built from the
+`base` image, including `docker build --target test`, so a global
+`backend_api` default there would make an ordinary test run silently
+depend on live backend credentials/network.
+
 Code ships via GitHub (this repository); trained model artifacts
 (`models/backend_api/`) ship separately, out of band from git, directly
-to the deployment target. **Never commit `.env`, service credentials, or
-any runtime cache** (`data/processed/*`) - all are gitignored; see
-`.env.example` for the required variable names only.
+to the deployment target - they are gitignored and never committed.
+Expected host layout, matching `docker-compose.yml`'s bind mounts:
+
+```
+repo/
+├── src/, scripts/, configs/, ...   (from git)
+├── models/
+│   └── backend_api/                (transferred separately - rsync/scp/etc.)
+│       ├── two_tower/
+│       ├── ranker/
+│       └── vector_index/
+├── data/                           (runtime caches - gitignored, created on first run)
+└── .env                            (gitignored - service credentials, never in git)
+```
+
+`docker-compose.yml`'s `api`/`train` services load `.env` via `env_file:`
+(the file path only - never a literal secret value in the compose file
+itself). **Never commit `.env`, service credentials, or any runtime
+cache** (`data/processed/*`) - all are gitignored; see `.env.example` for
+the required variable names only.
 
 ## Metrics
 
@@ -335,8 +379,10 @@ live_ann_build_report.json`).
 - Serving source: `data_source: "backend_api"`, real `ProductId`s,
   scalable bounded/complete activity loading
 - `models/sqlite_baseline/` and the original synthetic-only pipeline are
-  legacy, kept only where a current test or the docker-compose `train`
-  profile still exercises them - never the production serving path
+  legacy, kept only where a current test still exercises them - never
+  the production serving path, and no longer what `docker compose
+  --profile train` runs (that now runs the current production_safe_v2
+  entrypoint - see [Deployment](#deployment))
 - Current test suite: **818 passed, 3 skipped, 0 failed**
 
 Full architecture rationale, live-verification evidence, and the

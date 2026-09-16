@@ -26,8 +26,17 @@ paths:
   models_dir: "models"
   data_sqlite: "data/sqlite/backend_shaped_synthetic.db"
   backend_identity_registry: "data/processed/backend_identity_registry.json"
-  # "backend_api" (real REST API, docs/data-mapping.md section 19) is
-  # opt-in and needs models/backend_api/ artifacts that don't exist yet.
+  # This file's own default stays "sqlite" deliberately - it is shared by
+  # EVERY stage built from the `base` image (api, dashboard, train, and
+  # `docker build --target test`), so a "backend_api" default here would
+  # make an ordinary test run silently depend on live backend
+  # credentials/network. Production serving overrides this to
+  # "backend_api" per-service instead (docker-compose.yml's `api`
+  # service `environment:` block) - see that file's header comment for
+  # the full data_source/artifact-root strategy. `models/backend_api/`
+  # (production_safe_v2, 22-feature ranker, real-catalog ANN) is what
+  # that override resolves to; it is a locally-generated, gitignored
+  # artifact set, not baked into this file or this image.
   data_source: "sqlite"
 
 # Freshness fix: how often the LIVE service re-reads User_events (+
