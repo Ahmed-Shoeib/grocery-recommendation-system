@@ -76,10 +76,10 @@ class PathsConfig(BaseModel):
     # via `adapters.backend_factory.build_backend_api_adapters`, artifacts
     # from `{models_dir}/backend_api/` (do not exist until a retrain
     # against the real catalog - startup validation rejects a missing/
-    # mismatched set loudly, by design). Training scripts
-    # (scripts/train_two_tower.py, train_ranker.py, train_sqlite_pipeline.py)
-    # are unaffected by this flag - they take their adapter bundle as an
-    # explicit argument, never read this field.
+    # mismatched set loudly, by design). The current training entrypoint
+    # (scripts/train_backend_api_pipeline.py) is unaffected by this flag -
+    # it takes its SQLite training source as an explicit `--db` argument,
+    # never reads this field.
     data_source: Literal["synthetic", "sqlite", "backend_api"] = "sqlite"
 
 

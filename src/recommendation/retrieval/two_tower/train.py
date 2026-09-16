@@ -1,7 +1,9 @@
 """End-to-end Two-Tower training orchestrator.
 
 `train_two_tower(bundle, feature_result, config)` is the single entrypoint
-used by both `scripts/train_two_tower.py` and tests: builds the leave-one-
+for the non-temporal leave-one-out training path, exercised by
+`tests/test_two_tower_train_pipeline.py`/`test_ranking_train_pipeline.py`/
+`test_pipeline_evaluation.py`: builds the leave-one-
 out split, fits the feature encoder, constructs leakage-safe training
 examples and eval cases, trains the model with early stopping on
 validation loss, evaluates Recall@K/HitRate@K on val and test, and

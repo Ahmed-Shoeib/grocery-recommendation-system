@@ -34,8 +34,8 @@ class ArtifactValidationError(RuntimeError):
 def require_artifact_dir(path: Path, name: str) -> None:
     if not path.is_dir():
         raise ArtifactValidationError(
-            f"{name} artifacts not found at {path}. Run the corresponding training script "
-            "(scripts/train_two_tower.py or scripts/train_ranker.py) first, or - in a "
+            f"{name} artifacts not found at {path}. Run the current production training "
+            "entrypoint (scripts/train_backend_api_pipeline.py) first, or - in a "
             "container - mount a volume containing pre-trained artifacts at this path "
             "(models/ is intentionally not baked into the image or git)."
         )
@@ -61,8 +61,8 @@ def validate_two_tower_artifacts(artifacts: TwoTowerArtifacts, config: AppConfig
             f"{CURRENT_CONTRACT_VERSION!r} (production-safe contract redesign - "
             "docs/production-feature-parity-audit.md: no brand_id/brand_affinity/"
             "age_group_id inputs any more). These artifacts predate that redesign and "
-            "are now legacy-only. Retrain (scripts/train_two_tower.py) against the "
-            "current code before serving."
+            "are now legacy-only. Retrain (scripts/train_backend_api_pipeline.py) against "
+            "the current code before serving."
         )
     if not artifacts.item_ids:
         raise ArtifactValidationError("Two-Tower artifacts contain an empty catalog (0 items) - nothing to retrieve against.")
@@ -78,7 +78,7 @@ def validate_two_tower_artifacts(artifacts: TwoTowerArtifacts, config: AppConfig
         raise ArtifactValidationError(
             f"Two-Tower item embeddings have dimension {actual_dim}, but config.two_tower.output_dim="
             f"{expected_dim}. These artifacts were likely trained against a different config. "
-            "Retrain (scripts/train_two_tower.py) or fix configs/*.yaml."
+            "Retrain (scripts/train_backend_api_pipeline.py) or fix configs/*.yaml."
         )
     if artifacts.encoder.embedding_dim != config.embedding.embedding_dim:
         raise ArtifactValidationError(
@@ -93,14 +93,14 @@ def validate_ranker_artifacts(artifacts: RankerArtifacts) -> None:
             "Ranker artifacts were trained against a different feature schema than the running "
             f"code expects.\n  saved feature_names:    {artifacts.feature_names}\n"
             f"  expected feature_names: {RANKING_FEATURE_NAMES}\n"
-            "Retrain the ranker (scripts/train_ranker.py) after any recommendation.ranking.features change."
+            "Retrain (scripts/train_backend_api_pipeline.py) after any recommendation.ranking.features change."
         )
     expected_input_dim = len(RANKING_FEATURE_NAMES)
     actual_input_dim = artifacts.model.input_shape[-1]
     if actual_input_dim != expected_input_dim:
         raise ArtifactValidationError(
             f"Ranker model expects {actual_input_dim} input features but RANKING_FEATURE_NAMES "
-            f"currently has {expected_input_dim}. Retrain the ranker (scripts/train_ranker.py)."
+            f"currently has {expected_input_dim}. Retrain (scripts/train_backend_api_pipeline.py)."
         )
 
 

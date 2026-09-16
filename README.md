@@ -244,7 +244,6 @@ scripts/
   run_api.py / run_dashboard.py        Launch the FastAPI service / Streamlit dashboard
   generate_backend_shaped_sqlite.py    Generate the backend-shaped SQLite integration-test fixture
   generate_offline_report.py           Persist an offline evaluation report for GET /v1/metrics/offline
-  train_two_tower.py / train_ranker.py Original standalone training entrypoints - superseded, kept only for local reference
 
 tests/            pytest suite (production_safe_v2 contract, backend_api, activity sync/cache, identity,
                   cold start, ANN, ranking, reranking, eligibility, artifact validation, API/service)

@@ -126,7 +126,7 @@ class TwoTowerModel(tf.keras.Model):
     for a batch of aligned (user, positive_item) pairs; it is NOT how
     inference against the full catalog happens - that's plain
     `item_tower(...)` / `user_tower(...)` calls (see serialization.py and
-    scripts/train_two_tower.py's evaluation step).
+    scripts/train_backend_api_pipeline.py's evaluation step).
     """
 
     def __init__(self, user_tower: tf.keras.Model, item_tower: tf.keras.Model, temperature: float, **kwargs) -> None:

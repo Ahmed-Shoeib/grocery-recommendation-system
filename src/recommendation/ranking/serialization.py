@@ -1,6 +1,7 @@
 """Ranker artifact serialization, mirroring `retrieval.two_tower
-.serialization`'s conventions. Written under `models/ranker/` (gitignored
-- regenerable from `scripts/train_ranker.py`, not source):
+.serialization`'s conventions. Written under `models/<target>/ranker/`
+(gitignored - regenerable from `scripts/train_backend_api_pipeline.py`,
+not source):
 
   ranker.keras       - Keras 3 native format
   feature_names.json - RANKING_FEATURE_NAMES snapshot (column order the

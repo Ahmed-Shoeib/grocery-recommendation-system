@@ -1,8 +1,8 @@
 """Run the recommendation API with uvicorn.
 
 Loads the already-trained Two-Tower and ranker artifacts once at startup
-(does not retrain either) - run scripts/train_two_tower.py and
-scripts/train_ranker.py first if those don't exist yet.
+(does not retrain either) - run scripts/train_backend_api_pipeline.py
+first if those don't exist yet.
 
 Usage:
     python scripts/run_api.py

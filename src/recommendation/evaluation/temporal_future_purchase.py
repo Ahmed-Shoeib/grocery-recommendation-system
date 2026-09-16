@@ -7,9 +7,13 @@ the held-out purchase(s) happened.
 
 This is a SEPARATE, ADDITIONAL protocol alongside the existing V1 leave-
 one-out-by-product-id protocol (`retrieval.two_tower.splitting`), not a
-replacement for it - that protocol is what the currently-trained Two-Tower/
-ranker artifacts were fit against and remains the one used by
-`scripts/train_two_tower.py`/`train_ranker.py`/`run_pipeline.py`. This
+replacement for it - that protocol is what the legacy
+`models/sqlite_baseline/` artifacts were fit against, and remains
+exercised by `tests/test_two_tower_train_pipeline.py`/
+`test_ranking_train_pipeline.py`/`test_pipeline_evaluation.py`. The
+current production training entrypoint
+(`scripts/train_backend_api_pipeline.py`) uses the temporal protocol
+this module implements instead. This
 module targets `data/sqlite/backend_shaped_synthetic.db` (via the SQLite
 adapters, `adapters.sqlite_factory`), which has real per-event
 timestamps the original protocol was explicitly designed to work without
