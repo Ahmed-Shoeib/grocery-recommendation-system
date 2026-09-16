@@ -197,6 +197,20 @@ class BackendApiClient:
 
     # --- pagination -------------------------------------------------
 
+    def _paginated_rows(self, data: Any, path: str) -> list[dict]:
+        """Validates and returns the `data: [...]` array from a paginated
+        envelope (`{data: [...], pagination: {...}}`) - shared by every
+        paginated endpoint here regardless of pagination STYLE (cursor:
+        `_fetch_cursor_page`; page-number: `list_users`), since the
+        envelope shape itself is identical either way.
+        """
+        if not isinstance(data, dict) or "data" not in data:
+            raise BackendContractError(f"GET {path}: paginated response missing 'data' list")
+        rows = data.get("data") or []
+        if not isinstance(rows, list):
+            raise BackendContractError(f"GET {path}: 'data' is not a list")
+        return rows
+
     def _fetch_cursor_page(
         self,
         path: str,
@@ -219,11 +233,7 @@ class BackendApiClient:
         if cursor is not None:
             params[cursor_param] = cursor
         data = self._request(path, params, auth=auth)
-        if not isinstance(data, dict) or "data" not in data:
-            raise BackendContractError(f"GET {path}: paginated response missing 'data' list")
-        rows = data.get("data") or []
-        if not isinstance(rows, list):
-            raise BackendContractError(f"GET {path}: 'data' is not a list")
+        rows = self._paginated_rows(data, path)
         pagination = ApiPagination.model_validate(data.get("pagination") or {})
         return rows, pagination
 
@@ -399,11 +409,7 @@ class BackendApiClient:
         page = 1
         for _ in range(_USER_LIST_MAX_PAGES):
             data = self._request("/api/users", {"PageNumber": page, "PageSize": page_size}, auth=True)
-            if not isinstance(data, dict) or "data" not in data:
-                raise BackendContractError("GET /api/users: paginated response missing 'data' list")
-            rows = data.get("data") or []
-            if not isinstance(rows, list):
-                raise BackendContractError("GET /api/users: 'data' is not a list")
+            rows = self._paginated_rows(data, "/api/users")
             if not rows:
                 break
             for row in rows:

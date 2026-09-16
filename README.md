@@ -41,19 +41,29 @@ of these fields. `UserProfile.preferred_category` is now
 `FavoriteCategory[]` join shape instead of an arbitrary single value.
 
 **This is a code + data-contract change only - nothing has been retrained.**
-The ranker's feature count is now **24** (down from 29); the Two-Tower
-item/user numeric dims are **7/8** (down from 9/9); neither tower has a
-`brand_id`/`age_group_id`/`brand_affinity` input any more. The currently
-committed `models/sqlite_baseline/` artifacts were trained against the
-OLD (29-feature, brand/age-group-aware) contract and are now **explicitly
+The ranker's feature count is now **22** (down from 29, via an
+intermediate 24-feature step - see `docs/data-mapping.md` §19.15); the
+Two-Tower item/user numeric dims are **5/8** (down from 9/9, via an
+intermediate 7/8 step); neither tower has a `brand_id`/`age_group_id`/
+`brand_affinity` input any more, and the item tower no longer takes
+`log_purchase_count`/`log_cart_add_count` either - the real backend can
+only supply a bounded recent-window approximation of those, which would
+be a genuine train-serve mismatch as a learned input (see
+`docs/production-feature-parity-audit.md` §20); product popularity is
+still available, but only as a `serving.fallback` heuristic, never a
+model input. The current feature-encoder contract version is
+`production_safe_v2` (`retrieval.two_tower.feature_encoding
+.CURRENT_CONTRACT_VERSION`). The currently committed
+`models/sqlite_baseline/` artifacts were trained against the OLD
+(29-feature, brand/age-group-aware) contract and are now **explicitly
 legacy-only** - `serving.startup_validation` rejects them loudly (a
 ranker `feature_names` mismatch, and a Two-Tower `contract_version`
 mismatch) rather than silently serving predictions built from a
-mismatched feature space. A retrain (`scripts/train_two_tower.py` /
-`scripts/train_ranker.py` against a production-safe-shaped SQLite
-dataset) is required before live serving works again. See
-`docs/production-feature-parity-audit.md` for the full field-by-field
-rationale and the exact pre-retrain checklist.
+mismatched feature space. `models/backend_api/` holds the current,
+validated `production_safe_v2` artifacts, trained against
+`data/sqlite/production_aligned_training.db` and served live via
+`data_source: "backend_api"`. See `docs/production-feature-parity-audit.md`
+and `docs/data-mapping.md` §19 for the full field-by-field rationale.
 
 ## Current status
 
@@ -86,16 +96,21 @@ rationale and the exact pre-retrain checklist.
   cutoff, held-out future PURCHASE events as ground truth - a separate
   protocol from the original non-temporal leave-one-out one still used
   to train/evaluate the legacy synthetic-only artifacts.
-- **24-feature ranker** (down from 29 - see the production-safe contract
-  redesign above) - 7 item-numeric + 8 user-numeric encoder dims feeding
-  the Two-Tower model (down from 9/9), 24 explicit features feeding the
-  ranker. The original 29-feature/9-9-dim shape included price-aware
-  features validated by a controlled ablation experiment
-  (`docs/data-mapping.md` §17) against a 23-feature/no-price baseline;
-  that price-aware set is still fully present here - only the 5
-  brand/isActive/age-group/discount-dependent features were removed, not
-  the price ones. `include_price_features` remains a reported metadata
-  field (always `True`), not a branching flag.
+- **22-feature ranker** (down from 29, via an intermediate 24-feature
+  step - see the production-safe contract redesign above and
+  `docs/data-mapping.md` §19.15) - 5 item-numeric + 8 user-numeric
+  encoder dims feeding the Two-Tower model (down from 9/9, via an
+  intermediate 7/8 step), 22 explicit features feeding the ranker. The
+  original 29-feature/9-9-dim shape included price-aware features
+  validated by a controlled ablation experiment (`docs/data-mapping.md`
+  §17) against a 23-feature/no-price baseline; that price-aware set is
+  still fully present here - the brand/isActive/age-group/discount
+  features were removed for having no real backend equivalent, and
+  product-level lifetime purchase/cart counts were separately removed
+  because live serving cannot reproduce them exactly and efficiently
+  (`docs/production-feature-parity-audit.md` §20) - never the price
+  ones. `include_price_features` remains a reported metadata field
+  (always `True`), not a branching flag.
 - **Pre-retrieval eligibility + final safety check**: `stockQuantity`
   gates candidate generation itself (production-safe contract redesign:
   `isActive` no longer gates eligibility at all - the real SQL Server
@@ -173,7 +188,7 @@ SQLite backend-shaped synthetic DB (data/sqlite/backend_shaped_synthetic.db)
                 (STRONG: personalized only · SPARSE: blend w/ category+global
                  popularity · NO_HISTORY: waterfall fallback, no personalized part)
                                              |
-                                    Neural Ranker (24-feature MLP)
+                                    Neural Ranker (22-feature MLP)
                                              |
                                    Diversity re-ranking (dedup + category/brand,
                                     continuous score penalty, not a hard quota)
@@ -346,7 +361,7 @@ docker-compose.yml           train (profile-gated) / api / dashboard orchestrati
 | Feature construction | `features/` (`user_features.py`, `product_features.py`, `price.py`, `recency.py`, `pipeline.py`) |
 | Two-Tower model | `retrieval/two_tower/model.py` |
 | ANN retrieval | `retrieval/index/` (`faiss_index.py`, `scann_index.py`, `factory.py`) |
-| Neural ranker (24-feature contract) | `ranking/features.py` + `ranking/model.py` |
+| Neural ranker (22-feature `production_safe_v2` contract) | `ranking/features.py` + `ranking/model.py` |
 | Diversity re-ranking | `reranking/diversity.py` |
 | `RecommendationService` (loads artifacts, orchestrates a request) | `api/service.py` |
 | Request-time pipeline (cold-start, eligibility, fallback, Top-N) | `serving/` (`pipeline.py`, `cold_start.py`, `eligibility.py`, `fallback.py`) |

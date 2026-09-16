@@ -136,7 +136,6 @@ def main() -> None:
     print("=" * 78)
     print("Recommending for this user end to end (real Two-Tower + ranker + ANN)")
     print("=" * 78)
-    from recommendation.adapters.product_adapter import InMemoryProductCatalogAdapter
     from recommendation.features.price import build_price_catalog_context
     from recommendation.features.product_features import build_product_features
     from recommendation.features.user_features import build_user_features

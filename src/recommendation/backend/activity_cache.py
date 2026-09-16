@@ -50,6 +50,31 @@ class ActivityCacheState:
         return {tuple(k) for k in self.boundary_keys}
 
 
+def atomic_write_json(path: Path, payload: dict) -> None:
+    """Writes `payload` to `path` via a temp file in the same directory +
+    `os.replace`, so a crash mid-write can never leave a half-written,
+    corrupt file behind - the previous file (or its absence) is the only
+    state ever observable to a reader. Shared by every JSON-backed cache
+    in this package (this module and `backend.user_activity_cache`) -
+    the write mechanic is identical across them even though the payload
+    shape and failure-recovery semantics on the READ side differ (a
+    single `ActivityCacheState` here vs. a per-guid map there - see each
+    module's docstring for why those stay separate types).
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(payload, f)
+        os.replace(tmp_name, path)
+    except BaseException:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
+
+
 def load_activity_cache(path: Path) -> ActivityCacheState | None:
     """Returns `None` on ANY problem - missing file, unreadable, corrupt
     JSON, unknown format version, or an unexpected shape - never raises.
@@ -87,12 +112,7 @@ def load_activity_cache(path: Path) -> ActivityCacheState | None:
 
 
 def save_activity_cache(path: Path, state: ActivityCacheState) -> None:
-    """Atomic write (temp file in the same directory + `os.replace`), so a
-    crash mid-write can never leave a half-written, corrupt cache file
-    behind - the previous file (or its absence) is the only state ever
-    observable to a reader.
-    """
-    path.parent.mkdir(parents=True, exist_ok=True)
+    """Atomic write - see `atomic_write_json`."""
     payload = {
         "version": CACHE_FORMAT_VERSION,
         "fetched_at": state.fetched_at,
@@ -100,17 +120,7 @@ def save_activity_cache(path: Path, state: ActivityCacheState) -> None:
         "boundary_keys": state.boundary_keys,
         "rows": state.rows,
     }
-    fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(payload, f)
-        os.replace(tmp_name, path)
-    except BaseException:
-        try:
-            os.unlink(tmp_name)
-        except OSError:
-            pass
-        raise
+    atomic_write_json(path, payload)
 
 
 def new_cache_state(rows: list[dict], high_water_timestamp: str | None, boundary_keys: set[tuple]) -> ActivityCacheState:

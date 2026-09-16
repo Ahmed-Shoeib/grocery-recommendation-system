@@ -31,12 +31,10 @@ never tokens/secrets.
 from __future__ import annotations
 
 import json
-import os
-import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from recommendation.backend.activity_cache import ActivityCacheState
+from recommendation.backend.activity_cache import ActivityCacheState, atomic_write_json
 from recommendation.logging import get_logger
 
 logger = get_logger(__name__)
@@ -100,10 +98,7 @@ def load_user_activity_cache_store(path: Path) -> UserActivityCacheStore:
 
 
 def save_user_activity_cache_store(path: Path, store: UserActivityCacheStore) -> None:
-    """Atomic write (temp file + `os.replace`), same pattern as
-    `activity_cache.save_activity_cache`.
-    """
-    path.parent.mkdir(parents=True, exist_ok=True)
+    """Atomic write - see `activity_cache.atomic_write_json`."""
     payload = {
         "version": CACHE_FORMAT_VERSION,
         "users": {
@@ -117,14 +112,4 @@ def save_user_activity_cache_store(path: Path, store: UserActivityCacheStore) ->
             for guid, state in store.entries.items()
         },
     }
-    fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(payload, f)
-        os.replace(tmp_name, path)
-    except BaseException:
-        try:
-            os.unlink(tmp_name)
-        except OSError:
-            pass
-        raise
+    atomic_write_json(path, payload)
