@@ -72,7 +72,7 @@ def _user_features(**overrides) -> UserFeatures:
 
 def test_encoder_has_current_price_aware_dimensions():
     encoder = _encoder()
-    assert encoder.item_numeric_dim == 7
+    assert encoder.item_numeric_dim == 5
     assert encoder.user_numeric_dim == 8
 
 
@@ -80,7 +80,7 @@ def test_encode_item_has_price_tier_id_key():
     encoder = _encoder()
     result = encoder.encode_item(_product_features(), np.ones(8, dtype=np.float32))
     assert "price_tier_id" in result
-    assert result["numeric"].shape == (7,)
+    assert result["numeric"].shape == (5,)
 
 
 def test_encode_user_has_price_tier_id_key():
@@ -99,7 +99,7 @@ def test_encoder_serialization_round_trips_include_price_features_field():
     encoder = _encoder()
     restored = TwoTowerFeatureEncoder.from_dict(encoder.to_dict())
     assert restored.include_price_features is True
-    assert restored.item_numeric_dim == encoder.item_numeric_dim == 7
+    assert restored.item_numeric_dim == encoder.item_numeric_dim == 5
 
 
 def test_legacy_serialized_dict_without_flag_defaults_to_true():
@@ -132,10 +132,10 @@ def test_user_tower_has_price_tier_input():
     assert "price_tier_id" in {t.name.split(":")[0] for t in tower.inputs}
 
 
-# --- ranker feature vector (always 24 features, always price-aware) ---------
+# --- ranker feature vector (always 22 features, always price-aware) ---------
 
-def test_ranking_feature_names_has_24_entries():
-    assert len(RANKING_FEATURE_NAMES) == 24
+def test_ranking_feature_names_has_22_entries():
+    assert len(RANKING_FEATURE_NAMES) == 22
 
 
 def test_ranking_feature_names_includes_all_price_related_features():
@@ -150,6 +150,6 @@ def test_ranking_feature_names_excludes_discount_features():
     assert "item_is_discounted" not in RANKING_FEATURE_NAMES
 
 
-def test_build_ranking_feature_vector_has_24_dims():
+def test_build_ranking_feature_vector_has_22_dims():
     vec = build_ranking_feature_vector(_user_features(), _product_features(), None, 0.5, 0, 50, 100.0)
-    assert vec.shape == (24,)
+    assert vec.shape == (22,)

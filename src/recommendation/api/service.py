@@ -28,6 +28,7 @@ import numpy as np
 import tensorflow as tf
 
 from recommendation.api.errors import UnknownUserError
+from recommendation.adapters.backend_lazy_events_adapter import LazyBackendUserEventsAdapter
 from recommendation.adapters.base import AdapterBundle
 from recommendation.adapters.backend_factory import build_backend_api_adapters
 from recommendation.adapters.factory import build_synthetic_adapters
@@ -119,7 +120,28 @@ def _load_data_snapshot(config: AppConfig, encoder: SentenceTransformerEncoder) 
         bundle = build_synthetic_adapters(dataset, config.synthetic_data)
         feature_config = config
 
-    feature_result = run_feature_pipeline(bundle, feature_config, encoder=encoder)
+    # `run_feature_pipeline` eagerly builds an engagement profile for
+    # EVERY known user (only needed for the dashboard's user list - see
+    # `RecommendationService.engagement_profiles`). For `backend_api`,
+    # `bundle.purchases` is a `LazyBackendUserEventsAdapter`, whose
+    # per-user COMPLETE-history fetch (docs/data-mapping.md 19.14 - every
+    # user's first access, not just a zero-activity one, per the
+    # train-serve parity audit) makes one bounded backend call per user
+    # not yet known-complete - correct and cheap for a single requested
+    # user, but a real roster (547+ users live) would turn this bulk pass
+    # into one request PER SUCH USER, every startup/refresh cycle -
+    # exactly the per-user-request fan-out this fix exists to avoid.
+    # Disabled only around this bulk pass; the real per-request serving
+    # path (`RecommendationService.recommend`) always runs with it enabled.
+    events_adapter = bundle.purchases
+    toggle_lazy = isinstance(events_adapter, LazyBackendUserEventsAdapter)
+    if toggle_lazy:
+        events_adapter.lazy_enabled = False
+    try:
+        feature_result = run_feature_pipeline(bundle, feature_config, encoder=encoder)
+    finally:
+        if toggle_lazy:
+            events_adapter.lazy_enabled = True
     text_embeddings = build_user_text_embeddings(list(feature_result.engagement_profiles.values()), encoder)
     products = bundle.products.list_products()
     product_lookup = {p.id: p for p in products}

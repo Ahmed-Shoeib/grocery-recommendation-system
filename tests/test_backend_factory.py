@@ -28,7 +28,9 @@ _ACTS = [
 def _build(tmp_path, **client_kwargs):
     client = FakeBackendClient(products=_PRODS, categories=_CATS, activities=_ACTS, **client_kwargs)
     resolver = ExternalIdentityResolver(tmp_path / "reg.json")
-    bundle = build_backend_api_adapters(client=client, resolver=resolver)
+    bundle = build_backend_api_adapters(
+        client=client, resolver=resolver, activity_cache_path=tmp_path / "activity_cache.json", user_activity_cache_path=tmp_path / "user_activity_cache.json"
+    )
     return bundle, resolver
 
 
@@ -75,7 +77,9 @@ def test_engagement_profile_with_product_id_bearing_fixture_gets_all_five_signal
                   "createdAt": "2026-09-01T10:00:00"}],
     )
     resolver = ExternalIdentityResolver(tmp_path / "reg.json")
-    bundle = build_backend_api_adapters(client=client, resolver=resolver)
+    bundle = build_backend_api_adapters(
+        client=client, resolver=resolver, activity_cache_path=tmp_path / "activity_cache.json", user_activity_cache_path=tmp_path / "user_activity_cache.json"
+    )
 
     profile = build_engagement_profile(
         1, bundle.users, bundle.purchases, bundle.cart, bundle.clicks, bundle.search, bundle.chatbot, bundle.reviews

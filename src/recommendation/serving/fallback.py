@@ -2,6 +2,25 @@
 SPARSE_HISTORY (weighted blend) and NO_HISTORY (ordered waterfall) users
 (docs/data-mapping.md section 3).
 
+**MODEL FEATURE vs SERVING HEURISTIC (docs/data-mapping.md 19.15).**
+`global_popularity_ranking`/`category_popularity_ranking` are the ONLY
+consumers of `ProductFeatures.purchase_count`/`cart_add_count` left in
+the codebase - the Two-Tower item tower and the ranker were both changed
+to stop consuming them (`production_safe_v2`) because live `backend_api`
+serving can only supply a BOUNDED recent-window approximation of the
+real backend's activity table (no aggregate/delta endpoint exists to
+compute a true lifetime count efficiently), while training used the
+COMPLETE SQLite dataset - a genuine, undisclosable train-serve mismatch
+for a LEARNED input. A plain popularity RANKING used only as a fallback
+ordering has no such problem: it has no "training semantics" to be
+unfaithful to, so the exact same bounded-window numbers that would be
+wrong as a model input are perfectly fine here - a fallback list just
+needs to be "roughly the more popular items first," not numerically
+reproducible between training and serving. Do not reintroduce
+`purchase_count`/`cart_add_count` as a Two-Tower/ranker input without
+first re-solving that mismatch (see `retrieval.two_tower.feature_encoding`
+and `ranking.features` module docstrings).
+
 "Popularity" is all-time purchase/cart volume - this fallback path does
 not apply recency/decay, so it does not compute a genuine "trending"
 signal (docs/data-mapping.md section 6). `category_popularity_ranking`

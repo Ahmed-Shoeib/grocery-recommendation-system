@@ -50,6 +50,15 @@ class ProductFeatures:
     stock_quantity: int
 
     # All-time aggregates, no recency (see module docstring).
+    # `purchase_count`/`cart_add_count` are SERVING-HEURISTIC fields only
+    # as of `production_safe_v2` (docs/data-mapping.md 19.15) - consumed
+    # by `serving.fallback`'s popularity rankings, but deliberately NOT by
+    # the Two-Tower item tower or the ranker any more (live `backend_api`
+    # serving can only supply a bounded recent-window approximation of
+    # these, which would be a genuine train-serve mismatch as a learned
+    # input; a fallback ordering has no such requirement). See
+    # `retrieval.two_tower.feature_encoding`/`ranking.features` module
+    # docstrings.
     purchase_count: int
     distinct_purchasers: int
     cart_add_count: int

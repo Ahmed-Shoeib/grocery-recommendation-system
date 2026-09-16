@@ -39,7 +39,7 @@ Verification is never disabled in code.
 from __future__ import annotations
 
 import time
-from typing import Any
+from typing import Any, Iterator
 
 import requests
 
@@ -76,6 +76,8 @@ _RETRYABLE_STATUS = frozenset({429, 500, 502, 503, 504})
 # non-2xx status - this never silently hides a real, lasting failure.
 _MAX_PAGES = 10_000  # hard stop so a broken `hasNext` can never loop forever
 _CATALOG_MAX_LIMIT = 100  # backend rejects Limit > 100 on /api/categories with HTTP 400
+_USER_LIST_MAX_LIMIT = 100  # backend caps PageSize on /api/users at 100 (verified live 2026-09-15)
+_USER_LIST_MAX_PAGES = 1_000  # 547 live users / 100 per page = 6 pages; generous but still bounded
 
 
 class BackendApiClient:
@@ -195,6 +197,36 @@ class BackendApiClient:
 
     # --- pagination -------------------------------------------------
 
+    def _fetch_cursor_page(
+        self,
+        path: str,
+        params_base: dict[str, Any] | None,
+        cursor: str | None,
+        *,
+        cursor_param: str,
+        limit_param: str,
+        page_size: int,
+        auth: bool,
+    ) -> tuple[list[dict], ApiPagination]:
+        """One page of a cursor-paginated GET, envelope-validated. Shared by
+        `_iter_cursor` (run-to-completion-or-raise) and
+        `iter_activity_pages` (bounded-by-design, never raises on running
+        out of budget) so both pagination contracts stay backed by
+        identical request/response handling.
+        """
+        params: dict[str, Any] = dict(params_base or {})
+        params[limit_param] = page_size
+        if cursor is not None:
+            params[cursor_param] = cursor
+        data = self._request(path, params, auth=auth)
+        if not isinstance(data, dict) or "data" not in data:
+            raise BackendContractError(f"GET {path}: paginated response missing 'data' list")
+        rows = data.get("data") or []
+        if not isinstance(rows, list):
+            raise BackendContractError(f"GET {path}: 'data' is not a list")
+        pagination = ApiPagination.model_validate(data.get("pagination") or {})
+        return rows, pagination
+
     def _iter_cursor(
         self,
         path: str,
@@ -211,18 +243,11 @@ class BackendApiClient:
         items: list[dict] = []
         cursor: str | None = None
         for page in range(1, _MAX_PAGES + 1):
-            params: dict[str, Any] = dict(extra_params or {})
-            params[limit_param] = page_size
-            if cursor is not None:
-                params[cursor_param] = cursor
-            data = self._request(path, params, auth=auth)
-            if not isinstance(data, dict) or "data" not in data:
-                raise BackendContractError(f"GET {path}: paginated response missing 'data' list")
-            rows = data.get("data") or []
-            if not isinstance(rows, list):
-                raise BackendContractError(f"GET {path}: 'data' is not a list")
+            rows, pagination = self._fetch_cursor_page(
+                path, extra_params, cursor,
+                cursor_param=cursor_param, limit_param=limit_param, page_size=page_size, auth=auth,
+            )
             items.extend(rows)
-            pagination = ApiPagination.model_validate(data.get("pagination") or {})
             if not pagination.has_next:
                 return items
             if not pagination.next_cursor:
@@ -286,6 +311,111 @@ class BackendApiClient:
             "/api/ai/user-activities", cursor_param="cursor", limit_param="pageSize", auth=True
         )
         return [ApiActivity.model_validate(r) for r in rows]
+
+    def iter_activity_pages(
+        self, *, user_guid: str | None = None, max_pages: int = _MAX_PAGES
+    ) -> Iterator[list[ApiActivity]]:
+        """Yields `GET /api/ai/user-activities` pages (newest-first per live
+        observation, 2026-09-15) one page at a time, stopping after
+        `max_pages` WITHOUT raising `BackendPaginationError`.
+
+        Unlike `list_activities` (a run-to-completion-or-raise contract -
+        the correct behavior for a caller that genuinely wants the whole
+        set), this is a bounded-by-design primitive: the real
+        `UserActivities` table has grown past 1.5 million rows with no
+        server-side delta filter, so nothing in the normal serving path may
+        ever attempt a full traversal again (docs/data-mapping.md 19.13).
+        `backend.activity_sync` is the primary caller (bounded
+        bootstrap/delta window); `adapters.backend_lazy_events_adapter`
+        also uses this with `user_guid` set as a cold-start safety net -
+        confirmed live that `userId`-filtered pagination is scoped to that
+        user's own (much smaller) history, not the global table.
+
+        Yielding page-by-page (rather than returning one list) lets a
+        caller stop the instant it recognizes already-seen data, without
+        pre-committing to a page count.
+        """
+        page_size = self._config.page_size
+        cursor: str | None = None
+        base_params = {"userId": user_guid} if user_guid else None
+        for _ in range(max_pages):
+            rows, pagination = self._fetch_cursor_page(
+                "/api/ai/user-activities", base_params, cursor,
+                cursor_param="cursor", limit_param="pageSize", page_size=page_size, auth=True,
+            )
+            yield [ApiActivity.model_validate(r) for r in rows]
+            if not pagination.has_next or not pagination.next_cursor:
+                return
+            cursor = pagination.next_cursor
+
+    def fetch_activity_window(
+        self, *, user_guid: str | None = None, max_pages: int = _MAX_PAGES
+    ) -> tuple[list[ApiActivity], bool]:
+        """Like `iter_activity_pages`, but eager and completeness-aware:
+        returns `(rows, exhausted)` where `exhausted=True` means the feed
+        itself reported `hasNext=false` (genuine completion), not merely
+        that `max_pages` was reached. `iter_activity_pages` (a lazy
+        generator) cannot distinguish these two stopping reasons without
+        the caller inspecting pagination internals - this exists
+        specifically for `backend.activity_sync`'s bootstrap/per-user-
+        completeness callers, which must never silently treat "we hit our
+        page budget" as "this is the user's whole history"
+        (docs/data-mapping.md 19.14).
+        """
+        page_size = self._config.page_size
+        cursor: str | None = None
+        base_params = {"userId": user_guid} if user_guid else None
+        rows: list[ApiActivity] = []
+        for _ in range(max_pages):
+            page_rows, pagination = self._fetch_cursor_page(
+                "/api/ai/user-activities", base_params, cursor,
+                cursor_param="cursor", limit_param="pageSize", page_size=page_size, auth=True,
+            )
+            rows.extend(ApiActivity.model_validate(r) for r in page_rows)
+            if not pagination.has_next or not pagination.next_cursor:
+                return rows, True
+            cursor = pagination.next_cursor
+        return rows, False
+
+    def list_users(self) -> list[ApiUser]:
+        """`GET /api/users` (page-NUMBER pagination: `PageNumber`/`PageSize`,
+        unlike every other endpoint here) - the full user roster (547 users
+        live, 2026-09-15), independent of any recorded activity. Discovered
+        during the activity-scaling investigation: this is what lets
+        `adapters.backend_factory` know a user EXISTS (and their declared
+        favorite categories) without first needing one of their activity
+        rows to have been fetched - the fix for a real user being
+        misclassified as cold-start purely because their history fell
+        outside the bounded activity window (docs/data-mapping.md 19.13).
+
+        Bearer-gated; reuses the `ApiUser` DTO (`extra='ignore'` tolerates
+        the list projection's extra fields - phoneNumber/birthDate/role/
+        isActive/createdAt - none of which this integration consumes). A
+        single malformed row is skipped and logged rather than failing the
+        whole roster fetch.
+        """
+        page_size = min(self._config.page_size, _USER_LIST_MAX_LIMIT)
+        users: list[ApiUser] = []
+        page = 1
+        for _ in range(_USER_LIST_MAX_PAGES):
+            data = self._request("/api/users", {"PageNumber": page, "PageSize": page_size}, auth=True)
+            if not isinstance(data, dict) or "data" not in data:
+                raise BackendContractError("GET /api/users: paginated response missing 'data' list")
+            rows = data.get("data") or []
+            if not isinstance(rows, list):
+                raise BackendContractError("GET /api/users: 'data' is not a list")
+            if not rows:
+                break
+            for row in rows:
+                try:
+                    users.append(ApiUser.model_validate(row))
+                except Exception as exc:
+                    logger.warning("GET /api/users: skipping one malformed roster row: %s", exc)
+            pagination = ApiPagination.model_validate(data.get("pagination") or {})
+            if not pagination.has_next:
+                break
+            page += 1
+        return users
 
     def list_reviews(self) -> list[ApiReview]:
         """`GET /api/reviews` - Bearer-gated, and (unlike every other list

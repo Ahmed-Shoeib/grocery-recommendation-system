@@ -43,6 +43,25 @@ persisted in `to_dict()`/checked on load, so a pre-redesign artifact
 numeric vector) is REJECTED at startup with a clear message
 (`serving.startup_validation`) instead of silently producing wrong
 predictions or a cryptic Keras input-shape error at first request.
+
+**`production_safe_v2` (docs/data-mapping.md 19.15, the train-serve
+learned-feature parity fix): `log_purchase_count`/`log_cart_add_count`
+REMOVED from the item numeric vector** (9 -> 7 item numeric features).
+The train-serve parity audit (19.14) found these two were genuine
+learned-model inputs computed from training's COMPLETE SQLite purchase/
+cart history, while live `backend_api` serving can only ever supply a
+BOUNDED recent-window approximation of the real backend's 1.5M+-row
+activity table (no aggregate endpoint, no delta filter exists to fix
+this efficiently - see docs/data-mapping.md 19.14/19.15). Rather than
+leave a silent training=lifetime/serving=recent-window mismatch on a
+LEARNED input, they are removed from the model entirely - product
+purchase/cart popularity remains available as a serving-only fallback
+heuristic (`serving.fallback.global_popularity_ranking`/
+`category_popularity_ranking`, which the bounded-window approximation is
+perfectly fine for - a fallback ranking has no "training semantics" to
+be unfaithful to), just never again as something the trained model
+assumes is reproducible exactly. No dummy zero placeholder was kept in
+their place - the vector is genuinely 7-wide, not 9-wide-with-two-zeros.
 """
 
 from __future__ import annotations
@@ -63,7 +82,7 @@ from recommendation.features.user_features import UserFeatures
 # at all, so `from_dict` stamps it "legacy_pre_production_safe_contract"
 # rather than guessing - that string will never equal this constant, so
 # `serving.startup_validation` always rejects it explicitly.
-CURRENT_CONTRACT_VERSION = "production_safe_v1"
+CURRENT_CONTRACT_VERSION = "production_safe_v2"
 _LEGACY_CONTRACT_VERSION = "legacy_pre_production_safe_contract"
 
 
@@ -97,9 +116,14 @@ class Vocabulary:
 
 # `discount_fraction`/`is_discounted` were removed (no real SalePrice/
 # DiscountPercentage in production - see module docstring).
+# `log_purchase_count`/`log_cart_add_count` were removed in
+# `production_safe_v2` (see module docstring) - the real backend cannot
+# reproduce a true lifetime aggregate for these efficiently, so they no
+# longer feed the model at all (they remain a serving-only fallback
+# heuristic via `serving.fallback`, computed from `ProductFeatures`
+# directly, never through this encoder).
 ITEM_NUMERIC_FEATURE_NAMES_BASE = [
-    "normalized_price", "log_purchase_count",
-    "log_cart_add_count", "log_review_count", "average_rating", "has_rating",
+    "normalized_price", "log_review_count", "average_rating", "has_rating",
 ]
 # docs/data-mapping.md section 15: `category_relative_price` is
 # already a [0,1] percentile (no extra normalization needed). `price_tier`
@@ -182,10 +206,11 @@ class TwoTowerFeatureEncoder:
     # --- item encoding -------------------------------------------------------
 
     def encode_item(self, features: ProductFeatures, semantic_embedding: np.ndarray) -> dict[str, np.ndarray]:
+        # No `purchase_count`/`cart_add_count` here (production_safe_v2 -
+        # see module docstring): those remain a serving-only fallback
+        # heuristic (`serving.fallback`), never a learned input.
         numeric_values = [
             min(features.effective_price / self.max_price, 1.0) if self.max_price > 0 else 0.0,
-            np.log1p(features.purchase_count),
-            np.log1p(features.cart_add_count),
             np.log1p(features.review_count),
             features.average_rating if features.average_rating is not None else 0.0,
             1.0 if features.average_rating is not None else 0.0,

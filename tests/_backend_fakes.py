@@ -60,6 +60,8 @@ class FakeBackendClient:
         users_status: int = 200,
         reviews: list[dict] | None = None,
         has_credentials: bool = True,
+        roster: list[dict] | None = None,
+        activity_page_size: int = 100,
     ) -> None:
         self._products = [ApiProduct.model_validate(p) for p in (products or [])]
         self._categories = [ApiCategory.model_validate(c) for c in (categories or [])]
@@ -68,8 +70,11 @@ class FakeBackendClient:
         self._users_status = users_status
         self._reviews = [ApiReview.model_validate(r) for r in (reviews or [])]
         self._has_credentials = has_credentials
+        self._roster = [ApiUser.model_validate(u) for u in (roster or [])]
+        self._activity_page_size = activity_page_size
         self.user_calls: list[str] = []
         self.review_calls = 0
+        self.activity_page_calls: list[str | None] = []
 
     def list_products(self) -> list[ApiProduct]:
         return list(self._products)
@@ -79,6 +84,41 @@ class FakeBackendClient:
 
     def list_activities(self) -> list[ApiActivity]:
         return list(self._activities)
+
+    def list_users(self) -> list[ApiUser]:
+        return list(self._roster)
+
+    def iter_activity_pages(self, *, user_guid: str | None = None, max_pages: int = 10_000):
+        """Mimics `BackendApiClient.iter_activity_pages`: paginates the
+        fixture's `_activities` list (optionally filtered by `user_id`),
+        `activity_page_size` rows at a time, stopping after `max_pages`.
+        """
+        self.activity_page_calls.append(user_guid)
+        rows = self._activities
+        if user_guid is not None:
+            rows = [a for a in rows if a.user_id == user_guid]
+        size = self._activity_page_size
+        pages = [rows[i : i + size] for i in range(0, len(rows), size)] or [[]]
+        for page in pages[:max_pages]:
+            yield page
+
+    def fetch_activity_window(self, *, user_guid: str | None = None, max_pages: int = 10_000):
+        """Mimics `BackendApiClient.fetch_activity_window`: same
+        pagination as `iter_activity_pages`, but eager and
+        completeness-aware - returns `(rows, exhausted)`. Appends to the
+        SAME `activity_page_calls` list (both are "one fetch attempt
+        against `/api/ai/user-activities`" from a test's point of view).
+        """
+        self.activity_page_calls.append(user_guid)
+        rows = self._activities
+        if user_guid is not None:
+            rows = [a for a in rows if a.user_id == user_guid]
+        size = self._activity_page_size
+        pages = [rows[i : i + size] for i in range(0, len(rows), size)] or [[]]
+        truncated = pages[:max_pages]
+        fetched = [r for page in truncated for r in page]
+        exhausted = len(pages) <= max_pages
+        return fetched, exhausted
 
     def get_user(self, guid: str) -> ApiUser | None:
         self.user_calls.append(guid)

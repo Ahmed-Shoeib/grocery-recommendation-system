@@ -90,8 +90,8 @@ def test_encode_item_price_normalized_by_catalog_max():
 def test_encode_item_missing_rating_produces_zero_with_flag():
     encoder = _encoder(embedding_dim=8)
     result = encoder.encode_item(_product_features(average_rating=None, review_count=0), np.ones(8, dtype=np.float32))
-    assert result["numeric"][4] == 0.0  # average_rating slot
-    assert result["numeric"][5] == 0.0  # has_rating flag
+    assert result["numeric"][2] == 0.0  # average_rating slot
+    assert result["numeric"][3] == 0.0  # has_rating flag
 
 
 def test_encode_user_shapes():
@@ -186,13 +186,15 @@ def test_loading_pre_redesign_encoder_dict_is_stamped_legacy_contract_version():
 
 # --- production-safe item/user numeric dimensions -------------------------
 
-def test_item_numeric_dim_is_seven_after_production_safe_redesign():
+def test_item_numeric_dim_is_five_after_train_serve_parity_fix():
     encoder = _encoder(embedding_dim=8)
-    # normalized_price, log_purchase_count, log_cart_add_count,
-    # log_review_count, average_rating, has_rating, category_relative_price
-    # (discount_fraction/is_discounted removed - no real SalePrice/
-    # DiscountPercentage in production).
-    assert encoder.item_numeric_dim == 7
+    # normalized_price, log_review_count, average_rating, has_rating,
+    # category_relative_price (discount_fraction/is_discounted removed -
+    # no real SalePrice/DiscountPercentage in production;
+    # log_purchase_count/log_cart_add_count removed in production_safe_v2
+    # - docs/data-mapping.md 19.15 - the real backend cannot reproduce a
+    # true lifetime aggregate for these efficiently as a learned input).
+    assert encoder.item_numeric_dim == 5
 
 
 def test_user_numeric_dim_is_eight_after_production_safe_redesign():
@@ -213,7 +215,7 @@ def test_encode_item_includes_price_tier_id_and_relative_price():
     )
     assert result["price_tier_id"].dtype == np.int32
     assert result["price_tier_id"] == encoder.price_tier_vocab.encode("premium")
-    assert result["numeric"][6] == pytest.approx(0.9)  # category_relative_price (last slot)
+    assert result["numeric"][4] == pytest.approx(0.9)  # category_relative_price (last slot)
 
 
 def test_encode_item_unknown_price_tier_falls_back_to_zero_bucket():

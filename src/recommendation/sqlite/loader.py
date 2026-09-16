@@ -68,26 +68,54 @@ def load_product_tags(con: sqlite3.Connection) -> list[RawProductTag]:
     return [RawProductTag(id=r["Id"], product_id=r["ProductId"], tag_id=r["TagId"]) for r in rows]
 
 
+def _has_table(con: sqlite3.Connection, name: str) -> bool:
+    return con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)).fetchone() is not None
+
+
 def load_users(con: sqlite3.Connection) -> list[RawUser]:
-    """`data/sqlite/backend_shaped_synthetic.db`'s `User.PreferredCategoryId`
-    is a single FK (a modeling simplification of the real backend's
-    `FavoriteCategory[]` join - see `synthetic.raw_schemas.RawUser`
-    docstring) - wrapped into a length-<=1 list here so this source
-    produces the SAME canonical shape (`UserProfile.preferred_categories:
-    list[str]`) the real backend_api source does, with no downstream
-    special-casing.
+    """Two supported schema shapes, chosen automatically per-database so a
+    single loader works against both without a config flag:
+
+    - `backend_shaped_synthetic.db` (legacy): `User.PreferredCategoryId` is
+      a single FK (a modeling simplification of the real backend's
+      `FavoriteCategory[]` join - see `synthetic.raw_schemas.RawUser`
+      docstring) - wrapped into a length-<=1 list so this source produces
+      the SAME canonical shape (`UserProfile.preferred_categories:
+      list[str]`) the real backend_api source does.
+    - A production-aligned dataset with a `UserFavoriteCategory(UserId,
+      CategoryId)` join table (docs/production-feature-parity-audit.md -
+      genuine multi-favorite semantics, matching the real backend's
+      `FavoriteCategory[]` join shape exactly rather than a single-value
+      approximation): every row for a user is collected into
+      `preferred_category_ids`, in insertion order.
+
+    Detected via `sqlite_master`, not a config flag, so the SAME code path
+    serves both databases with no call-site branching required.
     """
+    has_favorites_table = _has_table(con, "UserFavoriteCategory")
+
     rows = con.execute(
         "SELECT Id, FirstName, LastName, Email, PreferredCategoryId, AgeGroup FROM User"
     ).fetchall()
-    return [
-        RawUser(
-            id=r["Id"], first_name=r["FirstName"], last_name=r["LastName"], email=r["Email"],
-            preferred_category_ids=[r["PreferredCategoryId"]] if r["PreferredCategoryId"] is not None else [],
-            age_group=r["AgeGroup"],
+
+    favorites_by_user: dict[int, list[int]] = {}
+    if has_favorites_table:
+        for r in con.execute("SELECT UserId, CategoryId FROM UserFavoriteCategory ORDER BY UserId, Id"):
+            favorites_by_user.setdefault(r["UserId"], []).append(r["CategoryId"])
+
+    users: list[RawUser] = []
+    for r in rows:
+        if has_favorites_table:
+            preferred_category_ids = favorites_by_user.get(r["Id"], [])
+        else:
+            preferred_category_ids = [r["PreferredCategoryId"]] if r["PreferredCategoryId"] is not None else []
+        users.append(
+            RawUser(
+                id=r["Id"], first_name=r["FirstName"], last_name=r["LastName"], email=r["Email"],
+                preferred_category_ids=preferred_category_ids, age_group=r["AgeGroup"],
+            )
         )
-        for r in rows
-    ]
+    return users
 
 
 def load_reviews(con: sqlite3.Connection) -> list[RawReview]:

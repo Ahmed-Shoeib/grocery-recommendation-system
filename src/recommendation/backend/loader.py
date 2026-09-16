@@ -311,6 +311,46 @@ def load_backend_users(
     return raw_users
 
 
+def load_backend_users_roster(
+    client: BackendApiClient, resolver: ExternalIdentityResolver, catalog: BackendCatalog
+) -> tuple[list[RawUser], dict[int, str]]:
+    """Eagerly loads the FULL user roster via `GET /api/users`, independent
+    of any recorded activity - the cold-start fix required alongside the
+    bounded activity window (docs/data-mapping.md 19.13): without this,
+    `is_known_user` could only ever say "yes" for a user who happened to
+    have an activity row inside whatever bounded window was fetched,
+    which is exactly the kind of misclassification the activity-loading
+    architecture fix must not introduce for a real, existing user whose
+    history simply has not been synced yet.
+
+    ADDITIVE, never a replacement: `adapters.backend_factory` merges this
+    roster with the activity-stream-derived `load_backend_users` result
+    (that one wins on conflict, since it went through the existing
+    per-user `/api/users/{guid}` enrichment path) - a backend/test double
+    with no roster support (an empty `list_users()`) degrades exactly to
+    the pre-existing, activity-stream-only population.
+
+    Mints each roster user's internal id via `resolver.resolve_user`
+    directly (idempotent - a user already minted by the activity stream
+    keeps the same id), so identity resolution stays single-path
+    regardless of which source encounters a given user first.
+    """
+    api_users = client.list_users()
+    raw_users: list[RawUser] = []
+    guid_by_internal: dict[int, str] = {}
+    for u in api_users:
+        if not u.guid:
+            continue
+        internal_id = resolver.resolve_user(u.guid)
+        guid_by_internal[internal_id] = u.guid
+        raw_users.append(_to_raw_user(internal_id, u, catalog))
+    logger.info(
+        "backend load: %d user(s) discovered via GET /api/users roster (independent of activity history)",
+        len(raw_users),
+    )
+    return raw_users, guid_by_internal
+
+
 def load_backend_reviews(
     client: BackendApiClient,
     catalog: BackendCatalog,

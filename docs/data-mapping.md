@@ -2857,3 +2857,231 @@ test-suite run, and live smoke test that followed - see 19.5/19.7/19.8
 for the full detail and the client-side retry behaviour this prompted
 (500 added to the retryable-status set).
 
+### 19.13 Activity-loading architecture: the table outgrew a full-traversal startup (fixed)
+
+**The blocker.** `GET /api/ai/user-activities` grew past **1.5 million
+rows** with no server-side delta/since/updatedSince filter (confirmed via
+the live Swagger spec: the route's only query parameters are `userId`,
+`cursor`, `pageSize`). The old `data_source=backend_api` startup path
+(`api.service.build_recommendation_service` →
+`adapters.backend_factory.build_backend_api_adapters` →
+`BackendApiClient.list_activities()`) called `_iter_cursor` to
+run-to-completion, which needs 15,000+ requests for a table this size -
+`BackendApiClient`'s 10,000-page safety cap correctly refused it
+(`BackendPaginationError`) rather than hang or loop forever. Fixing this
+required a genuinely different loading strategy, not a bigger cap.
+
+**Strategy chosen: bounded, persisted, incremental activity sync +
+an independent full user roster + a bounded per-user cold-start
+safety net.** Three cooperating pieces, all new:
+
+1. **`backend.activity_sync.sync_activities`** (used by
+   `backend_factory` in place of `list_activities()`) maintains a
+   persisted (`backend.activity_cache`, atomic JSON writes, versioned,
+   corrupt-file-safe) **bounded recent window** of activity rows -
+   `backend_api.activity_bootstrap_max_pages` (default 500 pages =
+   50,000 rows) on first load, then a cheap **incremental delta** walk
+   from the feed's head on every later load (the feed is newest-first,
+   confirmed live: an unfiltered page 1 consistently returns near-"now"
+   timestamps) that stops the instant it recognizes the previously-known
+   high-water-mark row. If a delta walk does not reach that checkpoint
+   within `activity_delta_max_pages` (default 50) - an implausible
+   event burst, or the ordering assumption not holding - it falls back
+   to a fresh bounded bootstrap rather than guessing. This is a real,
+   disclosed behavioral change: product-level popularity aggregates
+   (`purchase_count`/`cart_add_count` in `features.product_features`)
+   and the bulk engagement-profile pass now reflect a bounded recent
+   window, not full lifetime history, unless a user's data is pulled in
+   by mechanism 3 below.
+2. **`backend.loader.load_backend_users_roster`** (`GET /api/users`,
+   discovered during this investigation - page-NUMBER paginated,
+   `PageNumber`/`PageSize`, 547 live users) loads the full user roster
+   independent of any recorded activity, additively merged with the
+   existing activity-derived `load_backend_users` result. This is what
+   makes `is_known_user` correct for a user whose entire history falls
+   outside the bounded window - previously, "known" meant "appeared in
+   whatever activities were fetched," which the bounded window would
+   have made too narrow. The old per-user `GET /api/users/{guid}`
+   enrichment loop is now only called for the (normally empty) set of
+   activity-derived users the roster call didn't already cover -
+   calling it for every activity-derived user unconditionally, now that
+   the endpoint is live rather than auth-blocked, was itself a 500+
+   -request startup cost, measured live before this narrowing.
+3. **`adapters.backend_lazy_events_adapter.LazyBackendUserEventsAdapter`**
+   is the cold-start safety net Section 9 of this fix required: the
+   first time any per-user accessor is asked about a user with zero
+   events in the bounded window, it makes ONE bounded on-demand backend
+   call (`BackendApiClient.iter_activity_pages(user_guid=..., max_pages=
+   activity_lazy_user_max_pages)` - confirmed live that the `userId`
+   filter returns a per-user-bounded page set: an unfiltered cursor
+   decoded to a ~1.5M-row offset vs. ~2,600 for one user's own filtered
+   history), caches the result (hit or miss) with a short in-process
+   TTL, and merges any found rows into that user's profile via the
+   existing `backend.loader.load_backend_events` (no second identity/
+   semantics path). Verified live: a user with real history entirely
+   outside the 50,000-row bootstrap window was correctly classified
+   `tier=strong` (not `NO_HISTORY`) once actually requested.
+   **Important scoping fix caught during live verification**: this
+   safety net must never fire during the EAGER "build an engagement
+   profile for every known user" bulk pass
+   (`features.pipeline.run_feature_pipeline`, used only for the
+   dashboard's user list) - against the real 547-user roster this
+   turned every snapshot build/refresh into ~500 extra per-user calls.
+   `api.service._load_data_snapshot` now toggles
+   `LazyBackendUserEventsAdapter.lazy_enabled` off around only that bulk
+   call, restoring it before returning - the real per-request
+   `RecommendationService.recommend(user_id)` path always runs with it
+   enabled.
+
+**Not changed:** canonical action-type mapping, identity resolution
+(`ExternalIdentityResolver`, `Product.Id`/GUID-keyed, unchanged), the
+reviews path (still small, still untouched), SQLite training, or any
+trained artifact - this is a serving-side data-sourcing change, not a
+feature-schema change, so no retrain was required.
+
+**Live-verified** (`scripts/verify_activity_loading_fix.py`,
+2026-09-15): `build_backend_api_adapters` completes in ~4s using ~11 HTTP
+requests on a warm cache (vs. an infeasible 15,000+ for a full
+traversal), a cold bootstrap completes in ~44s using ~500 bounded
+requests, `build_recommendation_service` completes with **zero**
+`BackendPaginationError` and zero per-user lazy calls during startup, and
+strong/median/least-active real users all produce correct, real-`ProductId`,
+no-duplicate, in-stock recommendations - including the least-active user,
+whose real history was only found via the lazy safety net.
+
+### 19.14 Train-serve behavioral-feature parity audit (fixed a real undercount)
+
+**The gap found.** 19.13's fix only re-checked the backend for a user
+with literally ZERO events in the bounded global window. A real, active
+user with SOME activity inside that window and MORE activity outside it
+was silently served behavioral features computed from only the partial
+subset - `UserFeatures.purchase_count`/`cart_item_count`/`search_count`/
+`total_engagement_events`, `category_affinity`, the semantic embedding,
+and the price profile, which become `user_log_purchase_count`/
+`user_log_cart_item_count`/`user_log_search_count`/
+`user_log_total_engagement_events`/`category_affinity_match`/
+`semantic_cosine_similarity`/`user_normalized_typical_price`/
+`price_relative_distance` (`ranking.features`) AND the Two-Tower user
+tower's `log_purchase_count`/`log_cart_item_count`/`log_search_count`/
+`log_total_engagement_events`/`category_affinity`/`semantic_embedding`/
+`normalized_typical_price` inputs (`retrieval.two_tower.feature_encoding
+.TwoTowerFeatureEncoder.encode_user`) - while the trained model was fit
+on COMPLETE per-user history from the production-aligned SQLite dataset
+(`features.product_features`/`features.user_features` compute these as
+declared, undisclosed-recency, all-time counts over whatever activity
+list they're handed - training hands them the complete dataset; the
+19.13 serving fix was only handing them a bounded recent window). Live-
+confirmed: a real user with 1 event in the 50,000-row bounded window
+actually had 24 (5 purchases + 19 cart-adds) once fetched to completion -
+a >20x undercount for exactly the features above.
+
+**Fix**: `LazyBackendUserEventsAdapter` (docs/data-mapping.md 19.13) was
+changed so EVERY user's first per-request access - not just a
+zero-activity user's - triggers one bounded attempt to walk
+`GET /api/ai/user-activities?userId=...` to genuine completion
+(`backend.activity_sync.sync_user_activities`, tracking an explicit
+completeness marker via `backend.user_activity_cache` rather than
+inferring it from "has some rows" - a user with 20 cached events is
+never treated as if that were their whole lifetime unless the feed
+itself confirmed `hasNext=false`). The result REPLACES (never appends
+to) whatever partial rows that user already had from the bounded global
+window, so nothing is double-counted. Once complete, later accesses
+within a TTL reuse the persisted history with **zero** network calls;
+after the TTL, a cheap incremental delta (not a re-fetch) catches up.
+Live-verified: first request for the user above cost 1 HTTP request
+(0.08s) and found the complete 24-event history; the second request for
+the same user cost 0 requests (0.0002s) and returned identical results.
+
+**Global product-popularity aggregates: a disclosed, NOT-fully-closed
+gap.** `product_purchase_count`/`cart_add_count`
+(`features.product_features.build_product_features`, from
+`bundle.purchases.list_all_purchases()`/`bundle.cart.list_all_cart_items()`)
+feed BOTH the ranker's `item_log_purchase_count`/`item_log_cart_add_count`
+AND the Two-Tower item tower's `log_purchase_count`/`log_cart_add_count`
+inputs - these are genuine learned-model inputs, not just a fallback
+signal. Training computes them from the complete SQLite dataset (an
+all-time, no-recency aggregate by design - see that module's docstring).
+Serving computes them from the SAME bounded ~50,000-row GLOBAL window
+19.13 introduced, which is NOT extended by this fix (the per-user
+complete-history mechanism only ever backs a specific served user's OWN
+signals, never the catalog-wide aggregate). A live Swagger check
+(2026-09-15) confirmed there is no product-popularity/aggregate/stats
+endpoint on this backend, so Option C (an efficient aggregate endpoint)
+does not exist; Option A (retrain on the same bounded horizon) and full
+Option B (incrementally-accumulated TRUE lifetime aggregates) both
+require either retraining or an infeasible one-time 15,000+-request full
+crawl this phase is explicitly forbidden from performing. This is
+therefore left as an accepted, disclosed, bounded approximation for
+these two (of 24 ranker + several Two-Tower) inputs - log-compressed,
+catalog-wide (not user-personalization-critical), and no worse than the
+recency-window disclosure already made in 19.13 - rather than silently
+retrained or silently left unaddressed. See the session report for the
+explicit A/B recommendation-tracking decision this implies.
+
+**Tests**: `tests/test_backend_cold_start_lazy.py` (the regression test
+for the exact undercount bug, plus replace-not-double-count and TTL
+reuse), `tests/test_backend_train_serve_feature_parity.py` (end-to-end
+`UserFeatures.purchase_count` proof), `tests/test_backend_user_activity_cache.py`
+(persistence/corruption/cross-restart reuse of the per-user store),
+`tests/test_backend_tier_classification.py` (genuine STRONG/SPARSE/
+NO_HISTORY classification through the real adapter pipeline),
+`tests/test_backend_client_activity_pagination.py` (`fetch_activity_window`'s
+exhausted-vs-capped distinction).
+
+**Live-verified** (`scripts/verify_train_serve_parity.py`, 2026-09-15):
+see above - first-request/second-request cost proof plus a full
+real-artifact recommendation for the affected user (`tier=strong`, 10
+real/unique/in-stock `ProductId`s).
+
+### 19.15 Zero learned-feature train-serve mismatch: `production_safe_v2`
+
+**Final decision on the 19.14 disclosed gap.** Rather than leave
+`item_log_purchase_count`/`item_log_cart_add_count` as an accepted
+approximation (as 19.14 first proposed), the decision was reversed:
+**every learned model input must be reproducible exactly and
+efficiently from the live API, with no exceptions.** Since the real
+backend has no product-popularity/aggregate/stats endpoint (confirmed
+via live Swagger, 2026-09-15) and no delta filter, and a one-time
+15,000+-request full crawl is explicitly out of scope, the only way to
+close this gap without accepting a silent mismatch is to remove these
+two features from the model entirely.
+
+**Removed from BOTH towers/the ranker** (`production_safe_v2`,
+`retrieval.two_tower.feature_encoding.CURRENT_CONTRACT_VERSION`):
+- Two-Tower item numeric vector: 7 -> 5 entries (`log_purchase_count`,
+  `log_cart_add_count` removed; `normalized_price`, `log_review_count`,
+  `average_rating`, `has_rating`, `category_relative_price` remain).
+- Ranker: 24 -> 22 features (`item_log_purchase_count`,
+  `item_log_cart_add_count` removed; `item_log_stock_quantity` - a real,
+  catalog-native field, not a behavior-derived aggregate - is
+  unaffected and stays).
+
+**Not removed, redefined as SERVING-ONLY**: `ProductFeatures
+.purchase_count`/`cart_add_count` still exist and are still computed the
+same way (from whatever activity data the current source provides) -
+they just no longer feed `TwoTowerFeatureEncoder.encode_item` or
+`ranking.features.build_ranking_feature_vector`. Their only remaining
+consumer is `serving.fallback.global_popularity_ranking`/
+`category_popularity_ranking` (NO_HISTORY/SPARSE_HISTORY fallback
+ordering) - a fallback list has no "training semantics" to be unfaithful
+to, so the same bounded-window numbers that would be a genuine mismatch
+as a model input are perfectly fine there. See `serving.fallback` and
+`features.product_features.ProductFeatures` module/field docstrings for
+the explicit MODEL FEATURE vs SERVING HEURISTIC distinction this
+established.
+
+**Retraining required and performed.** Both dimension changes are
+structural (Two-Tower item-tower input shape, ranker input shape), so
+`models/backend_api/` was retrained from scratch against
+`data/sqlite/production_aligned_training.db` (unchanged - user-level
+history/features for training were never the problem; only the two
+global product-count inputs were removed) - see the session report for
+full before/after metrics, temporal-leakage re-verification (0
+violations), and the rebuilt live real-catalog ANN (85 real `ProductId`s,
+`production_safe_v2`). `models/sqlite_baseline/` was left untouched.
+`serving.startup_validation.validate_two_tower_artifacts`/
+`validate_ranker_artifacts` already compare `contract_version`/
+`feature_names` generically (no hard-coded dimension numbers), so they
+reject the prior `production_safe_v1`/24-feature artifacts automatically
+with no validator code changes needed.
+

@@ -650,3 +650,58 @@ SQLite dataset if desired for a cleaner contract match, then `scripts/train_two_
 → `scripts/train_ranker.py` → rebuild the ANN index) is required before `data_source:
 "sqlite"` or `"backend_api"` live serving works again. This redesign did not perform that
 retrain, per its own scope instructions.
+
+## 20. `production_safe_v2`: zero learned-feature train-serve mismatch (2026-09-15 follow-up)
+
+**Status: DONE — feature removal, retrain, live real-catalog ANN rebuild, live
+verification, full test suite.** This follows §19's contract and the separate
+activity-loading-architecture work (docs/data-mapping.md §19.13/19.14): once
+`backend_api` serving gained a working per-user complete-history mechanism (19.14), an
+audit of every remaining behavior-derived learned feature found ONE genuine, undisclosed
+train-serve mismatch left: `item_log_purchase_count`/`item_log_cart_add_count` (both the
+Two-Tower item tower and the ranker) were trained from the COMPLETE SQLite dataset's
+purchase/cart history but could only be served from a BOUNDED recent-window
+approximation of the real backend's 1.5M+-row activity table — the real backend has no
+product-popularity/aggregate endpoint and no delta filter capable of reproducing a true
+lifetime count efficiently (confirmed via live Swagger, 2026-09-15), and a one-time
+15,000+-request full crawl was explicitly ruled out.
+
+**Final production rule established**: every learned model input must be reproducible
+exactly and efficiently from the live API. A feature that cannot satisfy this is removed
+from the model, not silently approximated. Bounded/approximate values remain acceptable
+only as a **serving heuristic** (a fallback ranking has no training semantics to be
+unfaithful to) — never as a **model feature**.
+
+**Two-Tower item tower**: numeric vector 7 → 5 (`log_purchase_count`/`log_cart_add_count`
+removed; `normalized_price`, `log_review_count`, `average_rating`, `has_rating`,
+`category_relative_price` remain). **Ranker**: 24 → 22 features
+(`item_log_purchase_count`/`item_log_cart_add_count` removed; `item_log_stock_quantity` —
+a real, catalog-native field, not a behavior-derived aggregate — is unaffected). No dummy
+zero placeholder was kept for either removed slot — the vectors are genuinely
+shorter, not zero-padded.
+
+`ProductFeatures.purchase_count`/`cart_add_count` are NOT removed from the schema — they
+remain, computed the same way, but their only remaining consumer is
+`serving.fallback.global_popularity_ranking`/`category_popularity_ranking` (NO_HISTORY/
+SPARSE_HISTORY fallback ordering). See `serving.fallback` and
+`features.product_features.ProductFeatures`'s docstrings for the explicit MODEL FEATURE
+vs SERVING HEURISTIC distinction this established — the same rule applies to any future
+feature proposal: if live `backend_api` cannot reproduce it exactly and efficiently, it
+may only ever be a serving heuristic, never a Two-Tower/ranker input.
+
+**Contract version bumped**: `production_safe_v1` → `production_safe_v2`
+(`retrieval.two_tower.feature_encoding.CURRENT_CONTRACT_VERSION`). `serving
+.startup_validation.validate_two_tower_artifacts`/`validate_ranker_artifacts` already
+compare `contract_version`/`feature_names` generically (no hard-coded dimension
+numbers), so the prior `production_safe_v1`/24-feature artifacts are rejected
+automatically with no validator code changes needed — verified by
+`tests/test_production_safe_v2_feature_removal.py`.
+
+**Retrained** (structural dimension change, so required — not optional): `models
+/backend_api/` from scratch against the SAME `data/sqlite/production_aligned_training.db`
+(unchanged; only the two global product-count inputs were removed, not the training
+catalog/domain), same hyperparameters/protocol as before for a fair comparison. Temporal
+leakage re-audited: 0 violations. Live real-catalog ANN rebuilt from `GET
+/api/ai/products` (85 real `ProductId`s, `production_safe_v2`, no duplicates, no unknown
+categories). `models/sqlite_baseline/` left untouched. Full before/after metrics, live
+verification, and file/test lists are in the session report for this change.

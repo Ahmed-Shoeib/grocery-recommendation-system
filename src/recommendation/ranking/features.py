@@ -44,6 +44,24 @@ removed - see `embeddings.text_builder` and
 become production-safe again once the Two-Tower is retrained on the new,
 safe inputs - not before, but the feature slot itself is correct and
 should not be deleted.
+
+`production_safe_v2` (docs/data-mapping.md 19.15, train-serve
+learned-feature parity fix): TWO MORE features REMOVED (24 -> 22 -
+`RANKING_FEATURE_NAMES_ITEM_BASE` shrinks from 7 to 5 entries):
+`item_log_purchase_count`, `item_log_cart_add_count`. The train-serve
+parity audit (19.14) found these were genuine learned-model inputs
+computed from training's COMPLETE SQLite purchase/cart history, while
+live `backend_api` serving can only supply a BOUNDED recent-window
+approximation (the real backend has no aggregate endpoint and no delta
+filter capable of reproducing a true lifetime count efficiently - see
+docs/data-mapping.md 19.14/19.15). Rather than leave a silent
+training=lifetime/serving=recent-window mismatch on a LEARNED input,
+they are removed from the ranker entirely - `ProductFeatures
+.purchase_count`/`cart_add_count` still exist and are still populated
+(from whatever activity data the current source provides), but only as
+a SERVING HEURISTIC now (`serving.fallback.global_popularity_ranking`/
+`category_popularity_ranking`), never again as a ranker input the model
+was trained to expect a faithful lifetime value for.
 """
 
 from __future__ import annotations
@@ -63,10 +81,13 @@ RANKING_FEATURE_NAMES_USER = [
     "user_has_preferred_category",
 ]
 # stock_quantity kept available, not a filter - eligibility is serving's job (serving.eligibility).
+# `item_log_purchase_count`/`item_log_cart_add_count` were removed in
+# production_safe_v2 (see module docstring) - a real, catalog-native
+# field like stock_quantity is unaffected; only the two backend-activity-
+# derived aggregates that can't be reproduced exactly/efficiently by live
+# serving are gone.
 RANKING_FEATURE_NAMES_ITEM_BASE = [
     "item_normalized_price",
-    "item_log_purchase_count",
-    "item_log_cart_add_count",
     "item_log_review_count",
     "item_average_rating",
     "item_has_rating",
@@ -143,6 +164,10 @@ def build_ranking_feature_vector(
     )
     normalized_price = min(product_features.effective_price / max_price, 1.0) if max_price > 0 else 0.0
 
+    # No `product_features.purchase_count`/`cart_add_count` here
+    # (production_safe_v2 - see module docstring): those remain a
+    # serving-only fallback heuristic (`serving.fallback`), never a
+    # ranker input.
     values = [
         np.log1p(user_features.purchase_count),
         np.log1p(user_features.cart_item_count),
@@ -151,8 +176,6 @@ def build_ranking_feature_vector(
         1.0 if user_features.has_chatbot_context else 0.0,
         1.0 if user_features.has_preferred_category else 0.0,
         normalized_price,
-        np.log1p(product_features.purchase_count),
-        np.log1p(product_features.cart_add_count),
         np.log1p(product_features.review_count),
         product_features.average_rating if product_features.average_rating is not None else 0.0,
         1.0 if product_features.average_rating is not None else 0.0,

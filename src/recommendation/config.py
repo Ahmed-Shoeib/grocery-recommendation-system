@@ -46,6 +46,22 @@ class PathsConfig(BaseModel):
     # it to renumber from scratch (only safe before any model is trained
     # against those ids).
     backend_identity_registry: str = "data/processed/backend_identity_registry.json"
+    # Persisted, restart-durable bounded window of `GET /api/ai/user-
+    # activities` rows (`backend.activity_sync`/`backend.activity_cache`) -
+    # the fix for the real backend's UserActivities table growing past 1.5
+    # million rows with no server-side delta filter (verified via Swagger,
+    # 2026-09-15): a full traversal needs 15,000+ requests and is refused
+    # outright by `BackendApiClient`'s 10,000-page safety cap. Runtime
+    # data, gitignored wholesale under `data/processed/*`; contains real
+    # user GUIDs/product ids, never tokens/secrets. Delete the file for a
+    # manual full reset (forces a fresh bounded bootstrap on next load).
+    backend_activity_cache: str = "data/processed/backend_activity_cache.json"
+    # Per-user COMPLETE activity-history cache (docs/data-mapping.md
+    # 19.14) - separate from the file above (a bounded GLOBAL recent
+    # window used for popularity aggregates/fallback). Keyed by user
+    # GUID; only ever grows for users actually served, not the whole
+    # roster. Same runtime-data/gitignore/no-secrets rules as above.
+    backend_user_activity_cache: str = "data/processed/backend_user_activity_cache.json"
     # STEP 9 (docs/data-mapping.md section 18): which data source + trained
     # artifact set `api.service.build_recommendation_service` uses for
     # LIVE serving. "sqlite" -> data_sqlite via build_sqlite_adapters,
@@ -112,6 +128,55 @@ class BackendApiConfig(BaseModel):
     # allow it (e.g. /api/user-activities).
     page_size: int = 100
     user_agent: str = "grocery-recommendation-system/backend-integration"
+
+    # --- activity-loading architecture (docs/data-mapping.md 19.13) ------
+    # `GET /api/ai/user-activities` has no since/updatedSince/delta query
+    # parameter (verified via Swagger, 2026-09-15) and the live table has
+    # grown past 1.5 million rows, so `backend.activity_sync` maintains a
+    # bounded, persisted window instead of ever calling the old
+    # run-to-completion `client.list_activities()` from the normal
+    # service-startup/refresh path. These four knobs size that window and
+    # its refresh cost - see `backend.activity_sync` module docstring for
+    # the full bootstrap/delta/fallback strategy.
+    #
+    # First-load (or manual-reset / stale-checkpoint-fallback) walk depth,
+    # in pages of `page_size` rows. 500 pages * 100 rows/page = 50,000
+    # most-recent rows - a deliberate BOUNDED RECENT WINDOW, not full
+    # lifetime history (see docs/production-feature-parity-audit.md
+    # Section 5 disclosure): enough for meaningful product-popularity and
+    # engagement signal without the 15,000+ pages a full traversal needs.
+    activity_bootstrap_max_pages: int = 500
+    # Steady-state refresh walk depth: how many pages to re-walk from the
+    # feed's head before giving up on finding the previously-recorded
+    # checkpoint and falling back to a fresh bootstrap. Small because the
+    # feed is newest-first (verified live 2026-09-15) and refreshes are
+    # frequent relative to new-event volume - most refreshes need 1 page.
+    activity_delta_max_pages: int = 50
+    # Hard cap on rows retained in the persisted window; oldest rows are
+    # dropped once exceeded, so the cache can never grow unboundedly even
+    # under a long-running process with many delta merges.
+    activity_cache_max_rows: int = 100_000
+    # Per-user COMPLETE-history safety cap (docs/data-mapping.md 19.14),
+    # via the confirmed-live `userId` filter. Renamed/repurposed from an
+    # earlier, narrower "bounded lookback for zero-activity users only"
+    # cap: the train-serve parity audit found that design still truncated
+    # a PARTIALLY-covered active user's behavioral features (some events
+    # inside the bounded global window, more outside it) - exactly the
+    # user_log_purchase_count/category_affinity/... features the trained
+    # model expects computed from complete history. Every user's first
+    # per-request access now walks `GET /api/ai/user-activities?userId=...`
+    # to genuine completion (`hasNext=false`), not just until this page
+    # cap - the cap exists only as a safety backstop against a
+    # pathological account, not as the intended stopping point. 2,000
+    # pages * 100 rows/page = 200,000 rows is generously above any
+    # plausible single user's history (confirmed live: an unfiltered
+    # cursor decoded to a ~1.5M-row GLOBAL offset vs ~2,600 for one
+    # user's own filtered history; the most active real user observed
+    # live had 774 rows). `backend.activity_sync.sync_user_activities`
+    # reports explicitly whether completion was genuinely reached
+    # (`hasNext=false`) or only this cap was hit - the latter is logged
+    # loudly and never silently treated as complete.
+    activity_user_history_max_pages: int = 2_000
 
 
 class SyntheticDataConfig(BaseModel):

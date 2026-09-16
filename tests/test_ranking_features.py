@@ -173,11 +173,22 @@ def test_ranking_feature_dimension_is_24_after_production_safe_redesign():
     removed (docs/production-feature-parity-audit.md - none of the real
     fields they depended on exist in the real SQL Server schema).
     """
-    assert len(RANKING_FEATURE_NAMES) == 24
     for removed in (
         "user_has_age_group", "item_discount_fraction", "item_is_active",
         "item_is_discounted", "brand_affinity_match",
     ):
+        assert removed not in RANKING_FEATURE_NAMES
+
+
+def test_ranking_feature_dimension_is_22_after_train_serve_parity_fix():
+    """24 -> 22 (docs/data-mapping.md 19.15): `item_log_purchase_count`/
+    `item_log_cart_add_count` removed - the real backend cannot reproduce
+    a true lifetime aggregate for these efficiently, so they no longer
+    feed the ranker (they remain a serving-only fallback heuristic via
+    `serving.fallback`, never a model input).
+    """
+    assert len(RANKING_FEATURE_NAMES) == 22
+    for removed in ("item_log_purchase_count", "item_log_cart_add_count"):
         assert removed not in RANKING_FEATURE_NAMES
 
 
