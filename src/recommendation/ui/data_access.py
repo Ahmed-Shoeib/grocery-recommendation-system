@@ -76,7 +76,17 @@ def load_user_detail(service: RecommendationService, user_id: int) -> UserDetail
     if profile is None:
         return None
 
-    engagement = service.engagement_profiles.get(user_id) or build_engagement_profile(
+    # Deliberately NOT `service.engagement_profiles.get(user_id)`: that dict
+    # is a bootstrap/refresh-time snapshot built with the `backend_api`
+    # lazy per-user sync disabled (see `api.service._load_data_snapshot`'s
+    # `lazy_enabled` toggle) - it only ever reflects the bounded global
+    # activity window, never a user's later-discovered complete history.
+    # A single-user detail lookup is cheap enough to always go straight
+    # through `service.bundle` instead, which (for `backend_api`) routes
+    # through `LazyBackendUserEventsAdapter._ensure_complete` exactly like
+    # `serving.pipeline.recommend` does - so `/profile` and
+    # `/recommendations` can never disagree about the same user's tier.
+    engagement = build_engagement_profile(
         user_id, service.bundle.users, service.bundle.purchases, service.bundle.cart, service.bundle.clicks,
         service.bundle.search, service.bundle.chatbot, service.bundle.reviews
     )

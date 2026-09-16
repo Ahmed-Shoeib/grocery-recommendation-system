@@ -47,6 +47,7 @@ from recommendation.adapters.user_events_adapter import UserEventsAdapter
 from recommendation.backend.activity_sync import sync_user_activities
 from recommendation.backend.client import BackendApiClient
 from recommendation.backend.identity import ExternalIdentityResolver
+from recommendation.backend.dtos import ApiActivity
 from recommendation.backend.loader import BackendCatalog, load_backend_events
 from recommendation.backend.user_activity_cache import UserActivityCacheStore, save_user_activity_cache_store
 from recommendation.schemas.engagement import (
@@ -138,7 +139,22 @@ class LazyBackendUserEventsAdapter(UserEventsAdapter):
         entry = self._store.entries.get(guid)
         already_complete = self._store.complete.get(guid, False)
         if already_complete and entry is not None and _seconds_since(entry.fetched_at) < self._ttl_seconds:
-            return  # reuse the persisted complete history - no network call
+            # Reuse the persisted complete history - no network call. But a
+            # freshly constructed adapter instance (e.g. every
+            # RecommendationService.maybe_refresh rebuilds the whole
+            # AdapterBundle from scratch) seeds `_by_user_and_type` from
+            # only the CURRENT bounded global window, which excludes this
+            # user's off-window rows - so the persisted `entry.rows` must
+            # be replayed into the in-memory index on every hit of this
+            # shortcut, not just on the original fetch. `_replace_user_events`
+            # is replace-not-append, so re-running this on an instance that
+            # already has the right data (same long-lived instance, repeat
+            # call) is a harmless no-op change.
+            cached_activities = [ApiActivity.model_validate(row) for row in entry.rows]
+            interactions, _ = load_backend_events(cached_activities, self._resolver, self._catalog)
+            found = [e for e in interactions if e.user_id == user_id]
+            self._replace_user_events(user_id, found)
+            return
 
         try:
             rows, is_complete = sync_user_activities(
