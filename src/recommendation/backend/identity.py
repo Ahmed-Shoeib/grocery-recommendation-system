@@ -1,18 +1,23 @@
-"""Persistent external-identity resolution: backend ProductId / slug / GUID
--> stable internal int.
+"""Persistent external-identity resolution: SLUG / GUID -> stable internal
+int, for the two entities that have no numeric identity of their own.
 
-The backend addresses categories by SLUG and users by GUID (neither
-exposes a numeric id). Products are addressed by the backend's stable
+The backend addresses categories by SLUG and users by GUID - neither
+exposes a numeric id, so this resolver's minted, persisted, sequential
+int IS their canonical identity. Products are different (2026-09-17
+refactor, docs/data-mapping.md 19.5/19.16): the backend's stable
 `Product.Id` (`GET /api/ai/products`/`GET /api/ai/user-activities`, the
-authoritative `backend_api` sources since the 2026-09-15 atomic switch -
-docs/data-mapping.md 19.5) - the *immutable id + mutable slug* contract
-this module originally compromised around now exists, and slug is
-metadata only for products. The recommender core, the canonical schemas,
-and every trained model artifact operate on integer ids. This resolver is
-the single boundary that bridges external keys (of whichever kind a
-source provides) to those integers, and it is the ONLY component that
-holds backend identifiers - nothing downstream of the adapter layer ever
-sees a product id, a slug, or a GUID.
+authoritative `backend_api` sources since the 2026-09-15 atomic switch)
+already IS a numeric id, so `backend.loader` passes it through verbatim
+as the canonical `product_id` and never routes it through this resolver
+- minting a *different* int for something that already has a perfectly
+good stable one is exactly the bug that migration introduced (a product's
+real `Product.Id` was silently renumbered to an unrelated dense `1..N`,
+confirmed end to end by a live backend-integration trace). This resolver
+is kept for products only as a defensive fallback for a source row that
+carries no `product_id` at all (see `backend.loader
+._SLUG_FALLBACK_ID_BASE`) - not expected to ever fire against the live
+source. It remains the single boundary for categories and users: nothing
+downstream of the adapter layer ever sees a category slug or a user GUID.
 
 Guarantees:
 

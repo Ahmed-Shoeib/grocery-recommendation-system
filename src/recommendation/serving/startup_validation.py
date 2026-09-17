@@ -104,6 +104,31 @@ def validate_ranker_artifacts(artifacts: RankerArtifacts) -> None:
         )
 
 
+def validate_backend_api_product_identity(item_ids: list[int], data_source: str) -> None:
+    """`backend_api`-only canary against reintroducing the resolver-minted-
+    id bug (docs/data-mapping.md 19.5/19.16): a live backend catalog's
+    `Product.Id`s are NOT contiguous (this project's live catalog is
+    82..180 with gaps), so a dense `1..N` artifact id set for this data
+    source is exactly the shape the bug produced, not real backend
+    `Product.Id` values - "N integer ids" alone (the previous production
+    validation) would never have caught it, since a resolver-minted id set
+    is just as integer and just as unique as a real one. `build_live_backend_ann
+    .py` already checks item_ids against the RAW API response at build
+    time - this is the cheap, network-free counterpart that also fires if
+    a `backend_api` artifact directory is ever populated by any other
+    means. No-op for synthetic/sqlite, whose own id scheme has always been
+    a dense `1..N` by design and is not a symptom of anything here.
+    """
+    if data_source != "backend_api":
+        return
+    if sorted(item_ids) == list(range(1, len(item_ids) + 1)):
+        raise ArtifactValidationError(
+            f"backend_api Two-Tower artifacts have a dense 1..{len(item_ids)} item id set - this is the exact "
+            "shape of the resolver-minted-id bug (docs/data-mapping.md 19.16), not real, non-contiguous backend "
+            "Product.Id values. Rebuild via scripts/build_live_backend_ann.py against the current loader."
+        )
+
+
 def validate_vector_index_compatibility(vector_index_size: int, expected_catalog_size: int) -> None:
     if vector_index_size != expected_catalog_size:
         raise ArtifactValidationError(

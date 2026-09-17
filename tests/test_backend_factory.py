@@ -86,10 +86,10 @@ def test_engagement_profile_with_product_id_bearing_fixture_gets_all_five_signal
     )
     assert len(profile.searches) == 1
     assert profile.chatbot_context is not None
-    assert profile.chatbot_context.mentioned_product_ids == [1]  # internal id of productId 501
+    assert profile.chatbot_context.mentioned_product_ids == [501]  # canonical id == real Product.Id, no remapping
     assert len(profile.cart_items) == 1
     assert len(profile.reviews) == 1
-    assert profile.reviews[0].product_id == 1
+    assert profile.reviews[0].product_id == 501
 
 
 def test_purchase_signal_comes_only_from_activities_not_orders(tmp_path):
@@ -122,3 +122,34 @@ def test_bare_user_profiles_when_user_endpoint_unavailable(tmp_path):
     prof = bundle.users.get_user_profile(1)
     assert prof is not None
     assert prof.preferred_categories == [] and prof.age_group is None
+
+
+# --- 2026-09-17 identity refactor: the canonical product id IS the
+# backend's own `Product.Id`, never a value minted by
+# `ExternalIdentityResolver` (docs/data-mapping.md 19.5/19.16) ---
+
+def test_catalog_product_ids_are_the_real_backend_product_ids_not_resolver_minted(tmp_path):
+    """The exact regression this refactor fixes: a live backend-integration
+    trace found the recommender's product id space was a dense, unrelated
+    `1..N` sequence (product_id=23 for a real `Product.Id=105`, reproduced
+    for every sampled recommendation). `RawProduct.id` must now equal
+    `productId` verbatim, non-contiguous gaps and all.
+    """
+    prods = [
+        {"slug": "pineapple", "productId": 105, "name": "Pineapple", "price": 4.0, "categorySlug": "groceries"},
+        {"slug": "zucchini", "productId": 162, "name": "Zucchini", "price": 2.5, "categorySlug": "groceries"},
+        {"slug": "apple-red-delicious", "productId": 85, "name": "Apple Red Delicious", "price": 3.0, "categorySlug": "groceries"},
+    ]
+    client = FakeBackendClient(products=prods, categories=_CATS, activities=[])
+    resolver = ExternalIdentityResolver(tmp_path / "reg.json")
+    bundle = build_backend_api_adapters(
+        client=client, resolver=resolver, activity_cache_path=tmp_path / "activity_cache.json", user_activity_cache_path=tmp_path / "user_activity_cache.json"
+    )
+
+    by_slug = {p.slug: p.id for p in bundle.products.list_products()}
+    assert by_slug == {"pineapple": 105, "zucchini": 162, "apple-red-delicious": 85}
+
+    # The resolver's `product` namespace must never have been touched -
+    # numeric ids bypass it entirely now.
+    doc = json.loads((tmp_path / "reg.json").read_text(encoding="utf-8"))
+    assert doc["namespaces"]["product"]["by_key"] == {}

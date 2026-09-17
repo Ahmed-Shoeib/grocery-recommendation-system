@@ -193,6 +193,25 @@ def main() -> None:
     item_ids = [p.id for p in products]
     assert len(set(item_ids)) == len(item_ids), "duplicate real ProductIds - refusing to build ANN"
     assert all(isinstance(pid, int) for pid in item_ids), "non-integer product id found - identity must be ProductId, never slug"
+    # Cross-check against the RAW API response, not just internal
+    # self-consistency (int-ness/uniqueness hold just as well for a
+    # resolver-minted `1..N` id, which is exactly the bug this assertion
+    # exists to catch - see docs/data-mapping.md 19.5/19.16 and the
+    # 2026-09-17 backend-integration trace).
+    raw_backend_product_ids = {p.product_id for p in client.list_products() if p.product_id is not None}
+    assert set(item_ids) == raw_backend_product_ids, (
+        f"catalog item_ids {sorted(set(item_ids))} do not match the raw GET /api/ai/products "
+        f"productId set {sorted(raw_backend_product_ids)} - `load_backend_catalog` is remapping "
+        "identity again instead of passing `Product.Id` through verbatim."
+    )
+    # Canary against ever reintroducing the resolver-minted-id bug: a real
+    # backend catalog's ids are not a dense `1..N` run (this project's
+    # live catalog is 82..180 with gaps) - this length-agnostic check
+    # would have caught the original bug too, unlike "N integer ids" alone.
+    assert sorted(item_ids) != list(range(1, len(item_ids) + 1)), (
+        "item_ids are a dense 1..N run - this looks exactly like the resolver-minted-id bug "
+        "(docs/data-mapping.md 19.16), not real backend Product.Id values. Refusing to build ANN."
+    )
 
     item_batch = artifacts.encoder.encode_item_batch(item_ids, product_features, product_embeddings)
     live_item_embeddings = np.asarray(artifacts.item_tower.predict(item_batch, verbose=0))

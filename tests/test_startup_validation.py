@@ -13,6 +13,7 @@ from recommendation.serving.startup_validation import (
     ArtifactValidationError,
     load_or_raise,
     require_artifact_dir,
+    validate_backend_api_product_identity,
     validate_ranker_artifacts,
     validate_retrieval_config,
     validate_two_tower_artifacts,
@@ -156,6 +157,28 @@ def test_vector_index_compatibility_passes_when_sizes_match():
 def test_vector_index_compatibility_rejects_size_mismatch():
     with pytest.raises(ArtifactValidationError, match="VectorIndex"):
         validate_vector_index_compatibility(49, 50)
+
+
+# --- validate_backend_api_product_identity ---------------------------------
+# 2026-09-17 identity refactor (docs/data-mapping.md 19.5/19.16): a
+# backend_api artifact whose item ids are a dense 1..N run is exactly the
+# shape of the resolver-minted-id bug, not real, non-contiguous backend
+# Product.Id values - "N integer ids" alone would never catch it.
+
+def test_backend_api_identity_check_passes_for_non_contiguous_real_ids():
+    validate_backend_api_product_identity([85, 105, 162], "backend_api")  # no raise
+
+
+def test_backend_api_identity_check_rejects_dense_one_to_n_ids():
+    with pytest.raises(ArtifactValidationError, match="resolver-minted-id bug"):
+        validate_backend_api_product_identity([1, 2, 3], "backend_api")
+
+
+def test_backend_api_identity_check_is_a_noop_for_other_data_sources():
+    # synthetic/sqlite have always used a dense 1..N id scheme by design -
+    # not a symptom of anything, so must never raise for them.
+    validate_backend_api_product_identity([1, 2, 3], "sqlite")
+    validate_backend_api_product_identity([1, 2, 3], "synthetic")
 
 
 # --- validate_retrieval_config ----------------------------------------------

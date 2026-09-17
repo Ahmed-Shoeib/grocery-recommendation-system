@@ -52,6 +52,7 @@ from recommendation.serving.pipeline import recommend as run_pipeline
 from recommendation.serving.startup_validation import (
     load_or_raise,
     require_artifact_dir,
+    validate_backend_api_product_identity,
     validate_ranker_artifacts,
     validate_retrieval_config,
     validate_two_tower_artifacts,
@@ -349,6 +350,7 @@ def build_recommendation_service(config: AppConfig) -> RecommendationService:
 
     two_tower_artifacts = load_or_raise("Two-Tower", two_tower_dir, load_two_tower_artifacts)
     validate_two_tower_artifacts(two_tower_artifacts, config)
+    validate_backend_api_product_identity(two_tower_artifacts.item_ids, config.paths.data_source)
     ranker_artifacts = load_or_raise("ranker", ranker_dir, load_ranker_artifacts)
     validate_ranker_artifacts(ranker_artifacts)
     validate_retrieval_config(config.retrieval)

@@ -15,19 +15,37 @@ dropped (counted + logged), never allowed to mint a phantom product id or
 attach to the wrong one (docs/data-mapping.md section 19, and the
 eligibility/data validation contract in section 5).
 
-Product identity key (docs/data-mapping.md 19.5): the resolver key for a
-product is its stable backend `Product.Id` (`dtos.ApiProduct.product_id`)
-when the source row carries one, else its slug - decided per product, per
-load. **As of the 2026-09-15 atomic source switch**, `backend.client
+**Product identity (2026-09-17 refactor - docs/data-mapping.md 19.5/19.16):
+the canonical `product_id` IS the backend's `Product.Id`, passed through
+verbatim - `RawProduct.id = p.product_id`, never a value minted by
+`ExternalIdentityResolver`.** A prior version of this module routed every
+product through `resolver.resolve_product(str(p.product_id))`, which -
+despite the name - does not return its input back: it mints a fresh,
+unrelated, sequentially-assigned internal int per first-seen key (see
+`identity.py`'s namespace counter). That silently created a SECOND product
+identity space (a dense `1..N`) sitting between the backend's real,
+non-contiguous `Product.Id` (e.g. 82..180 with gaps) and every downstream
+consumer (features, embeddings, the ANN index, the ranker, the
+recommendation API) - the exact bug a live backend-integration trace
+confirmed end to end (recommender `product_id=23` for a product whose
+real `Product.Id` was 105, reproduced for every sampled recommendation).
+`ExternalIdentityResolver` is still exactly right for categories (slug)
+and users (GUID) - neither has a numeric identity at all - and is kept as
+a defensive fallback for a product row that (still, in principle) carries
+no `product_id` at all (see `_SLUG_FALLBACK_ID_BASE` below); it is simply
+no longer invoked for the common case, where the row already carries the
+one and only id that matters.
+
+**As of the 2026-09-15 atomic source switch**, `backend.client
 .BackendApiClient.list_products`/`list_activities` read
 `GET /api/ai/products`/`GET /api/ai/user-activities`, which always
-populate `product_id` - so every product/activity resolves by `Product.Id`
-in live use today; slug remains modeled and populated purely as metadata
-(`RawProduct.slug`) and as a defensive fallback that is not expected to
-ever actually trigger against this source. See the per-field notes below
-and in `dtos.py`, and docs/data-mapping.md 19.5 for the full migration
-story (including why the legacy plain `/api/products`/`/api/user-activities`
-are no longer called by `backend_api` at all).
+populate `product_id` - so every live product/activity row passes its
+`Product.Id` straight through as the canonical id today; slug remains
+modeled and populated purely as metadata (`RawProduct.slug`). See the
+per-field notes below and in `dtos.py`, and docs/data-mapping.md 19.5 for
+the full migration story (including why the legacy plain
+`/api/products`/`/api/user-activities` are no longer called by
+`backend_api` at all).
 
 Field-availability vs the ERD-backed paths (verified against the live API,
 most recently 2026-09-15): the backend product projection has NO brand,
@@ -64,6 +82,29 @@ logger = get_logger(__name__)
 # endpoint is still gated) rather than emit one 401 per active user.
 _ENRICH_AUTH_PROBE_LIMIT = 3
 
+# Defensive-only fallback identity for a product row that carries no
+# `product_id` at all (no live source has done this since the 2026-09-15
+# switch - see module docstring). Offset comfortably above any realistic
+# `Product.Id` (an existing int32 column, observed in the low hundreds)
+# so a resolver-minted fallback id can never collide with, or be mistaken
+# for, a real backend `Product.Id` - the two id spaces are disjoint by
+# construction, not by convention.
+_SLUG_FALLBACK_ID_BASE = 1_000_000_000
+
+
+def _slug_fallback_product_id(resolver: ExternalIdentityResolver, slug: str) -> int:
+    """Mints (or reuses) a fallback id for a product with no `product_id` -
+    catalog-load only, exactly like `resolver.resolve_product` itself
+    (never called from activity/review resolution, which must only ever
+    look up, never mint - see `_peek_slug_fallback_product_id`).
+    """
+    return _SLUG_FALLBACK_ID_BASE + resolver.resolve_product(slug)
+
+
+def _peek_slug_fallback_product_id(resolver: ExternalIdentityResolver, slug: str) -> int | None:
+    raw = resolver.peek_product(slug)
+    return None if raw is None else _SLUG_FALLBACK_ID_BASE + raw
+
 
 class BackendCatalog:
     """The catalog half of a backend load (products + categories + the
@@ -79,7 +120,7 @@ class BackendCatalog:
         product_tags: list[RawProductTag],
         category_id_by_slug: dict[str, int],
         category_id_by_name: dict[str, int],
-        product_id_by_backend_id: dict[int, int] | None = None,
+        product_ids: set[int] | None = None,
     ) -> None:
         self.categories = categories
         self.products = products
@@ -88,15 +129,16 @@ class BackendCatalog:
         self.category_id_by_slug = category_id_by_slug
         self.category_id_by_name = category_id_by_name
         self.product_slugs = {p.slug for p in products}
-        # Backend int32 Product.Id -> internal product id, populated by
-        # `load_backend_catalog` for every product whose source row carried
-        # `product_id` - since the 2026-09-15 switch to `GET /api/ai/products`
-        # (see `dtos.ApiProduct`), that is every product. `_resolve_review_product`
-        # reads this, closing the `/api/reviews` product join - see 19.5/19.6.
-        self.product_id_by_backend_id = dict(product_id_by_backend_id or {})
-        # Validation set mirroring `product_slugs`, for activity/review rows
-        # that reference a product by backend id rather than by slug.
-        self.product_ids = set(self.product_id_by_backend_id)
+        # The set of canonical ids that are genuinely the backend's own
+        # `Product.Id` (i.e. NOT a `_SLUG_FALLBACK_ID_BASE`-offset id) -
+        # populated by `load_backend_catalog` for every product whose
+        # source row carried `product_id`. Since the 2026-09-15 switch to
+        # `GET /api/ai/products`, that is every product. Activities/reviews
+        # may only resolve against THIS set (never against a slug-fallback
+        # id, which a numeric `productId` on an activity/review row could
+        # never legitimately mean) - see `load_backend_events`/
+        # `_resolve_review_product`.
+        self.product_ids = set(product_ids or ())
 
 
 def load_backend_catalog(client: BackendApiClient, resolver: ExternalIdentityResolver) -> BackendCatalog:
@@ -113,7 +155,7 @@ def load_backend_catalog(client: BackendApiClient, resolver: ExternalIdentityRes
 
     api_products = client.list_products()
     raw_products: list[RawProduct] = []
-    product_id_by_backend_id: dict[int, int] = {}
+    numeric_product_ids: set[int] = set()
     clamped_price = clamped_stock = 0
     for p in api_products:
         price = p.price
@@ -123,16 +165,21 @@ def load_backend_catalog(client: BackendApiClient, resolver: ExternalIdentityRes
         stock = p.stock_quantity if p.stock_quantity and p.stock_quantity > 0 else 0
         if p.stock_quantity is not None and p.stock_quantity < 0:
             clamped_stock += 1
-        # Identity key: prefer the stable backend ProductId the moment a
-        # product source provides one, falling back to slug - see
-        # `dtos.ApiProduct.product_id` and docs/data-mapping.md 19.5.
-        # `GET /api/ai/products` (the authoritative source as of the
-        # 2026-09-15 switch) always sends `product_id`, so this resolves by
-        # id for every product in live use; the slug branch is a defensive
-        # fallback only, not expected to trigger against this source.
-        internal_id = resolver.resolve_product(str(p.product_id) if p.product_id is not None else p.slug)
+        # Canonical id: the backend's own `Product.Id`, passed through
+        # verbatim - NEVER minted by `ExternalIdentityResolver` (see module
+        # docstring). `GET /api/ai/products` (the authoritative source as
+        # of the 2026-09-15 switch) always sends `product_id`, so this is
+        # every product's id in live use; the slug-fallback branch only
+        # fires for a row with no `product_id` at all (not expected to
+        # trigger against this source - kept for the legacy `ApiProduct`
+        # shape and tests, and isolated into its own disjoint id space so
+        # it can never collide with, or be confused for, a real
+        # `Product.Id` - see `_SLUG_FALLBACK_ID_BASE`).
         if p.product_id is not None:
-            product_id_by_backend_id[p.product_id] = internal_id
+            internal_id = p.product_id
+            numeric_product_ids.add(internal_id)
+        else:
+            internal_id = _slug_fallback_product_id(resolver, p.slug)
         raw_products.append(
             RawProduct(
                 id=internal_id,
@@ -180,7 +227,7 @@ def load_backend_catalog(client: BackendApiClient, resolver: ExternalIdentityRes
     # unconsumed pending the real-backend retraining decision - see
     # docs/data-mapping.md section 19.12, which also records the
     # dev-vs-production discrepancy for the backend team to reconcile.
-    return BackendCatalog(raw_categories, raw_products, [], [], cat_id_by_slug, cat_id_by_name, product_id_by_backend_id)
+    return BackendCatalog(raw_categories, raw_products, [], [], cat_id_by_slug, cat_id_by_name, numeric_product_ids)
 
 
 def load_backend_events(
@@ -203,14 +250,17 @@ def load_backend_events(
     Product resolution prefers `row.product_id` (the stable backend
     `Product.Id`, see `dtos.ApiActivity.product_id`) when the row carries
     one, falling back to `row.slug` otherwise - mirroring exactly how
-    `load_backend_catalog` chose each product's resolver key, so a row
+    `load_backend_catalog` chose each product's canonical id, so a row
     always resolves through whichever key its own source actually
     populated. `AiUserActivityResponse.productId` is present on every row
     this source sends (nullable in the schema, but not observed null live);
     `row.slug` is always `None` from this source (the schema has no such
     field) - the slug branch below exists only for the still-supported
     `ApiActivity` shape in general (e.g. tests), not because this source
-    ever uses it.
+    ever uses it. The numeric-id branch is a plain pass-through (the row's
+    `product_id` IS the canonical id once validated against the catalog) -
+    the resolver is never consulted for it; only the slug-fallback branch
+    still uses the resolver (`peek`, never mint - see module docstring).
     """
     interactions: list[UserInteraction] = []
     guid_by_internal: dict[int, str] = {}
@@ -230,10 +280,10 @@ def load_backend_events(
         product_id = None
         if row.product_id is not None:
             if row.product_id in catalog.product_ids:
-                product_id = resolver.peek_product(str(row.product_id))
+                product_id = row.product_id  # canonical backend Product.Id, passed through directly
         elif row.slug:
             if row.slug in catalog.product_slugs:
-                product_id = resolver.peek_product(row.slug)
+                product_id = _peek_slug_fallback_product_id(resolver, row.slug)
 
         if product_id is None:
             if row.product_id is None and not row.slug:
@@ -369,13 +419,15 @@ def load_backend_reviews(
     User side: `ApiReview.user_guid` (present on every row) is the bridge
     to the GUID this load already resolved from the activity stream;
     `_resolve_review_user` is a direct dict lookup, no guessing, no
-    hashing, no N+1 calls. Product side: `_resolve_review_product` reads
-    `BackendCatalog.product_id_by_backend_id`, populated by
-    `load_backend_catalog` from `GET /api/ai/products` (the authoritative
-    product source since the 2026-09-15 switch, which always carries
-    `product_id`) - so the product join is populated end to end in live
-    use now, not just in unit tests. See docs/data-mapping.md section
-    19.5/19.6 for live join counts. Reviews remain an *optional* auxiliary
+    hashing, no N+1 calls. Product side: `_resolve_review_product` checks
+    `review.product_id` directly against `BackendCatalog.product_ids`
+    (populated by `load_backend_catalog` from `GET /api/ai/products`, the
+    authoritative product source since the 2026-09-15 switch, which always
+    carries `product_id`) - the review's `productId` IS the canonical id
+    once validated, no translation step - so the product join is populated
+    end to end in live use now, not just in unit tests. See
+    docs/data-mapping.md section 19.5/19.6 for live join counts. Reviews
+    remain an *optional* auxiliary
     signal either way (`EngagementProfile.reviews` defaults to `[]`, and
     `features.product_features.build_product_features` falls back to
     neutral rating defaults for a review-free catalog), so any rows that
@@ -458,7 +510,7 @@ def load_backend_reviews(
     if dropped_unknown_product:
         logger.warning(
             "backend load: %d of %d review row(s) dropped - productId not found in "
-            "BackendCatalog.product_id_by_backend_id (the id names a product outside the "
+            "BackendCatalog.product_ids (the id names a product outside the "
             "current /api/ai/products catalog - see docs/data-mapping.md section 19.5/19.6).",
             dropped_unknown_product, len(api_reviews),
         )
@@ -477,16 +529,18 @@ def _valid_rating(rating: float | None) -> float | None:
 
 
 def _resolve_review_product(review: ApiReview, catalog: BackendCatalog) -> int | None:
-    """Backend int32 `productId` -> internal product id, via
-    `BackendCatalog.product_id_by_backend_id` (populated by
+    """Backend int32 `productId` IS the canonical product id - validated
+    (not translated) against `BackendCatalog.product_ids` (populated by
     `load_backend_catalog` from `GET /api/ai/products`, the authoritative
     product source since the 2026-09-15 switch - see 19.5). Returns `None`
-    when that map has no entry for this row's `productId` - meaning the id
-    genuinely names a product outside the current catalog (deleted,
-    out-of-stock-and-filtered, or a stale review referencing a removed
-    product), never a missing-data-source gap anymore.
+    when the id is not in that set - meaning it genuinely names a product
+    outside the current catalog (deleted, out-of-stock-and-filtered, or a
+    stale review referencing a removed product), never a missing-data-
+    source gap anymore.
     """
-    return catalog.product_id_by_backend_id.get(review.product_id) if review.product_id is not None else None
+    if review.product_id is None:
+        return None
+    return review.product_id if review.product_id in catalog.product_ids else None
 
 
 def _resolve_review_user(review: ApiReview, internal_by_guid: dict[str, int]) -> int | None:

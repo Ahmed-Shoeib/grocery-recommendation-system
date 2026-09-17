@@ -47,12 +47,12 @@ def test_catalog_maps_fields_and_flags_backend_gaps(tmp_path):
     assert weird.category_id == 0  # placeholder category slug not in /api/categories
 
 
-def test_product_id_becomes_the_resolver_key_when_the_source_provides_it(tmp_path):
-    """Forward-compatible seam: `dtos.ApiProduct.product_id` is always
-    `None` on today's live `/api/products` (docs/data-mapping.md 19.5), but
-    the moment a product source populates it, `load_backend_catalog` must
-    key identity on it instead of slug, and populate
-    `product_id_by_backend_id` so `/api/reviews` starts joining.
+def test_product_id_passes_through_directly_when_the_source_provides_it(tmp_path):
+    """The canonical id IS `dtos.ApiProduct.product_id`, verbatim - no
+    resolver lookup, no remapping. `product_id` is `None` on the legacy
+    `/api/products` shape (docs/data-mapping.md 19.5), but the moment a
+    product source populates it (the live `/api/ai/products` shape, since
+    the 2026-09-15 switch), `RawProduct.id` must equal it exactly.
     """
     r = _resolver(tmp_path)
     prods = [
@@ -62,12 +62,14 @@ def test_product_id_becomes_the_resolver_key_when_the_source_provides_it(tmp_pat
     catalog = load_backend_catalog(FakeBackendClient(products=prods, categories=_CATS), r)
 
     by_slug = {p.slug: p for p in catalog.products}
-    assert catalog.product_id_by_backend_id == {501: by_slug["orange-juice"].id, 502: by_slug["headphones"].id}
+    assert by_slug["orange-juice"].id == 501
+    assert by_slug["headphones"].id == 502
     assert catalog.product_ids == {501, 502}
-    # The registry key is the backend id, not the slug - `peek_product`
-    # only finds it via the id-shaped key.
-    assert r.peek_product(str(501)) == by_slug["orange-juice"].id
+    # The resolver is never consulted for a numeric-id product - neither
+    # the raw id nor its stringified form was ever handed to it.
+    assert r.peek_product("501") is None
     assert r.peek_product("orange-juice") is None
+    assert r.counts()["product"] == 0
 
 
 def test_changed_slug_does_not_change_product_identity_once_keyed_by_product_id(tmp_path):
@@ -164,12 +166,15 @@ def test_products_activities_and_reviews_all_resolve_to_the_same_canonical_produ
     assert reviews[0].user_id == interactions[0].user_id
 
 
-def test_full_catalog_load_never_leaves_a_slug_keyed_entry_when_every_product_has_an_id(tmp_path):
-    """No mixed slug/ProductId duplicates: once every product source row
-    carries `product_id` (the live shape since the switch - every row
-    from `GET /api/ai/products` has one), the resolver's `product`
-    namespace must be keyed entirely by stringified ids, never by any
-    product's slug.
+def test_full_catalog_load_never_touches_the_resolver_product_namespace_when_every_product_has_an_id(tmp_path):
+    """Once every product source row carries `product_id` (the live shape
+    since the switch - every row from `GET /api/ai/products` has one), the
+    resolver's `product` namespace must stay completely EMPTY - neither
+    the raw id nor the slug of any product is ever handed to
+    `ExternalIdentityResolver`. This is the direct fix for the prior
+    behaviour (superseded 2026-09-17), where every numeric id was handed
+    to the resolver and silently remapped to an unrelated, densely-
+    numbered internal id.
     """
     r = _resolver(tmp_path)
     prods = [
@@ -180,9 +185,47 @@ def test_full_catalog_load_never_leaves_a_slug_keyed_entry_when_every_product_ha
     r.save()
 
     doc = json.loads((tmp_path / "reg.json").read_text(encoding="utf-8"))
-    keys = set(doc["namespaces"]["product"]["by_key"].keys())
-    assert keys == {"501", "502"}
-    assert "orange-juice" not in keys and "headphones" not in keys
+    assert doc["namespaces"]["product"]["by_key"] == {}
+
+
+def test_non_contiguous_real_backend_ids_survive_catalog_activity_and_review_joins_unchanged(tmp_path):
+    """End-to-end canonical-identity proof (2026-09-17 refactor):
+    real backend `Product.Id` values are NOT contiguous (this project's
+    live catalog runs 82..180 with gaps) - a fixture using exactly that
+    shape (85, 105, 162, deliberately out of order and with large gaps)
+    must come out the other side of catalog load, activity join, and
+    review join with those SAME three integers, never renumbered to
+    `1, 2, 3` by `ExternalIdentityResolver` or anything else.
+    """
+    r = _resolver(tmp_path)
+    prods = [
+        {"slug": "apple-red-delicious", "productId": 85, "name": "Apple Red Delicious", "price": 3.0, "categorySlug": "groceries"},
+        {"slug": "pineapple", "productId": 105, "name": "Pineapple", "price": 4.0, "categorySlug": "groceries"},
+        {"slug": "zucchini", "productId": 162, "name": "Zucchini", "price": 2.0, "categorySlug": "groceries"},
+    ]
+    catalog = load_backend_catalog(FakeBackendClient(products=prods, categories=_CATS), r)
+    assert {p.id for p in catalog.products} == {85, 105, 162}
+    assert catalog.product_ids == {85, 105, 162}
+
+    activities = [ApiActivity.model_validate({
+        "userId": "g1", "actionType": "AddToCart", "productId": 105, "timestamp": "2026-08-01T10:00:00",
+    })]
+    interactions, guid_by_internal = load_backend_events(activities, r, catalog)
+    assert len(interactions) == 1
+    assert interactions[0].product_id == 105  # not 2, not any resolver-minted position
+
+    reviews = load_backend_reviews(
+        FakeBackendClient(reviews=[
+            {"reviewId": 1, "userId": 9, "userGuid": "g1", "productId": 162, "rating": 5, "createdAt": "2026-09-01T10:00:00"},
+        ]),
+        catalog,
+        guid_by_internal,
+    )
+    assert len(reviews) == 1
+    assert reviews[0].product_id == 162
+
+    # And the resolver's product namespace was never touched.
+    assert r.counts()["product"] == 0
 
 
 def test_ids_are_stable_across_a_reload(tmp_path):
@@ -314,31 +357,36 @@ def test_age_group_stays_none_on_the_real_schema_but_is_forward_compatible(tmp_p
 # updatedAt} - userGuid was added live 2026-09-15 and is the user-identity
 # bridge (`loader._resolve_review_user`); userId/productId remain the
 # backend's int32 primary keys, with productId still the join key on the
-# product side (`_resolve_review_product`, via
-# `BackendCatalog.product_id_by_backend_id`).
+# product side (`_resolve_review_product`, a direct membership check
+# against `BackendCatalog.product_ids` - the review's `productId` IS the
+# canonical id once validated, no translation).
 
 
-def _catalog_with_backend_ids(tmp_path, mapping):
-    """A loaded catalog plus the backend-id -> internal-id map that
-    `/api/products` will populate once it exposes its numeric id. Lets the
-    resolution path be tested today without inventing a DTO field.
+def _catalog_with_products(tmp_path, product_ids: list[int]):
+    """A loaded catalog whose products carry the given real backend
+    `Product.Id` values directly - lets review-resolution tests exercise
+    `catalog.product_ids` membership without depending on `_PRODS` (whose
+    products are slug-only, carrying no numeric id at all).
     """
-    catalog = load_backend_catalog(FakeBackendClient(products=_PRODS, categories=_CATS), _resolver(tmp_path))
-    catalog.product_id_by_backend_id.update(mapping)
-    return catalog
+    prods = [
+        {"slug": f"p{pid}", "productId": pid, "name": f"Product {pid}", "price": 1.0, "categorySlug": "groceries"}
+        for pid in product_ids
+    ]
+    return load_backend_catalog(FakeBackendClient(products=prods, categories=_CATS), _resolver(tmp_path))
 
 
 def test_reviews_join_end_to_end_once_the_catalog_itself_exposes_product_id(tmp_path):
-    """The full seam, not the manually-populated shortcut: once
-    `load_backend_catalog` sees `product_id` on a real product row, its
-    `product_id_by_backend_id` map is populated automatically and
-    `load_backend_reviews` resolves against it with no other code change -
-    'ProductId from reviews resolves to the same canonical product'.
+    """The full seam: once `load_backend_catalog` sees `product_id` on a
+    real product row, `load_backend_reviews` resolves reviews against
+    `catalog.product_ids` directly - no translation, no other code
+    change. 'ProductId from reviews resolves to the same canonical
+    product' means the SAME integer, not an equivalent one.
     """
     r = _resolver(tmp_path)
     prods = [{"slug": "orange-juice", "productId": 501, "name": "OJ", "price": 4.0, "categorySlug": "groceries"}]
     catalog = load_backend_catalog(FakeBackendClient(products=prods, categories=_CATS), r)
-    internal_product_id = catalog.products[0].id
+    canonical_product_id = catalog.products[0].id
+    assert canonical_product_id == 501
 
     reviews = load_backend_reviews(
         FakeBackendClient(reviews=[
@@ -348,7 +396,7 @@ def test_reviews_join_end_to_end_once_the_catalog_itself_exposes_product_id(tmp_
         {5: "g7"},
     )
     assert len(reviews) == 1
-    assert reviews[0].product_id == internal_product_id
+    assert reviews[0].product_id == canonical_product_id == 501
 
 
 def test_reviews_are_skipped_without_credentials_and_not_fetched(tmp_path):
@@ -356,22 +404,21 @@ def test_reviews_are_skipped_without_credentials_and_not_fetched(tmp_path):
         reviews=[{"reviewId": 1, "userId": 7, "productId": 3, "rating": 5, "createdAt": "2026-09-01T10:00:00"}],
         has_credentials=False,
     )
-    catalog = _catalog_with_backend_ids(tmp_path, {})
+    catalog = _catalog_with_products(tmp_path, [])
     assert load_backend_reviews(client, catalog, {1: "g1"}) == []
     assert client.review_calls == 0, "a Bearer-gated endpoint must not be called without credentials"
 
 
 def test_empty_reviews_response_is_not_an_error(tmp_path):
-    catalog = _catalog_with_backend_ids(tmp_path, {})
+    catalog = _catalog_with_products(tmp_path, [])
     assert load_backend_reviews(FakeBackendClient(reviews=[]), catalog, {1: "g1"}) == []
 
 
 def test_reviews_with_unjoinable_int_ids_are_dropped_not_fabricated(tmp_path):
-    """Today's live reality: /api/reviews keys on int32 ids that
-    /api/products and /api/user-activities do not expose, so every row is
-    dropped rather than guessed onto some product.
+    """A review `productId` naming a product outside the current catalog
+    is dropped rather than guessed onto some other product.
     """
-    catalog = _catalog_with_backend_ids(tmp_path, {})
+    catalog = _catalog_with_products(tmp_path, [])
     reviews = load_backend_reviews(
         FakeBackendClient(reviews=[
             {"reviewId": 1, "userId": 7, "productId": 3, "rating": 5, "comment": "great",
@@ -384,14 +431,13 @@ def test_reviews_with_unjoinable_int_ids_are_dropped_not_fabricated(tmp_path):
 
 
 def test_resolvable_reviews_become_canonical_raw_reviews(tmp_path):
-    """The seam that activates when the backend exposes its product id:
-    with a populated backend-id map the same rows flow through to
-    canonical `RawReview`s, unchanged downstream.
+    """A review whose `productId` names a real catalog product resolves to
+    that exact id, unchanged, downstream.
     """
-    catalog = _catalog_with_backend_ids(tmp_path, {3: 11})
+    catalog = _catalog_with_products(tmp_path, [11])
     reviews = load_backend_reviews(
         FakeBackendClient(reviews=[
-            {"reviewId": 42, "userId": 7, "userGuid": "guid-7", "productId": 3, "rating": 4, "comment": "good",
+            {"reviewId": 42, "userId": 7, "userGuid": "guid-7", "productId": 11, "rating": 4, "comment": "good",
              "createdAt": "2026-09-01T10:00:00", "updatedAt": None},
         ]),
         catalog,
@@ -410,11 +456,11 @@ def test_user_guid_is_the_join_key_not_the_legacy_int_user_id(tmp_path):
     the *string form* of an internal id's old int `userId` must NOT
     resolve by coincidence - only an actual matching GUID does.
     """
-    catalog = _catalog_with_backend_ids(tmp_path, {3: 11})
+    catalog = _catalog_with_products(tmp_path, [11])
     reviews = load_backend_reviews(
         FakeBackendClient(reviews=[
             # userId=7 matches nothing useful; no userGuid at all -> dropped.
-            {"reviewId": 1, "userId": 7, "productId": 3, "rating": 5, "createdAt": "2026-09-01T10:00:00"},
+            {"reviewId": 1, "userId": 7, "productId": 11, "rating": 5, "createdAt": "2026-09-01T10:00:00"},
         ]),
         catalog,
         {5: "guid-7"},
@@ -431,13 +477,13 @@ def test_product_and_user_resolution_are_counted_independently(tmp_path, caplog)
     """
     import logging
 
-    catalog = _catalog_with_backend_ids(tmp_path, {3: 11})  # only productId 3 is joinable
+    catalog = _catalog_with_products(tmp_path, [11])  # only productId 11 is joinable
     with caplog.at_level(logging.INFO, logger="recommendation.backend.loader"):
         reviews = load_backend_reviews(
             FakeBackendClient(reviews=[
-                # product resolves (3->11), user does not (unknown guid).
-                {"reviewId": 1, "userId": 7, "userGuid": "unknown", "productId": 3, "rating": 5, "createdAt": "2026-09-01T10:00:00"},
-                # user resolves (guid-7), product does not (999 unmapped).
+                # product resolves (11), user does not (unknown guid).
+                {"reviewId": 1, "userId": 7, "userGuid": "unknown", "productId": 11, "rating": 5, "createdAt": "2026-09-01T10:00:00"},
+                # user resolves (guid-7), product does not (999 unknown).
                 {"reviewId": 2, "userId": 7, "userGuid": "guid-7", "productId": 999, "rating": 5, "createdAt": "2026-09-01T10:00:00"},
                 # neither resolves.
                 {"reviewId": 3, "userId": 7, "userGuid": "unknown", "productId": 999, "rating": 5, "createdAt": "2026-09-01T10:00:00"},
@@ -458,10 +504,10 @@ def test_unknown_user_is_dropped_never_minted(tmp_path):
     phantom user id (the activity stream defines the served population) -
     even though the row carries a real-looking, well-formed `userGuid`.
     """
-    catalog = _catalog_with_backend_ids(tmp_path, {3: 11})
+    catalog = _catalog_with_products(tmp_path, [11])
     reviews = load_backend_reviews(
         FakeBackendClient(reviews=[
-            {"reviewId": 1, "userId": 999, "userGuid": "guid-never-seen", "productId": 3, "rating": 5, "createdAt": "2026-09-01T10:00:00"},
+            {"reviewId": 1, "userId": 999, "userGuid": "guid-never-seen", "productId": 11, "rating": 5, "createdAt": "2026-09-01T10:00:00"},
         ]),
         catalog,
         {5: "guid-7"},
@@ -473,15 +519,15 @@ def test_malformed_ratings_and_ids_are_dropped_without_raising(tmp_path):
     """`RawReview.rating` is ge=1/le=5 - an out-of-range row must be
     counted and skipped, never abort the whole load.
     """
-    catalog = _catalog_with_backend_ids(tmp_path, {3: 11})
+    catalog = _catalog_with_products(tmp_path, [11])
     reviews = load_backend_reviews(
         FakeBackendClient(reviews=[
-            {"reviewId": 1, "userId": 7, "userGuid": "guid-7", "productId": 3, "rating": 0, "createdAt": "2026-09-01T10:00:00"},
-            {"reviewId": 2, "userId": 7, "userGuid": "guid-7", "productId": 3, "rating": 9, "createdAt": "2026-09-01T10:00:00"},
-            {"reviewId": 3, "userId": 7, "userGuid": "guid-7", "productId": 3, "rating": None, "createdAt": "2026-09-01T10:00:00"},
-            {"reviewId": None, "userId": 7, "userGuid": "guid-7", "productId": 3, "rating": 5, "createdAt": "2026-09-01T10:00:00"},
+            {"reviewId": 1, "userId": 7, "userGuid": "guid-7", "productId": 11, "rating": 0, "createdAt": "2026-09-01T10:00:00"},
+            {"reviewId": 2, "userId": 7, "userGuid": "guid-7", "productId": 11, "rating": 9, "createdAt": "2026-09-01T10:00:00"},
+            {"reviewId": 3, "userId": 7, "userGuid": "guid-7", "productId": 11, "rating": None, "createdAt": "2026-09-01T10:00:00"},
+            {"reviewId": None, "userId": 7, "userGuid": "guid-7", "productId": 11, "rating": 5, "createdAt": "2026-09-01T10:00:00"},
             {"reviewId": 5, "userId": 7, "userGuid": "guid-7", "productId": None, "rating": 5, "createdAt": "2026-09-01T10:00:00"},
-            {"reviewId": 6, "userId": 7, "userGuid": "guid-7", "productId": 3, "rating": 5, "createdAt": "2026-09-01T10:00:00"},
+            {"reviewId": 6, "userId": 7, "userGuid": "guid-7", "productId": 11, "rating": 5, "createdAt": "2026-09-01T10:00:00"},
         ]),
         catalog,
         {5: "guid-7"},
@@ -490,11 +536,11 @@ def test_malformed_ratings_and_ids_are_dropped_without_raising(tmp_path):
 
 
 def test_missing_and_aware_timestamps_are_normalized_to_naive_utc(tmp_path):
-    catalog = _catalog_with_backend_ids(tmp_path, {3: 11})
+    catalog = _catalog_with_products(tmp_path, [11])
     reviews = load_backend_reviews(
         FakeBackendClient(reviews=[
-            {"reviewId": 1, "userId": 7, "userGuid": "guid-7", "productId": 3, "rating": 5, "createdAt": None},
-            {"reviewId": 2, "userId": 7, "userGuid": "guid-7", "productId": 3, "rating": 5, "createdAt": "2026-09-01T12:00:00+02:00"},
+            {"reviewId": 1, "userId": 7, "userGuid": "guid-7", "productId": 11, "rating": 5, "createdAt": None},
+            {"reviewId": 2, "userId": 7, "userGuid": "guid-7", "productId": 11, "rating": 5, "createdAt": "2026-09-01T12:00:00+02:00"},
         ]),
         catalog,
         {5: "guid-7"},
@@ -509,30 +555,28 @@ def test_auth_failure_degrades_instead_of_failing_the_load(tmp_path):
         def list_reviews(self):
             raise BackendAuthError("GET /api/reviews returned 403", status_code=403)
 
-    catalog = _catalog_with_backend_ids(tmp_path, {})
+    catalog = _catalog_with_products(tmp_path, [])
     assert load_backend_reviews(Unauthorized(), catalog, {1: "g1"}) == []
 
 
 def test_canonical_reviews_reach_the_shared_review_adapter(tmp_path):
     """The downstream half of the boundary: once `load_backend_reviews`
-    resolves rows (backend-id map populated, as it will be when the
-    backend exposes its product id), the `RawReview`s it returns are the
-    exact type `InMemoryReviewAdapter` consumes for the synthetic and
-    SQLite sources - so `EngagementProfile.reviews` and
-    `build_product_features` (already covered by test_product_features.py)
-    need no backend-specific code. Here we assert the hand-off:
-    per-user `ReviewRecord`s with resolved internal ids and the right
-    rating/product mapping.
+    resolves rows, the `RawReview`s it returns are the exact type
+    `InMemoryReviewAdapter` consumes for the synthetic and SQLite sources -
+    so `EngagementProfile.reviews` and `build_product_features` (already
+    covered by test_product_features.py) need no backend-specific code.
+    Here we assert the hand-off: per-user `ReviewRecord`s with the right
+    canonical-id/rating mapping.
     """
     from recommendation.adapters.review_adapter import InMemoryReviewAdapter
     from recommendation.features.product_features import compute_review_stats
 
-    catalog = _catalog_with_backend_ids(tmp_path, {3: 11, 4: 12})
+    catalog = _catalog_with_products(tmp_path, [11, 12])
     raw_reviews = load_backend_reviews(
         FakeBackendClient(reviews=[
-            {"reviewId": 1, "userId": 7, "userGuid": "guid-7", "productId": 3, "rating": 5, "comment": "a",
+            {"reviewId": 1, "userId": 7, "userGuid": "guid-7", "productId": 11, "rating": 5, "comment": "a",
              "createdAt": "2026-09-01T10:00:00"},
-            {"reviewId": 2, "userId": 7, "userGuid": "guid-7", "productId": 4, "rating": 3, "comment": "b",
+            {"reviewId": 2, "userId": 7, "userGuid": "guid-7", "productId": 12, "rating": 3, "comment": "b",
              "createdAt": "2026-09-02T10:00:00"},
         ]),
         catalog,

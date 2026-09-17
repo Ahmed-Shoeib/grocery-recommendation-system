@@ -3085,3 +3085,74 @@ violations), and the rebuilt live real-catalog ANN (85 real `ProductId`s,
 reject the prior `production_safe_v1`/24-feature artifacts automatically
 with no validator code changes needed.
 
+### 19.16 Canonical product identity fix: `Product.Id` passthrough, no second id space (2026-09-17)
+
+**The bug.** 19.5 documented `ExternalIdentityResolver.resolve_product`
+as the seam that bridges "whichever external key a source provides" to
+"a stable internal int" - correct in spirit, but its actual behavior was
+never audited against that description: `resolve_product(key)` does not
+return its input back. It mints a **fresh, sequentially-assigned integer
+per first-seen key** (`identity.py`'s per-namespace counter), same as it
+always has for slugs and GUIDs. 19.5's migration handed it
+`str(product_id)` as the key and treated the returned int as if it *were*
+`product_id` - it never was. The result: a live backend catalog of 85
+products with real, non-contiguous `Product.Id`s (82..180, gaps at 90,
+135, 163-173, 178) was silently renumbered to a dense `1..85`, and that
+renumbered id - not `Product.Id` - is what reached features, embeddings,
+the ANN index, the ranker, and every `backend_api` API response.
+
+**How it was found.** A live backend-integration trace (2026-09-17,
+requested by the backend team reporting "the ProductId returned by the
+recommender still does not match") called `GET /v1/users/{1,275,547}
+/recommendations`, cross-referenced every returned `product_id` against
+`data/processed/backend_identity_registry.json`'s `product.by_key` map,
+and found every single sampled recommendation mismatched - e.g.
+`product_id=23` ("Pineapple") vs. the real `Product.Id=105`.
+`models/backend_api/live_ann_build_report.json`'s `product_ids: [1..85]`
+was the artifact-level confirmation: a real backend catalog's ids are
+never a clean contiguous range.
+
+**The fix.** `backend.loader.load_backend_catalog` no longer calls
+`resolver.resolve_product` for a product that carries `product_id`:
+`RawProduct.id = p.product_id`, verbatim. `load_backend_events`/
+`_resolve_review_product` now validate an activity/review row's
+`productId` by direct set membership (`BackendCatalog.product_ids`)
+instead of looking anything up through the resolver - the id was never
+translated in the first place, so there is nothing left to look up.
+`ExternalIdentityResolver` is unchanged and still exactly right for
+categories (slug) and users (GUID), neither of which has a numeric
+identity of its own; it is also kept as a defensive fallback
+(`_SLUG_FALLBACK_ID_BASE = 1_000_000_000`-offset, so it can never collide
+with a real `Product.Id`) for a product row that carries no `product_id`
+at all - not expected to ever fire against the live `GET /api/ai/products`
+source, same as before this fix. The local dev
+`backend_identity_registry.json`'s `product` namespace was reset to empty
+(`category`/`user` namespaces untouched) since it now holds nothing under
+normal live operation.
+
+**Retraining scope - narrower than it looks.** The bug lived entirely in
+`backend.loader`, which `scripts/train_backend_api_pipeline.py` never
+calls (it trains Two-Tower/ranker *weights* against the synthetic
+`data/sqlite/production_aligned_training.db`, whose own product ids
+(1..120) are an intentionally separate, always-synthetic training-catalog
+scheme - see that script's module docstring - and were never a symptom of
+this bug). The Two-Tower/ranker weights themselves have no id-dependent
+behavior (they consume feature vectors, not raw ids), so they did not
+need retraining for this fix. What DID need rebuilding is
+`scripts/build_live_backend_ann.py`'s output - the live-serving
+`item_embeddings.npz`/ANN, which calls `load_backend_catalog` directly and
+is therefore where the bug actually reached production. `build_live_backend_ann.py`
+was also strengthened: it now cross-checks its `item_ids` against the RAW
+`GET /api/ai/products` response (not just internal self-consistency,
+which a resolver-minted id set would pass just as easily as a real one),
+and refuses to build against a dense `1..N` id set at all.
+`serving.startup_validation.validate_backend_api_product_identity` adds
+the same dense-`1..N` canary at serving startup, `backend_api`-only, so
+the exact bug shape can never silently redeploy through any path.
+
+**Not retrained, and correctly so**: `models/sqlite_baseline/` (a fully
+separate loader, never touches `ExternalIdentityResolver` for products at
+all) and `data/sqlite/production_aligned_training.db` (verified
+unaffected - still 120 synthetic products, ids 1..120, by design, not a
+manifestation of this bug).
+
