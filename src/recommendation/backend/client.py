@@ -51,6 +51,7 @@ from recommendation.backend.dtos import (
     ApiProduct,
     ApiReview,
     ApiUser,
+    ApiUserIdentity,
 )
 from recommendation.backend.errors import (
     BackendAuthError,
@@ -287,6 +288,35 @@ class BackendApiClient:
                 f"GET /api/ai/products: expected a JSON array in 'data', got {type(data).__name__}"
             )
         return [ApiProduct.model_validate(r) for r in data]
+
+    def list_ai_user_identities(self) -> list[ApiUserIdentity]:
+        """`GET /api/ai/users` (2026-09-18 user-identity migration,
+        `ai-user-identity-mapping`) - the authoritative, protected,
+        service-to-service `User.Id <-> GUID` mapping. Requires `users:read`.
+
+        Modeled as a flat array, same envelope convention as the other
+        small `/api/ai/*` list resources this client already calls this
+        way (`list_products` - see that method's docstring; Swagger
+        declares no query parameters for those routes either). This is
+        the live contract as actually observed for `/api/ai/products`;
+        `/api/ai/users` was not independently live-probed for this change
+        (the backend was unreachable at implementation time - see
+        docs/data-mapping.md 19.17) - if the backend ships a paginated
+        envelope instead, this raises `BackendContractError` below rather
+        than silently returning an empty/wrong identity set, so a shape
+        mismatch fails loudly at the very first load rather than quietly
+        starving the roster.
+        """
+        data = self._request("/api/ai/users", auth=True)
+        if data is None:
+            return []
+        if not isinstance(data, list):
+            raise BackendContractError(
+                f"GET /api/ai/users: expected a flat JSON array in 'data', got {type(data).__name__} - "
+                "if the backend now paginates this endpoint, list_ai_user_identities() needs updating "
+                "to match (see its docstring)."
+            )
+        return [ApiUserIdentity.model_validate(r) for r in data]
 
     def get_product(self, slug: str) -> ApiProduct | None:
         """Legacy single-product lookup via the public `/api/products/{slug}`

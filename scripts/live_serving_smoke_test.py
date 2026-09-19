@@ -51,7 +51,7 @@ from recommendation.adapters.user_events_adapter import UserEventsAdapter
 from recommendation.backend.client import BackendApiClient
 from recommendation.backend.dtos import ApiActivity
 from recommendation.backend.identity import ExternalIdentityResolver
-from recommendation.backend.loader import load_backend_catalog, load_backend_events
+from recommendation.backend.loader import load_ai_user_identities, load_backend_catalog, load_backend_events
 from recommendation.embeddings.encoder import SentenceTransformerEncoder
 from recommendation.embeddings.product_embeddings import get_or_compute_product_embeddings
 from recommendation.features.price import build_price_catalog_context
@@ -181,7 +181,12 @@ def main() -> None:
     resolver_for_events = ExternalIdentityResolver(resolve_path(config.paths.backend_identity_registry))
     # Re-load catalog against this resolver instance so product ids resolve consistently.
     catalog_for_events = load_backend_catalog(client, resolver_for_events)
-    interactions, guid_by_internal = load_backend_events(activities, resolver_for_events, catalog_for_events)
+    # User identity is resolved via the authoritative GET /api/ai/users mapping
+    # (backend User.Id), never minted by the resolver - see backend/loader.py.
+    user_id_by_guid_for_events, _ = load_ai_user_identities(client)
+    interactions, guid_by_internal = load_backend_events(
+        activities, resolver_for_events, catalog_for_events, user_id_by_guid_for_events
+    )
     print(f"canonical interactions resolved: {len(interactions)}  distinct real users touched: {len(guid_by_internal)}")
 
     action_counts = Counter(e.action_type.value for e in interactions)

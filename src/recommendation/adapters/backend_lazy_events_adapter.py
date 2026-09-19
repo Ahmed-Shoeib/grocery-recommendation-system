@@ -86,17 +86,30 @@ class LazyBackendUserEventsAdapter(UserEventsAdapter):
         resolver: ExternalIdentityResolver,
         catalog: BackendCatalog,
         guid_by_internal: dict[int, str],
+        user_id_by_guid: dict[str, int],
         max_pages: int,
         max_rows: int,
         store: UserActivityCacheStore,
         store_path,
         ttl_seconds: float = _DEFAULT_TTL_SECONDS,
     ) -> None:
+        """`resolver` is retained solely for the product-side slug-fallback
+        path inside `load_backend_events` (unrelated to user identity - see
+        `backend.loader` module docstring) - it is never consulted for
+        user identity here. `guid_by_internal` (backend `User.Id` -> GUID)
+        and `user_id_by_guid` (GUID -> backend `User.Id`, the reverse map -
+        both produced by `backend.loader.load_ai_user_identities`) are the
+        two directions this adapter and `load_backend_events` need; neither
+        is ever generated here, both are the same authoritative mapping
+        `adapters.backend_factory.build_backend_api_adapters` already
+        loaded once at startup.
+        """
         super().__init__(events)
         self._client = client
         self._resolver = resolver
         self._catalog = catalog
         self._guid_by_internal = guid_by_internal
+        self._user_id_by_guid = user_id_by_guid
         self._max_pages = max_pages
         self._max_rows = max_rows
         self._store = store
@@ -151,7 +164,7 @@ class LazyBackendUserEventsAdapter(UserEventsAdapter):
             # already has the right data (same long-lived instance, repeat
             # call) is a harmless no-op change.
             cached_activities = [ApiActivity.model_validate(row) for row in entry.rows]
-            interactions, _ = load_backend_events(cached_activities, self._resolver, self._catalog)
+            interactions, _ = load_backend_events(cached_activities, self._resolver, self._catalog, self._user_id_by_guid)
             found = [e for e in interactions if e.user_id == user_id]
             self._replace_user_events(user_id, found)
             return
@@ -173,7 +186,7 @@ class LazyBackendUserEventsAdapter(UserEventsAdapter):
                 "user - their behavioral features may still undercount until the next sync"
             )
 
-        interactions, _ = load_backend_events(rows, self._resolver, self._catalog)
+        interactions, _ = load_backend_events(rows, self._resolver, self._catalog, self._user_id_by_guid)
         found = [e for e in interactions if e.user_id == user_id]
         self._replace_user_events(user_id, found)
         if found:

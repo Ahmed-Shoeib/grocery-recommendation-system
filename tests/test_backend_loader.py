@@ -9,10 +9,12 @@ from recommendation.backend.dtos import ApiActivity
 from recommendation.backend.errors import BackendAuthError
 from recommendation.backend.identity import ExternalIdentityResolver
 from recommendation.backend.loader import (
+    load_ai_user_identities,
     load_backend_catalog,
     load_backend_events,
     load_backend_reviews,
     load_backend_users,
+    load_backend_users_roster,
 )
 from tests._backend_fakes import FakeBackendClient
 
@@ -109,7 +111,7 @@ def test_activity_product_id_resolves_against_the_same_catalog_key_as_products(t
     activities = [ApiActivity.model_validate({
         "userId": "g1", "actionType": "AddToCart", "productId": 501, "timestamp": "2026-08-01T10:00:00",
     })]
-    interactions, _ = load_backend_events(activities, r, catalog)
+    interactions, _ = load_backend_events(activities, r, catalog, {"g1": 1})
     assert len(interactions) == 1
     assert interactions[0].product_id == internal_id
 
@@ -120,7 +122,7 @@ def test_activity_with_unknown_product_id_is_dropped_even_with_a_slug_fallback_a
     activities = [ApiActivity.model_validate({
         "userId": "g1", "actionType": "AddToCart", "productId": 999999, "timestamp": "2026-08-01T10:00:00",
     })]
-    interactions, _ = load_backend_events(activities, r, catalog)
+    interactions, _ = load_backend_events(activities, r, catalog, {"g1": 1})
     assert interactions == []
 
 
@@ -130,7 +132,7 @@ def test_search_product_activity_maps_to_canonical_search(tmp_path):
     activities = [ApiActivity.model_validate({
         "userId": "g1", "actionType": "SearchProduct", "slug": "orange-juice", "timestamp": "2026-08-01T10:00:00",
     })]
-    interactions, _ = load_backend_events(activities, r, catalog)
+    interactions, _ = load_backend_events(activities, r, catalog, {"g1": 1})
     assert len(interactions) == 1
     assert interactions[0].action_type.value == "SEARCH"
 
@@ -150,7 +152,7 @@ def test_products_activities_and_reviews_all_resolve_to_the_same_canonical_produ
     activities = [ApiActivity.model_validate({
         "userId": "g1", "actionType": "AddToCart", "productId": 501, "timestamp": "2026-08-01T10:00:00",
     })]
-    interactions, guid_by_internal = load_backend_events(activities, r, catalog)
+    interactions, guid_by_internal = load_backend_events(activities, r, catalog, {"g1": 5})
     assert interactions[0].product_id == internal_id
 
     reviews = load_backend_reviews(
@@ -210,7 +212,7 @@ def test_non_contiguous_real_backend_ids_survive_catalog_activity_and_review_joi
     activities = [ApiActivity.model_validate({
         "userId": "g1", "actionType": "AddToCart", "productId": 105, "timestamp": "2026-08-01T10:00:00",
     })]
-    interactions, guid_by_internal = load_backend_events(activities, r, catalog)
+    interactions, guid_by_internal = load_backend_events(activities, r, catalog, {"g1": 9})
     assert len(interactions) == 1
     assert interactions[0].product_id == 105  # not 2, not any resolver-minted position
 
@@ -254,7 +256,7 @@ def test_events_mapping_and_drop_policy(tmp_path):
         {"userId": "g3", "actionType": "Teleport", "slug": "orange-juice", "timestamp": "2026-08-08T10:00:00"},
     ]
     interactions, guid_by_id = load_backend_events(
-        [ApiActivity.model_validate(a) for a in activities], r, catalog
+        [ApiActivity.model_validate(a) for a in activities], r, catalog, {"g1": 1, "g2": 2, "g3": 3}
     )
     kinds = sorted((i.user_id, i.action_type.value) for i in interactions)
     # only the 3 resolvable positive-signal rows survive
@@ -590,3 +592,220 @@ def test_canonical_reviews_reach_the_shared_review_adapter(tmp_path):
 
     stats = compute_review_stats(review_adapter.list_all_reviews())
     assert stats[11] == (5.0, 1) and stats[12] == (3.0, 1)
+
+
+# --- 2026-09-18 user-identity migration: backend User.Id (via the
+# protected GET /api/ai/users mapping) is now the canonical recommender
+# user_id - ExternalIdentityResolver is never invoked for users at all.
+# See docs/data-mapping.md 19.5/19.16/19.17 and the `ai-user-identity-mapping`
+# backend contract.
+
+_CUSTOMER_USER_ID = 1547
+_CUSTOMER_GUID = "81bfc1f1-36eb-4427-b680-119ec489e156"
+
+
+def test_ai_user_identities_map_guid_to_backend_user_id_directly(tmp_path):
+    client = FakeBackendClient(ai_identities=[
+        {"userId": _CUSTOMER_USER_ID, "userGuid": _CUSTOMER_GUID},
+        {"userId": 82, "userGuid": "05d74037-20a6-4399-82dd-66488575b5a8"},
+    ])
+    user_id_by_guid, guid_by_user_id = load_ai_user_identities(client)
+    assert user_id_by_guid[_CUSTOMER_GUID] == _CUSTOMER_USER_ID
+    assert user_id_by_guid["05d74037-20a6-4399-82dd-66488575b5a8"] == 82
+    assert guid_by_user_id[_CUSTOMER_USER_ID] == _CUSTOMER_GUID
+    assert guid_by_user_id[82] == "05d74037-20a6-4399-82dd-66488575b5a8"
+
+
+def test_ai_user_identities_drop_incomplete_rows_without_minting(tmp_path, caplog):
+    import logging
+
+    client = FakeBackendClient(ai_identities=[
+        {"userId": 1547, "userGuid": _CUSTOMER_GUID},
+        {"userId": None, "userGuid": "some-guid-with-no-id"},
+        {"userId": 99, "userGuid": None},
+    ])
+    with caplog.at_level(logging.WARNING, logger="recommendation.backend.loader"):
+        user_id_by_guid, guid_by_user_id = load_ai_user_identities(client)
+    assert user_id_by_guid == {_CUSTOMER_GUID: 1547}
+    assert guid_by_user_id == {1547: _CUSTOMER_GUID}
+    assert any("missing userId or userGuid" in r.message for r in caplog.records)
+
+
+def test_ai_user_identities_conflicting_guid_is_dropped_and_logged_loudly(tmp_path, caplog):
+    """GUID A -> 1547, then GUID A -> 1602 (same guid, different id): data
+    corruption, must never be silently accepted - the first-seen mapping
+    wins, the conflicting row is dropped and logged as an error.
+    """
+    import logging
+
+    client = FakeBackendClient(ai_identities=[
+        {"userId": 1547, "userGuid": _CUSTOMER_GUID},
+        {"userId": 1602, "userGuid": _CUSTOMER_GUID},
+    ])
+    with caplog.at_level(logging.ERROR, logger="recommendation.backend.loader"):
+        user_id_by_guid, guid_by_user_id = load_ai_user_identities(client)
+    assert user_id_by_guid == {_CUSTOMER_GUID: 1547}
+    assert guid_by_user_id == {1547: _CUSTOMER_GUID}
+    assert any("CONFLICTING mapping" in r.message for r in caplog.records)
+
+
+def test_ai_user_identities_conflicting_id_is_dropped_and_logged_loudly(tmp_path, caplog):
+    """1547 -> GUID A, then 1547 -> GUID B (same id, different guid): also
+    data corruption, dropped and logged the same way.
+    """
+    import logging
+
+    client = FakeBackendClient(ai_identities=[
+        {"userId": 1547, "userGuid": "guid-a"},
+        {"userId": 1547, "userGuid": "guid-b"},
+    ])
+    with caplog.at_level(logging.ERROR, logger="recommendation.backend.loader"):
+        user_id_by_guid, guid_by_user_id = load_ai_user_identities(client)
+    assert user_id_by_guid == {"guid-a": 1547}
+    assert guid_by_user_id == {1547: "guid-a"}
+    assert any("CONFLICTING mapping" in r.message for r in caplog.records)
+
+
+def test_ai_user_identities_two_distinct_users_never_cross_map(tmp_path):
+    """GUID A -> 1547 and GUID B -> 1602 must remain EXACTLY those two
+    pairs - no accidental cross-assignment between distinct users.
+    """
+    client = FakeBackendClient(ai_identities=[
+        {"userId": 1547, "userGuid": "guid-a"},
+        {"userId": 1602, "userGuid": "guid-b"},
+    ])
+    user_id_by_guid, guid_by_user_id = load_ai_user_identities(client)
+    assert user_id_by_guid == {"guid-a": 1547, "guid-b": 1602}
+    assert guid_by_user_id == {1547: "guid-a", 1602: "guid-b"}
+
+
+def test_roster_join_produces_raw_user_with_backend_user_id(tmp_path):
+    """/api/ai/users + /api/users joined by GUID -> RawUser.id == backend
+    User.Id, verbatim - never a resolver-minted value.
+    """
+    client = FakeBackendClient(
+        products=_PRODS, categories=_CATS,
+        ai_identities=[{"userId": _CUSTOMER_USER_ID, "userGuid": _CUSTOMER_GUID}],
+        roster=[{"guid": _CUSTOMER_GUID, "firstName": "A", "preferredCategories": []}],
+    )
+    catalog = load_backend_catalog(client, _resolver(tmp_path))
+    user_id_by_guid, _ = load_ai_user_identities(client)
+    raw_users, guid_by_internal = load_backend_users_roster(client, user_id_by_guid, catalog)
+    assert len(raw_users) == 1
+    assert raw_users[0].id == _CUSTOMER_USER_ID
+    assert guid_by_internal[_CUSTOMER_USER_ID] == _CUSTOMER_GUID
+
+
+def test_profile_without_ai_identity_is_dropped_not_minted(tmp_path, caplog):
+    """A /api/users profile whose GUID has no /api/ai/users entry must be
+    skipped entirely - never assigned a generated id."""
+    import logging
+
+    client = FakeBackendClient(
+        products=_PRODS, categories=_CATS,
+        ai_identities=[],  # no canonical identities at all
+        roster=[{"guid": "orphan-guid", "firstName": "NoIdentity"}],
+    )
+    catalog = load_backend_catalog(client, _resolver(tmp_path))
+    user_id_by_guid, _ = load_ai_user_identities(client)
+    with caplog.at_level(logging.WARNING, logger="recommendation.backend.loader"):
+        raw_users, guid_by_internal = load_backend_users_roster(client, user_id_by_guid, catalog)
+    assert raw_users == []
+    assert guid_by_internal == {}
+    assert any("no canonical User.Id yet" in r.message for r in caplog.records)
+
+
+def test_ai_identity_without_profile_still_becomes_a_bare_known_user(tmp_path):
+    """The exact new-user propagation-timing scenario: a canonical
+    identity exists but /api/users has no profile row for that guid yet -
+    the user must still be known, with a bare/default profile, not
+    dropped and not treated as unknown.
+    """
+    client = FakeBackendClient(
+        products=_PRODS, categories=_CATS,
+        ai_identities=[{"userId": _CUSTOMER_USER_ID, "userGuid": _CUSTOMER_GUID}],
+        roster=[],  # profile has not propagated yet
+    )
+    catalog = load_backend_catalog(client, _resolver(tmp_path))
+    user_id_by_guid, _ = load_ai_user_identities(client)
+    raw_users, guid_by_internal = load_backend_users_roster(client, user_id_by_guid, catalog)
+    assert len(raw_users) == 1
+    assert raw_users[0].id == _CUSTOMER_USER_ID
+    assert raw_users[0].first_name == "" and raw_users[0].preferred_category_ids == []
+    assert guid_by_internal[_CUSTOMER_USER_ID] == _CUSTOMER_GUID
+
+
+def test_activity_prefers_canonical_user_id_when_present(tmp_path):
+    r = _resolver(tmp_path)
+    prods = [{"slug": "orange-juice", "productId": 501, "name": "OJ", "price": 4.0, "categorySlug": "groceries"}]
+    catalog = load_backend_catalog(FakeBackendClient(products=prods, categories=_CATS), r)
+    activities = [ApiActivity.model_validate({
+        "userId": _CUSTOMER_GUID, "canonicalUserId": _CUSTOMER_USER_ID,
+        "actionType": "AddToCart", "productId": 501, "timestamp": "2026-08-01T10:00:00",
+    })]
+    # An intentionally WRONG/empty user_id_by_guid map - proves canonicalUserId
+    # is used directly and no GUID lookup is even attempted when it's present.
+    interactions, guid_by_internal = load_backend_events(activities, r, catalog, {})
+    assert len(interactions) == 1
+    assert interactions[0].user_id == _CUSTOMER_USER_ID
+    assert guid_by_internal[_CUSTOMER_USER_ID] == _CUSTOMER_GUID
+
+
+def test_activity_falls_back_to_guid_lookup_when_canonical_user_id_absent(tmp_path):
+    """Legacy/transitional row shape: only the GUID `userId` field is
+    present (`canonicalUserId` absent) - must resolve via a lookup against
+    the authoritative /api/ai/users mapping, never mint.
+    """
+    r = _resolver(tmp_path)
+    prods = [{"slug": "orange-juice", "productId": 501, "name": "OJ", "price": 4.0, "categorySlug": "groceries"}]
+    catalog = load_backend_catalog(FakeBackendClient(products=prods, categories=_CATS), r)
+    activities = [ApiActivity.model_validate({
+        "userId": _CUSTOMER_GUID, "actionType": "AddToCart", "productId": 501, "timestamp": "2026-08-01T10:00:00",
+    })]
+    interactions, guid_by_internal = load_backend_events(
+        activities, r, catalog, {_CUSTOMER_GUID: _CUSTOMER_USER_ID}
+    )
+    assert len(interactions) == 1
+    assert interactions[0].user_id == _CUSTOMER_USER_ID
+    assert guid_by_internal[_CUSTOMER_USER_ID] == _CUSTOMER_GUID
+
+
+def test_activity_with_unknown_guid_is_dropped_never_minted(tmp_path):
+    """A GUID absent from the authoritative /api/ai/users mapping (and
+    with no canonicalUserId either) must be dropped - never assigned a
+    generated integer.
+    """
+    r = _resolver(tmp_path)
+    prods = [{"slug": "orange-juice", "productId": 501, "name": "OJ", "price": 4.0, "categorySlug": "groceries"}]
+    catalog = load_backend_catalog(FakeBackendClient(products=prods, categories=_CATS), r)
+    activities = [ApiActivity.model_validate({
+        "userId": "never-seen-guid", "actionType": "AddToCart", "productId": 501, "timestamp": "2026-08-01T10:00:00",
+    })]
+    interactions, guid_by_internal = load_backend_events(activities, r, catalog, {_CUSTOMER_GUID: _CUSTOMER_USER_ID})
+    assert interactions == []
+    assert guid_by_internal == {}
+    assert r.counts()["user"] == 0, "the resolver must never mint a user id, even for an unresolvable activity guid"
+
+
+def test_reported_customer_1547_end_to_end_identity_invariants(tmp_path):
+    """The literal regression test for the reported production incident:
+    backend User.Id 1547 <-> GUID 81bfc1f1-36eb-4427-b680-119ec489e156
+    must resolve consistently through the identity mapping, the roster
+    join, and activity resolution - with zero history, matching the
+    real customer's live state at the time of the incident.
+    """
+    client = FakeBackendClient(
+        products=_PRODS, categories=_CATS,
+        ai_identities=[{"userId": _CUSTOMER_USER_ID, "userGuid": _CUSTOMER_GUID}],
+        roster=[{"guid": _CUSTOMER_GUID, "firstName": "Customer", "preferredCategories": []}],
+        activities=[],  # zero activity, matching the real reported customer
+    )
+    catalog = load_backend_catalog(client, _resolver(tmp_path))
+    user_id_by_guid, guid_by_user_id = load_ai_user_identities(client)
+    assert user_id_by_guid[_CUSTOMER_GUID] == _CUSTOMER_USER_ID
+    assert guid_by_user_id[_CUSTOMER_USER_ID] == _CUSTOMER_GUID
+
+    raw_users, guid_by_internal = load_backend_users_roster(client, user_id_by_guid, catalog)
+    assert len(raw_users) == 1
+    assert raw_users[0].id == _CUSTOMER_USER_ID
+    assert guid_by_internal[_CUSTOMER_USER_ID] == _CUSTOMER_GUID

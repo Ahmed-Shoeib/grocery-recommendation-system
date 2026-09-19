@@ -9,7 +9,7 @@
 
 from __future__ import annotations
 
-from recommendation.backend.dtos import ApiActivity, ApiCategory, ApiProduct, ApiReview, ApiUser
+from recommendation.backend.dtos import ApiActivity, ApiCategory, ApiProduct, ApiReview, ApiUser, ApiUserIdentity
 
 
 class FakeResponse:
@@ -62,6 +62,7 @@ class FakeBackendClient:
         has_credentials: bool = True,
         roster: list[dict] | None = None,
         activity_page_size: int = 100,
+        ai_identities: list[dict] | None = None,
     ) -> None:
         self._products = [ApiProduct.model_validate(p) for p in (products or [])]
         self._categories = [ApiCategory.model_validate(c) for c in (categories or [])]
@@ -72,6 +73,27 @@ class FakeBackendClient:
         self._has_credentials = has_credentials
         self._roster = [ApiUser.model_validate(u) for u in (roster or [])]
         self._activity_page_size = activity_page_size
+        # GET /api/ai/users (2026-09-18 user-identity migration). `None`
+        # (the default - distinct from `[]`, which means "no identities at
+        # all") auto-derives one identity per distinct GUID seen across
+        # `roster` and `activities`, in first-seen order starting at 1 -
+        # a plausible-looking backend User.Id for every test that isn't
+        # specifically exercising identity-join behavior (which should
+        # pass `ai_identities` explicitly instead, including real-looking
+        # non-contiguous values to prove the loader never assumes a dense
+        # range - see tests/test_backend_loader.py).
+        if ai_identities is None:
+            seen: list[str] = []
+            for u in roster or []:
+                g = u.get("guid")
+                if g and g not in seen:
+                    seen.append(g)
+            for a in activities or []:
+                g = a.get("userId")
+                if g and g not in seen:
+                    seen.append(g)
+            ai_identities = [{"userId": i + 1, "userGuid": g} for i, g in enumerate(seen)]
+        self._ai_identities = [ApiUserIdentity.model_validate(i) for i in ai_identities]
         self.user_calls: list[str] = []
         self.review_calls = 0
         self.activity_page_calls: list[str | None] = []
@@ -87,6 +109,9 @@ class FakeBackendClient:
 
     def list_users(self) -> list[ApiUser]:
         return list(self._roster)
+
+    def list_ai_user_identities(self) -> list[ApiUserIdentity]:
+        return list(self._ai_identities)
 
     def iter_activity_pages(self, *, user_guid: str | None = None, max_pages: int = 10_000):
         """Mimics `BackendApiClient.iter_activity_pages`: paginates the

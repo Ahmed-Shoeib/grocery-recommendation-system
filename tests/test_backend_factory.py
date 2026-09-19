@@ -103,9 +103,16 @@ def test_purchase_signal_comes_only_from_activities_not_orders(tmp_path):
 
 
 def test_identity_registry_is_persisted(tmp_path):
+    """2026-09-18 user-identity migration: `ExternalIdentityResolver` no
+    longer mints user ids at all - the "user" namespace must stay EMPTY
+    after a full backend_api load, proving `guid-1`/`guid-2` (and every
+    other user GUID) never reach the resolver. The "product" namespace
+    is unaffected here (a slug-only product fixture with no `productId`,
+    so it still legitimately uses the resolver's slug-fallback path).
+    """
     _build(tmp_path)
     doc = json.loads((tmp_path / "reg.json").read_text(encoding="utf-8"))
-    assert set(doc["namespaces"]["user"]["by_key"]) == {"guid-1", "guid-2"}
+    assert doc["namespaces"]["user"]["by_key"] == {}
     assert set(doc["namespaces"]["product"]["by_key"]) == {"orange-juice", "milk"}
 
 

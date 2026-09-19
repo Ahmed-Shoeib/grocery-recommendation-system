@@ -29,12 +29,31 @@ consumer (features, embeddings, the ANN index, the ranker, the
 recommendation API) - the exact bug a live backend-integration trace
 confirmed end to end (recommender `product_id=23` for a product whose
 real `Product.Id` was 105, reproduced for every sampled recommendation).
-`ExternalIdentityResolver` is still exactly right for categories (slug)
-and users (GUID) - neither has a numeric identity at all - and is kept as
-a defensive fallback for a product row that (still, in principle) carries
-no `product_id` at all (see `_SLUG_FALLBACK_ID_BASE` below); it is simply
-no longer invoked for the common case, where the row already carries the
+`ExternalIdentityResolver` is still exactly right for categories (slug) -
+no numeric identity exists for them at all - and is kept as a defensive
+fallback for a product row that (still, in principle) carries no
+`product_id` at all (see `_SLUG_FALLBACK_ID_BASE` below); it is simply no
+longer invoked for the common case, where the row already carries the
 one and only id that matters.
+
+**User identity (2026-09-18 refactor - docs/data-mapping.md 19.5/19.16/
+19.17, `ai-user-identity-mapping`): the canonical `user_id` IS the
+backend's own database `User.Id`, joined by GUID from a dedicated
+protected identity endpoint - `ExternalIdentityResolver` is no longer
+used for users at all.** The public/client-facing `GET /api/users` and
+`GET /api/users/{guid}` remain GUID-only by the backend team's explicit,
+permanent design (the database `User.Id` must never cross that boundary)
+- so unlike products, there is no single enriched endpoint to read the
+canonical id from directly. Instead, `GET /api/ai/users` (protected,
+service-to-service, `users:read`) is the sole authoritative source of the
+`GUID <-> User.Id` mapping (`load_ai_user_identities` below), and every
+other user-identity touchpoint - the `/api/users` roster/profile data,
+and `/api/ai/user-activities`' rows - is joined against it BY GUID, never
+minted. This mirrors the review join that already existed
+(`_resolve_review_user`, unchanged by this refactor) rather than the old,
+now-removed, resolver-minting pattern: a GUID with no matching
+`/api/ai/users` entry is dropped (counted, logged), never assigned a
+generated id.
 
 **As of the 2026-09-15 atomic source switch**, `backend.client
 .BackendApiClient.list_products`/`list_activities` read
@@ -61,7 +80,7 @@ from collections import Counter
 
 from recommendation.backend.auth import ENV_CLIENT_ID, ENV_CLIENT_SECRET
 from recommendation.backend.client import BackendApiClient
-from recommendation.backend.dtos import ApiActivity, ApiReview
+from recommendation.backend.dtos import ApiActivity, ApiReview, ApiUserIdentity
 from recommendation.backend.errors import BackendAuthError, BackendCredentialsError
 from recommendation.backend.identity import ExternalIdentityResolver
 from recommendation.backend.mapping import is_known, map_action_type
@@ -230,8 +249,81 @@ def load_backend_catalog(client: BackendApiClient, resolver: ExternalIdentityRes
     return BackendCatalog(raw_categories, raw_products, [], [], cat_id_by_slug, cat_id_by_name, numeric_product_ids)
 
 
+def load_ai_user_identities(client: BackendApiClient) -> tuple[dict[str, int], dict[int, str]]:
+    """`GET /api/ai/users` -> the authoritative `GUID <-> User.Id` mapping
+    (docs/data-mapping.md 19.5/19.16/19.17). The ONLY function in this
+    module that establishes canonical user identity - every other
+    user-identity touchpoint (`load_backend_users_roster`,
+    `load_backend_events`, `_resolve_review_user`) only ever looks up
+    against the maps this returns, never mints.
+
+    Returns `(user_id_by_guid, guid_by_user_id)` - both directions,
+    since callers need different ones (roster iterates identities
+    forward; activities need to peek by guid; the lazy per-user adapter
+    needs guid-by-id to know which guid to sync).
+
+    A row missing `userId` or `userGuid` is skipped (counted, logged) -
+    never assigned a generated id. A GUID that maps to two DIFFERENT ids,
+    or an id that maps to two DIFFERENT GUIDs, is data corruption: every
+    conflicting row past the first-seen one is dropped and logged loudly
+    (`logger.error`) rather than silently accepted - a corrupt identity
+    mapping must never be allowed to attach one user's history to
+    another's canonical id.
+    """
+    identities = client.list_ai_user_identities()
+    user_id_by_guid: dict[str, int] = {}
+    guid_by_user_id: dict[int, str] = {}
+    dropped_incomplete = 0
+    conflicts = 0
+
+    for identity in identities:
+        if identity.user_id is None or not identity.user_guid:
+            dropped_incomplete += 1
+            continue
+        guid, uid = identity.user_guid, identity.user_id
+
+        existing_uid = user_id_by_guid.get(guid)
+        if existing_uid is not None and existing_uid != uid:
+            logger.error(
+                "backend load: /api/ai/users has a CONFLICTING mapping - guid already mapped to "
+                "user_id=%d, also claims user_id=%d - dropping the conflicting entry, keeping the first seen",
+                existing_uid, uid,
+            )
+            conflicts += 1
+            continue
+        existing_guid = guid_by_user_id.get(uid)
+        if existing_guid is not None and existing_guid != guid:
+            logger.error(
+                "backend load: /api/ai/users has a CONFLICTING mapping - user_id=%d already mapped to "
+                "a guid, also claims a different guid - dropping the conflicting entry, keeping the first seen",
+                uid,
+            )
+            conflicts += 1
+            continue
+
+        user_id_by_guid[guid] = uid
+        guid_by_user_id[uid] = guid
+
+    if dropped_incomplete:
+        logger.warning(
+            "backend load: %d /api/ai/users row(s) missing userId or userGuid - dropped, no id generated",
+            dropped_incomplete,
+        )
+    if conflicts:
+        logger.error(
+            "backend load: %d conflicting /api/ai/users identity row(s) dropped - this indicates backend-side "
+            "data corruption and should be investigated",
+            conflicts,
+        )
+    logger.info("backend load: %d canonical user identit(y/ies) loaded from GET /api/ai/users", len(user_id_by_guid))
+    return user_id_by_guid, guid_by_user_id
+
+
 def load_backend_events(
-    activities: list[ApiActivity], resolver: ExternalIdentityResolver, catalog: BackendCatalog
+    activities: list[ApiActivity],
+    resolver: ExternalIdentityResolver,
+    catalog: BackendCatalog,
+    user_id_by_guid: dict[str, int],
 ) -> tuple[list[UserInteraction], dict[int, str]]:
     """Map `GET /api/ai/user-activities` rows to canonical `UserInteraction`s
     (docs/data-mapping.md 19.5 - the authoritative `backend_api` activity
@@ -245,28 +337,36 @@ def load_backend_events(
       records some actions without resolving a product);
     - rows whose product reference (id or slug) is not in the current
       catalog (deleted / unknown product - matches the eligibility
-      contract: an unknown external id must never resolve to *a* product).
+      contract: an unknown external id must never resolve to *a* product);
+    - rows whose user reference cannot be resolved to a canonical
+      `User.Id` (see below) - an unknown GUID must never resolve to *a*
+      user either.
 
-    Product resolution prefers `row.product_id` (the stable backend
-    `Product.Id`, see `dtos.ApiActivity.product_id`) when the row carries
-    one, falling back to `row.slug` otherwise - mirroring exactly how
-    `load_backend_catalog` chose each product's canonical id, so a row
-    always resolves through whichever key its own source actually
-    populated. `AiUserActivityResponse.productId` is present on every row
-    this source sends (nullable in the schema, but not observed null live);
-    `row.slug` is always `None` from this source (the schema has no such
-    field) - the slug branch below exists only for the still-supported
-    `ApiActivity` shape in general (e.g. tests), not because this source
-    ever uses it. The numeric-id branch is a plain pass-through (the row's
-    `product_id` IS the canonical id once validated against the catalog) -
-    the resolver is never consulted for it; only the slug-fallback branch
-    still uses the resolver (`peek`, never mint - see module docstring).
+    Product resolution: unchanged by the 2026-09-18 user-identity
+    migration - see the 2026-09-17 docstring notes still in force below.
+    `resolver` is retained SOLELY for that product-side slug-fallback path
+    (`_peek_slug_fallback_product_id`); it is never consulted for user
+    identity any more.
+
+    User resolution (2026-09-18, docs/data-mapping.md 19.17): prefers
+    `row.canonical_user_id` (the additive field the backend now sends)
+    when present - a plain pass-through, no lookup needed, since it's
+    already the canonical `User.Id`. Falls back to a GUID lookup against
+    `user_id_by_guid` (populated by `load_ai_user_identities` from the
+    authoritative `GET /api/ai/users`) only when `canonical_user_id` is
+    absent - `row.user_id` (still, intentionally, the GUID string on this
+    DTO - see `dtos.ApiActivity`) is used purely as a lookup KEY here,
+    never assigned directly to `UserInteraction.user_id`. Either path is a
+    lookup, never a mint: a GUID with no matching identity entry drops the
+    row (counted, logged) exactly like an unresolvable product reference -
+    it can never create a phantom user.
     """
     interactions: list[UserInteraction] = []
     guid_by_internal: dict[int, str] = {}
     dropped_action = Counter()
     dropped_no_product_ref = 0
     dropped_unknown_product = 0
+    dropped_unknown_user = 0
     unknown_action_values: set[str] = set()
 
     for row in activities:
@@ -291,8 +391,16 @@ def load_backend_events(
             else:
                 dropped_unknown_product += 1
             continue
-        user_id = resolver.resolve_user(row.user_id)
-        guid_by_internal.setdefault(user_id, row.user_id)
+
+        if row.canonical_user_id is not None:
+            user_id = row.canonical_user_id  # already canonical - plain pass-through, no lookup
+        else:
+            user_id = user_id_by_guid.get(row.user_id)  # lookup only - never mint (see docstring)
+        if user_id is None:
+            dropped_unknown_user += 1
+            continue
+
+        guid_by_internal.setdefault(user_id, row.user_id)  # row.user_id is always the GUID string (see dtos.ApiActivity)
         interactions.append(
             UserInteraction(
                 user_id=user_id,
@@ -313,6 +421,11 @@ def load_backend_events(
         logger.info("backend load: %d activity row(s) dropped (no product id or slug)", dropped_no_product_ref)
     if dropped_unknown_product:
         logger.info("backend load: %d activity row(s) dropped (product id/slug not in catalog)", dropped_unknown_product)
+    if dropped_unknown_user:
+        logger.info(
+            "backend load: %d activity row(s) dropped (no canonical User.Id - neither canonicalUserId "
+            "nor a resolvable GUID in the current /api/ai/users mapping)", dropped_unknown_user,
+        )
     logger.info("backend load: %d canonical interactions from %d activity rows", len(interactions), len(activities))
     return interactions, guid_by_internal
 
@@ -362,41 +475,56 @@ def load_backend_users(
 
 
 def load_backend_users_roster(
-    client: BackendApiClient, resolver: ExternalIdentityResolver, catalog: BackendCatalog
+    client: BackendApiClient, user_id_by_guid: dict[str, int], catalog: BackendCatalog
 ) -> tuple[list[RawUser], dict[int, str]]:
-    """Eagerly loads the FULL user roster via `GET /api/users`, independent
-    of any recorded activity - the cold-start fix required alongside the
-    bounded activity window (docs/data-mapping.md 19.13): without this,
-    `is_known_user` could only ever say "yes" for a user who happened to
-    have an activity row inside whatever bounded window was fetched,
-    which is exactly the kind of misclassification the activity-loading
-    architecture fix must not introduce for a real, existing user whose
-    history simply has not been synced yet.
+    """Builds the FULL known-user roster from the authoritative
+    `GET /api/ai/users` identity mapping (`user_id_by_guid`, produced by
+    `load_ai_user_identities`), enriched - best-effort - with profile/
+    preferred-category data from the public `GET /api/users` (still
+    GUID-only by permanent backend-team design; see module docstring).
 
-    ADDITIVE, never a replacement: `adapters.backend_factory` merges this
-    roster with the activity-stream-derived `load_backend_users` result
-    (that one wins on conflict, since it went through the existing
-    per-user `/api/users/{guid}` enrichment path) - a backend/test double
-    with no roster support (an empty `list_users()`) degrades exactly to
-    the pre-existing, activity-stream-only population.
+    **Identity-primary, profile-secondary - this is the key design choice
+    of the 2026-09-18 migration** (docs/data-mapping.md 19.17): iteration
+    drives off `user_id_by_guid`, not off the `/api/users` list. This
+    means a user present in `/api/ai/users` but not yet in `/api/users`
+    (their identity landed before their full profile propagated - exactly
+    the timing race a newly-created user can hit) still becomes a real,
+    known `RawUser` with a bare/default profile (`_to_raw_user` already
+    handles `api_user=None`) - a real backend identity is never treated as
+    "unknown" merely because enrichment hasn't caught up. Conversely, a
+    `/api/users` profile whose GUID has no `/api/ai/users` entry yet is
+    counted, logged, and left out of the roster entirely - never assigned
+    a generated id (docs/data-mapping.md 19.13's cold-start-roster fix
+    still holds: a real, existing user must never be misclassified as
+    unknown - but "real" now means "present in the authoritative identity
+    mapping", not merely "present in the profile list").
 
-    Mints each roster user's internal id via `resolver.resolve_user`
-    directly (idempotent - a user already minted by the activity stream
-    keeps the same id), so identity resolution stays single-path
-    regardless of which source encounters a given user first.
+    `RawUser.id` is always `user_id_by_guid`'s value directly - never
+    `ExternalIdentityResolver.resolve_user` (removed from this function
+    entirely; see module docstring).
     """
+    identity_guids = set(user_id_by_guid)
     api_users = client.list_users()
+    profile_by_guid = {u.guid: u for u in api_users if u.guid}
+
     raw_users: list[RawUser] = []
     guid_by_internal: dict[int, str] = {}
-    for u in api_users:
-        if not u.guid:
-            continue
-        internal_id = resolver.resolve_user(u.guid)
-        guid_by_internal[internal_id] = u.guid
-        raw_users.append(_to_raw_user(internal_id, u, catalog))
+    for guid, user_id in user_id_by_guid.items():
+        api_user = profile_by_guid.get(guid)  # optional enrichment - None is a valid, expected case
+        guid_by_internal[user_id] = guid
+        raw_users.append(_to_raw_user(user_id, api_user, catalog))
+
+    dropped_no_identity = sum(1 for u in api_users if u.guid and u.guid not in identity_guids)
+    if dropped_no_identity:
+        logger.warning(
+            "backend load: %d profile(s) from GET /api/users have no canonical User.Id yet in "
+            "GET /api/ai/users - skipped, not assigned a generated id (likely a propagation-timing gap)",
+            dropped_no_identity,
+        )
     logger.info(
-        "backend load: %d user(s) discovered via GET /api/users roster (independent of activity history)",
-        len(raw_users),
+        "backend load: %d user(s) discovered via GET /api/ai/users identity mapping "
+        "(%d enriched with GET /api/users profile data)",
+        len(raw_users), len(raw_users) - sum(1 for g in user_id_by_guid if g not in profile_by_guid),
     )
     return raw_users, guid_by_internal
 
@@ -550,14 +678,16 @@ def _resolve_review_user(review: ApiReview, internal_by_guid: dict[str, int]) ->
     and non-null on every row observed) is the same GUID
     `/api/user-activities`/`/api/users/{guid}` use, so this is a direct
     lookup against `guid_by_internal` reversed to `{guid: internal_id}` -
-    no hashing, no positional matching, no int-id guessing. Resolution
-    stays intentionally restricted to users this load already saw in the
-    activity stream (never `resolver.resolve_user`, which would *mint* a
-    new internal id for an unknown key and create a phantom user with a
-    review but no activity) - a review by a user with zero recorded
-    activity is still dropped, counted, and logged, exactly as before.
-    `user_id` (the int32 primary key) is no longer used for this join;
-    it is kept on the DTO only as non-authoritative metadata.
+    no hashing, no positional matching, no int-id guessing, and (since the
+    2026-09-18 user-identity migration) never a resolver mint either -
+    `guid_by_internal` is itself sourced from the authoritative
+    `GET /api/ai/users` mapping (via `load_backend_users_roster`/
+    `load_backend_events`), never generated. Resolution stays
+    intentionally restricted to users this load already knows canonically
+    - a review by a GUID with no matching identity is still dropped,
+    counted, and logged, exactly as before. `user_id` (the int32 primary
+    key) is no longer used for this join; it is kept on the DTO only as
+    non-authoritative metadata.
     """
     return None if review.user_guid is None else internal_by_guid.get(review.user_guid)
 

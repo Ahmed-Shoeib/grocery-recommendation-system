@@ -143,6 +143,18 @@ class ApiActivity(BaseModel):
     naive `timestamp` is confirmed by the backend team to be UTC
     wall-clock, not local time (`loader._as_naive_utc` already treated it
     that way; this is now a confirmed contract, not an assumption).
+
+    **User identity (2026-09-18 user-identity migration - docs/data-mapping.md
+    19.5/19.16/19.17): `userId` is intentionally UNCHANGED and still the
+    GUID string** (kept for backward compatibility per the backend team's
+    explicit contract - see `ai-user-identity-mapping`). The row
+    additionally, ADDITIVELY, carries `canonicalUserId` (`canonical_user_id`
+    below): the real backend database `User.Id`, nullable only for
+    transitional/legacy rows. `backend.loader.load_backend_events` prefers
+    `canonical_user_id` when present and falls back to a GUID lookup
+    against the authoritative `/api/ai/users` mapping otherwise - never a
+    resolver mint either way. See `ApiUserIdentity` below for that
+    authoritative source.
     """
 
     model_config = _WIRE
@@ -152,6 +164,7 @@ class ApiActivity(BaseModel):
     slug: str | None = None
     timestamp: datetime | None = None
     product_id: int | None = None
+    canonical_user_id: int | None = None
 
 
 class ApiReview(BaseModel):
@@ -272,3 +285,30 @@ class ApiUser(BaseModel):
         (or only a slug).
         """
         return [entry.category for entry in self.preferred_categories if entry.category is not None]
+
+
+class ApiUserIdentity(BaseModel):
+    """`GET /api/ai/users` - the authoritative, protected, service-to-service
+    `User.Id <-> GUID` identity mapping (2026-09-18 user-identity migration,
+    `ai-user-identity-mapping`; docs/data-mapping.md 19.5/19.16/19.17).
+
+    This is deliberately a SEPARATE endpoint/DTO from `ApiUser`
+    (`GET /api/users`/`GET /api/users/{guid}`), which stays GUID-only and
+    client-facing by design - the backend team explicitly will not add the
+    database `User.Id` to any public/client-facing user API or DTO. This
+    endpoint requires `users:read` and is never called by anything other
+    than `backend_api` server-to-server data loading.
+
+    Both fields Optional, matching every other DTO's tolerant-parsing
+    convention (`extra="ignore"`): a malformed row (missing/null `userId`
+    or `userGuid`) is skipped by the caller
+    (`backend.loader.load_ai_user_identities`), never raises and aborts the
+    whole identity load. `user_id` is the ONLY thing that may ever become
+    `RawUser.id`/`UserInteraction.user_id`/the recommendation API's
+    `user_id` - it is never generated, only ever read from this field.
+    """
+
+    model_config = _WIRE
+
+    user_id: int | None = None
+    user_guid: str | None = None

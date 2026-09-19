@@ -76,6 +76,53 @@ def test_list_products_requires_credentials_no_fallback_to_legacy_endpoint():
     assert session.calls == []
 
 
+# --- /api/ai/users - authoritative GUID <-> backend User.Id identity
+# mapping (2026-09-18 user-identity migration, `ai-user-identity-mapping`).
+# Protected, service-to-service, requires `users:read`. Modeled as a flat
+# array like /api/ai/products - see list_ai_user_identities()'s docstring
+# for why (the live endpoint was not independently probed for this
+# change; a shape mismatch must fail loudly, which the rejection test
+# below proves).
+
+
+def test_list_ai_user_identities_parses_flat_array_and_sends_bearer():
+    client, session = _client(
+        [FakeResponse(json_body={"success": True, "data": [
+            {"userId": 1547, "userGuid": "81bfc1f1-36eb-4427-b680-119ec489e156"},
+            {"userId": 82, "userGuid": "05d74037-20a6-4399-82dd-66488575b5a8"},
+        ]})],
+        token_provider=_StubProvider("tok"),
+    )
+    identities = client.list_ai_user_identities()
+    assert [(i.user_id, i.user_guid) for i in identities] == [
+        (1547, "81bfc1f1-36eb-4427-b680-119ec489e156"),
+        (82, "05d74037-20a6-4399-82dd-66488575b5a8"),
+    ]
+    assert session.calls[0]["headers"]["Authorization"] == "Bearer tok"
+    assert len(session.calls) == 1, "not paginated - exactly one request"
+
+
+def test_list_ai_user_identities_null_data_is_empty_not_an_error():
+    client, _ = _client(
+        [FakeResponse(json_body={"success": True, "data": None})], token_provider=_StubProvider(),
+    )
+    assert client.list_ai_user_identities() == []
+
+
+def test_list_ai_user_identities_rejects_a_non_flat_array_payload():
+    """If the backend actually ships a paginated envelope instead of a flat
+    array, this must fail loudly (BackendContractError), never silently
+    return an empty/wrong identity set - see the method's docstring on why
+    this shape was assumed rather than live-verified.
+    """
+    client, _ = _client(
+        [FakeResponse(json_body=_envelope([]))],  # cursor-paginated shape, not a flat array
+        token_provider=_StubProvider(),
+    )
+    with pytest.raises(BackendContractError):
+        client.list_ai_user_identities()
+
+
 # --- /api/ai/user-activities - authoritative activity source since
 # 2026-09-15 - Bearer-gated, cursor-paginated, carries productId per row.
 

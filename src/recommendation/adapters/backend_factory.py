@@ -61,6 +61,7 @@ from recommendation.backend.client import BackendApiClient
 from recommendation.backend.identity import ExternalIdentityResolver
 from recommendation.backend.loader import (
     RawUser,
+    load_ai_user_identities,
     load_backend_catalog,
     load_backend_events,
     load_backend_reviews,
@@ -117,6 +118,19 @@ def build_backend_api_adapters(
 
     catalog = load_backend_catalog(client, resolver)
 
+    # 2026-09-18 user-identity migration (docs/data-mapping.md 19.17): the
+    # authoritative GUID <-> backend User.Id mapping is loaded FIRST, before
+    # activities or the roster, since both of those now resolve user
+    # identity by looking it up here - never by minting. `resolver` is no
+    # longer involved in user identity at all past this point (still used
+    # above, in `load_backend_catalog`, for categories/product-slug-fallback
+    # only).
+    # Only the guid->id direction is needed here - the id->guid direction
+    # this load also produces is redundant with `guid_by_internal` below
+    # (itself derived from this same identity mapping), so it's discarded
+    # rather than kept as a second, overlapping source of truth.
+    user_id_by_guid, _ = load_ai_user_identities(client)
+
     activities = sync_activities(
         client,
         cache_path,
@@ -124,9 +138,9 @@ def build_backend_api_adapters(
         delta_max_pages=config.backend_api.activity_delta_max_pages,
         max_rows=config.backend_api.activity_cache_max_rows,
     )
-    interactions, activity_guid_by_internal = load_backend_events(activities, resolver, catalog)
+    interactions, activity_guid_by_internal = load_backend_events(activities, resolver, catalog, user_id_by_guid)
 
-    roster_users, roster_guid_by_internal = load_backend_users_roster(client, resolver, catalog)
+    roster_users, roster_guid_by_internal = load_backend_users_roster(client, user_id_by_guid, catalog)
     # Only enrich users the roster call did NOT already cover (normally
     # none, or very few - a roster/activity-stream inconsistency) via the
     # old per-user `GET /api/users/{guid}` loop: that loop now being live
@@ -136,6 +150,17 @@ def build_backend_api_adapters(
     # phase exists to avoid, and made entirely redundant by the roster
     # call already providing the same (and more complete) data for every
     # user in ~6 requests total (docs/data-mapping.md 19.13).
+    # Since 2026-09-18, `roster_users` is built from the AUTHORITATIVE
+    # `/api/ai/users` identity mapping directly (identity-primary - see
+    # `load_backend_users_roster`), and `activity_guid_by_internal` can
+    # only ever contain ids that came from that exact same mapping (see
+    # `load_backend_events`'s lookup-only resolution) - so
+    # `activity_only_guid_by_internal` is now always empty by construction:
+    # there is no longer a way for a user to be "activity-only" (known via
+    # activities but absent from the identity roster). Left in place as a
+    # harmless, correct no-op rather than removed, so a future change to
+    # either loading function can't silently reintroduce a real gap here
+    # without this safety net still catching it.
     roster_ids = {u.id for u in roster_users}
     activity_only_guid_by_internal = {
         uid: guid for uid, guid in activity_guid_by_internal.items() if uid not in roster_ids
@@ -159,6 +184,7 @@ def build_backend_api_adapters(
         resolver=resolver,
         catalog=catalog,
         guid_by_internal=guid_by_internal,
+        user_id_by_guid=user_id_by_guid,
         max_pages=config.backend_api.activity_user_history_max_pages,
         max_rows=config.backend_api.activity_cache_max_rows,
         store=user_activity_store,
